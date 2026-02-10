@@ -54,7 +54,7 @@ dicom2glb ./echo_folder/ -o output.glb
 # Single DICOM image to textured plane
 dicom2glb image.dcm -o plane.glb
 
-# Cardiac CT with AI segmentation
+# Cardiac CT with AI segmentation (7 structures: chambers, myocardium, great vessels)
 dicom2glb ./ct_folder/ -o heart.glb --method totalseg
 
 # Multi-threshold layered output
@@ -104,6 +104,22 @@ List available methods and their install status:
 ```bash
 dicom2glb --list-methods
 ```
+
+### TotalSegmentator details
+
+The `totalseg` method uses TotalSegmentator's `heartchambers_highres` task, which segments 7 cardiac structures into a single GLB with per-structure PBR materials and colors:
+
+| Structure | Color |
+|---|---|
+| Myocardium | Brown-red |
+| Left ventricle | Red |
+| Right ventricle | Blue |
+| Left atrium | Orange |
+| Right atrium | Teal |
+| Aorta | Pink-red |
+| Pulmonary artery | Purple |
+
+Requires a contrast-enhanced cardiac CT for best results. The `heartchambers_highres` model may require a TotalSegmentator license for commercial use.
 
 ## CLI Reference
 

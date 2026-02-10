@@ -12,15 +12,16 @@ from dicom2glb.glb.materials import get_cardiac_material
 from dicom2glb.methods.base import ConversionMethod, ProgressCallback
 from dicom2glb.methods.registry import register_method
 
-# Mapping from TotalSegmentator labels to our cardiac structure names
-TOTALSEG_CARDIAC_LABELS = {
-    "heart_myocardium": "myocardium",
-    "heart_atrium_left": "left_atrium",
-    "heart_atrium_right": "right_atrium",
-    "heart_ventricle_left": "left_ventricle",
-    "heart_ventricle_right": "right_ventricle",
-    "aorta": "aorta",
-    "pulmonary_artery": "pulmonary_artery",
+# heartchambers_highres label indices (1-based) mapped to display names.
+# These are the integer labels in the multilabel nifti output.
+HEARTCHAMBERS_LABELS = {
+    1: "myocardium",
+    2: "left_atrium",
+    3: "left_ventricle",
+    4: "right_atrium",
+    5: "right_ventricle",
+    6: "aorta",
+    7: "pulmonary_artery",
 }
 
 
@@ -28,7 +29,7 @@ TOTALSEG_CARDIAC_LABELS = {
 class TotalSegmentatorMethod(ConversionMethod):
     """AI cardiac segmentation via TotalSegmentator."""
 
-    description = "AI cardiac segmentation via TotalSegmentator."
+    description = "AI cardiac chamber segmentation via TotalSegmentator (heartchambers_highres)."
     recommended_for = "Cardiac CT with contrast."
     requires_ai = True
 
@@ -72,12 +73,12 @@ class TotalSegmentatorMethod(ConversionMethod):
             affine=affine,
         )
 
-        # Run TotalSegmentator with cardiac task
-        _report("Running TotalSegmentator AI segmentation...")
+        # Run TotalSegmentator with heartchambers_highres task for
+        # individual cardiac structures (myocardium, chambers, great vessels).
+        _report("Running TotalSegmentator heartchambers_highres...")
         segmentation = totalsegmentator(
             nifti_img,
-            task="total",
-            fast=False,
+            task="heartchambers_highres",
             ml=True,
         )
         seg_data = segmentation.get_fdata().transpose(2, 1, 0)  # Back to [Z, Y, X]
@@ -85,16 +86,14 @@ class TotalSegmentatorMethod(ConversionMethod):
         # Extract meshes for each cardiac structure
         meshes = []
         spacing = volume.spacing
-        total_structures = len(TOTALSEG_CARDIAC_LABELS)
+        total_structures = len(HEARTCHAMBERS_LABELS)
 
-        for i, (label_name, structure_name) in enumerate(
-            TOTALSEG_CARDIAC_LABELS.items(), 1
+        for i, (label_idx, structure_name) in enumerate(
+            HEARTCHAMBERS_LABELS.items(), 1
         ):
             _report(f"Extracting {structure_name}...", i, total_structures)
-            # Find the label index — TotalSegmentator uses integer labels
-            # We need to check if this structure was segmented
-            mask = _get_structure_mask(seg_data, label_name)
-            if mask is None or not mask.any():
+            mask = seg_data == label_idx
+            if not mask.any():
                 continue
 
             try:
@@ -142,33 +141,3 @@ def _build_affine(volume: DicomVolume) -> np.ndarray:
     return affine
 
 
-def _get_structure_mask(
-    seg_data: np.ndarray, label_name: str
-) -> np.ndarray | None:
-    """Get binary mask for a specific structure from segmentation output.
-
-    TotalSegmentator may output multi-label or multi-file segmentation.
-    This handles the common multi-label integer array case.
-    """
-    # TotalSegmentator label mapping (subset for cardiac)
-    # These label indices may vary by version
-    label_map = {
-        "heart_myocardium": 522,
-        "heart_atrium_left": 525,
-        "heart_atrium_right": 526,
-        "heart_ventricle_left": 523,
-        "heart_ventricle_right": 524,
-        "aorta": 52,
-        "pulmonary_artery": 57,
-    }
-
-    label_idx = label_map.get(label_name)
-    if label_idx is None:
-        return None
-
-    mask = seg_data == label_idx
-    if not mask.any():
-        # Try adjacent labels in case of version differences
-        return None
-
-    return mask
