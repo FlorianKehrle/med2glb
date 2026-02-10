@@ -2,7 +2,7 @@
 
 Convert DICOM medical imaging data to GLB 3D models optimized for AR viewing.
 
-Supports 3D echocardiography, cardiac CT/MRI, 2D cine clips, and single DICOM slices. Outputs GLB files with PBR materials, morph target animation for cardiac cycles, and multi-structure segmentation with per-structure coloring.
+Supports 3D echocardiography, cardiac CT/MRI, 2D cine clips, and single DICOM slices. Outputs GLB files with PBR materials, animated cardiac cycles, and multi-structure segmentation with per-structure coloring.
 
 ## Description
 
@@ -10,7 +10,7 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 
 **Key features:**
 
-- **Animated cardiac output** -- 3D echo and 2D cine data become looping GLB animations using morph targets, playable in any glTF viewer
+- **Animated cardiac output** -- 2D cine clips become animated GLB with per-frame texture planes and full RGB color; 3D temporal volumes use morph targets
 - **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and MedSAM2 (echo/general)
 - **Automatic series detection** -- multi-series DICOM folders are analyzed and classified (3D volume, 2D cine, still image) with per-series conversion recommendations
 - **Interactive series selection** -- choose which series to convert from a Rich table, or let the tool auto-select the best one
@@ -116,7 +116,7 @@ Options:
   -o, --output PATH       Output file path (default: output.glb)
   -m, --method TEXT        Conversion method (default: classical)
   -f, --format TEXT        Output format: glb, stl, obj (default: glb)
-  --animate               Enable morph target animation for temporal data
+  --animate               Enable animation for temporal data
   --threshold FLOAT       Intensity threshold for isosurface extraction
   --smoothing INTEGER     Taubin smoothing iterations, 0 to disable (default: 15)
   --faces INTEGER         Target triangle count after decimation (default: 80000)
@@ -133,7 +133,7 @@ Options:
 
 | Format | Animation | Materials | Use Case |
 |---|---|---|---|
-| GLB | Yes (morph targets) | PBR with transparency | AR viewers, web (model-viewer) |
+| GLB | Yes (per-frame planes / morph targets) | PBR with transparency | AR viewers, web (model-viewer) |
 | STL | No | No | 3D printing, CAD |
 | OBJ | No | Basic | General 3D software |
 
