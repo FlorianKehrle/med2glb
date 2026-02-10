@@ -105,6 +105,73 @@ List available methods and their install status:
 dicom2glb --list-methods
 ```
 
+### Classical (default)
+
+Full pipeline: Gaussian smoothing to reduce noise, adaptive Otsu threshold, morphological cleanup, largest-component extraction, then marching cubes for surface extraction. Best for noisy 3D echo data.
+
+#### Usage
+
+```bash
+# Basic — auto-detects threshold via Otsu's method
+dicom2glb ./echo_folder/ -o heart.glb
+
+# Set an explicit intensity threshold
+dicom2glb ./echo_folder/ -o heart.glb --threshold 400
+
+# Animated cardiac cycle (morph targets from temporal 3D echo)
+dicom2glb ./echo_folder/ -o heart.glb --animate
+
+# More smoothing for noisy data (default: 15 iterations)
+dicom2glb ./echo_folder/ -o heart.glb --smoothing 30
+
+# Fewer triangles for a lighter file (default: 80000)
+dicom2glb ./echo_folder/ -o heart.glb --faces 40000
+
+# Semi-transparent output for layered AR viewing
+dicom2glb ./echo_folder/ -o heart.glb --alpha 0.6
+```
+
+### Marching cubes
+
+Minimal pipeline: threshold then marching cubes. No morphological cleanup — fast but noisier. Supports multi-threshold mode for extracting multiple structures at different intensity levels.
+
+#### Usage
+
+```bash
+# Basic with auto threshold
+dicom2glb ./data/ -o model.glb --method marching-cubes
+
+# Explicit threshold
+dicom2glb ./data/ -o model.glb --method marching-cubes --threshold 300
+
+# Animated output from temporal data
+dicom2glb ./echo_folder/ -o heart.glb --method marching-cubes --animate
+
+# Multi-threshold: extract bone and soft tissue as separate layers
+# Format: "threshold:label:alpha,..."
+dicom2glb ./ct_folder/ -o layers.glb --method marching-cubes \
+  --multi-threshold "200:bone:1.0,100:tissue:0.5,50:skin:0.3"
+```
+
+### MedSAM2
+
+AI segmentation via MedSAM2 for 3D echo and general cardiac imaging. Produces multi-structure output with per-structure colors (similar to totalseg but for echo/MRI data). Currently uses a heuristic pseudo-segmentation; full MedSAM2 model integration is planned.
+
+#### Usage
+
+```bash
+# Basic — segments cardiac structures from 3D echo
+dicom2glb ./echo_folder/ -o heart.glb --method medsam2
+
+# Animated cardiac cycle
+dicom2glb ./echo_folder/ -o heart.glb --method medsam2 --animate
+
+# Lighter mesh
+dicom2glb ./echo_folder/ -o heart.glb --method medsam2 --faces 50000
+```
+
+Requires AI dependencies: `pip install dicom2glb[ai]`
+
 ### TotalSegmentator details
 
 The `totalseg` method uses TotalSegmentator's `heartchambers_highres` task, which segments 7 cardiac structures into a single GLB with per-structure PBR materials and colors:
@@ -120,6 +187,33 @@ The `totalseg` method uses TotalSegmentator's `heartchambers_highres` task, whic
 | Pulmonary artery | Purple |
 
 Requires a contrast-enhanced cardiac CT for best results. The `heartchambers_highres` model may require a TotalSegmentator license for commercial use.
+
+#### Usage
+
+```bash
+# Basic — segments all 7 cardiac structures into one GLB
+dicom2glb ./ct_folder/ -o heart.glb --method totalseg
+
+# Select a specific series from a multi-series DICOM folder
+dicom2glb ./ct_folder/ -o heart.glb --method totalseg --series 1.2.840...
+
+# Reduce mesh complexity (default: 80000 faces per structure)
+dicom2glb ./ct_folder/ -o heart.glb --method totalseg --faces 50000
+
+# Increase smoothing for a cleaner surface (default: 15 iterations)
+dicom2glb ./ct_folder/ -o heart.glb --method totalseg --smoothing 30
+
+# Disable smoothing entirely
+dicom2glb ./ct_folder/ -o heart.glb --method totalseg --smoothing 0
+
+# Make all structures semi-transparent
+dicom2glb ./ct_folder/ -o heart.glb --method totalseg --alpha 0.7
+
+# Export as STL or OBJ instead of GLB
+dicom2glb ./ct_folder/ -o heart.stl --method totalseg -f stl
+```
+
+The `--threshold` option has no effect on `totalseg` since segmentation is AI-driven (not intensity-based). The `--animate` option is also not supported since cardiac CT is a single time point.
 
 ## CLI Reference
 
