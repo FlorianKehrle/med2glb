@@ -59,6 +59,23 @@ class ConversionResult:
 
 
 @dataclass
+class SeriesInfo:
+    """Classification metadata for a DICOM series."""
+
+    series_uid: str
+    modality: str
+    description: str
+    file_count: int
+    data_type: str  # "2D cine", "3D volume", "3D+T volume", "still image"
+    detail: str  # "132 frames", "64 slices", etc.
+    dimensions: str  # "600x800", "512x512x120"
+    recommended_method: str  # "classical", "marching-cubes", etc.
+    recommended_output: str  # "textured plane", "3D mesh", "animated 3D mesh"
+    is_multiframe: bool = False
+    number_of_frames: int = 0
+
+
+@dataclass
 class AnimatedResult:
     """Extends ConversionResult for temporal data with morph targets."""
 

@@ -33,6 +33,9 @@ dicom2glb ./dicom_folder/ -o output.glb
 # Animated 3D echo (cardiac cycle with morph targets)
 dicom2glb ./echo_folder/ -o heart.glb --animate
 
+# Multi-series folder (interactive selection)
+dicom2glb ./echo_folder/ -o output.glb
+
 # Single DICOM image to textured plane
 dicom2glb image.dcm -o plane.glb
 
@@ -45,6 +48,32 @@ dicom2glb ./data/ -o layers.glb --multi-threshold "200:bone:1.0,100:tissue:0.5"
 # Export as STL or OBJ
 dicom2glb ./data/ -o model.stl -f stl
 ```
+
+## Series Selection
+
+When a DICOM folder contains multiple series, dicom2glb analyzes each series and presents an interactive selection table:
+
+```
+  DICOM Series in echo_folder
+┏━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┓
+┃ # ┃ Modality ┃ Description     ┃ Data Type   ┃ Detail      ┃ Recommended      ┃
+┡━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━┩
+│ 1 │ US       │ Echokardiogr... │ 2D cine     │ 132 frames  │ textured plane   │
+│ 2 │ US       │ (no desc)       │ 2D cine     │ 65 frames   │ textured plane   │
+│ 3 │ CT       │ Thorax          │ 3D volume   │ 120 slices  │ 3D mesh          │
+└───┴──────────┴─────────────────┴─────────────┴─────────────┴──────────────────┘
+
+Recommendation: Series 1 (2D cine, 132 frames)
+
+Select series to convert [1]: 1,3
+```
+
+- Enter a number (`1`), comma-separated list (`1,3`), or `all`
+- The recommended conversion method is auto-selected per series unless `--method` is explicitly set
+- Single-series folders proceed automatically without prompting
+- Non-interactive (piped) input auto-selects the best series
+
+Use `--list-series` to view the table without converting, or `--series <UID>` to skip selection entirely.
 
 ## Methods
 

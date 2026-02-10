@@ -10,16 +10,31 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.prompt import Prompt
 from rich.table import Table
 
 from dicom2glb import __version__
-from dicom2glb.core.types import MaterialConfig, MethodParams, ThresholdLayer
+from dicom2glb.core.types import (
+    MaterialConfig,
+    MethodParams,
+    SeriesInfo,
+    ThresholdLayer,
+)
 
 app = typer.Typer(
     name="dicom2glb",
     help="Convert DICOM medical imaging data to GLB 3D models.",
     add_completion=False,
 )
+
+# Reconfigure stdout/stderr to UTF-8 to avoid Windows charmap encoding errors
+# with Rich's Unicode spinners.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, OSError):
+    pass
+
 console = Console()
 err_console = Console(stderr=True)
 
@@ -51,6 +66,7 @@ def list_methods_callback(value: bool):
 
 @app.command()
 def main(
+    ctx: typer.Context,
     input_path: Path = typer.Argument(
         ...,
         help="Path to a DICOM file or directory containing DICOM files.",
@@ -140,21 +156,15 @@ def main(
     log_level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
 
+    # Detect if --method was explicitly provided
+    method_explicit = _was_option_provided(ctx, "method")
+
     # Handle --list-series
     if do_list_series:
-        from dicom2glb.io.dicom_reader import list_series
+        from dicom2glb.io.dicom_reader import analyze_series
 
-        series_list = list_series(input_path)
-        table = Table(title="DICOM Series")
-        table.add_column("Series UID", style="cyan")
-        table.add_column("Modality", style="green")
-        table.add_column("Description")
-        table.add_column("Slices", justify="right")
-        for s in series_list:
-            table.add_row(
-                s["series_uid"], s["modality"], s["description"], str(s["slice_count"])
-            )
-        console.print(table)
+        series_list = analyze_series(input_path)
+        _print_series_table(series_list, input_path)
         raise typer.Exit()
 
     try:
@@ -162,6 +172,7 @@ def main(
             input_path=input_path,
             output=output,
             method_name=method,
+            method_explicit=method_explicit,
             format=format,
             animate=animate,
             threshold=threshold,
@@ -192,10 +203,21 @@ def main(
         raise typer.Exit(code=1)
 
 
+def _was_option_provided(ctx: typer.Context, param_name: str) -> bool:
+    """Check if a CLI option was explicitly provided by the user."""
+    # typer/click stores the source of each parameter value
+    source = ctx.get_parameter_source(param_name)
+    if source is None:
+        return False
+    import click
+    return source == click.core.ParameterSource.COMMANDLINE
+
+
 def _run_pipeline(
     input_path: Path,
     output: Path,
     method_name: str,
+    method_explicit: bool,
     format: str,
     animate: bool,
     threshold: float | None,
@@ -206,7 +228,181 @@ def _run_pipeline(
     series: str | None,
     verbose: bool,
 ) -> None:
-    """Execute the full conversion pipeline."""
+    """Execute the conversion pipeline with series selection."""
+    # If --series provided or input is a single file, pass through directly
+    if series or input_path.is_file():
+        _convert_series(
+            input_path=input_path,
+            output=output,
+            method_name=method_name,
+            format=format,
+            animate=animate,
+            threshold=threshold,
+            smoothing=smoothing,
+            target_faces=target_faces,
+            alpha=alpha,
+            multi_threshold=multi_threshold,
+            series_uid=series,
+            verbose=verbose,
+        )
+        return
+
+    # Directory input — analyze series
+    from dicom2glb.io.dicom_reader import analyze_series
+
+    series_list = analyze_series(input_path)
+
+    if len(series_list) == 1:
+        # Single series — proceed automatically
+        info = series_list[0]
+        effective_method = method_name if method_explicit else info.recommended_method
+        _convert_series(
+            input_path=input_path,
+            output=output,
+            method_name=effective_method,
+            format=format,
+            animate=animate,
+            threshold=threshold,
+            smoothing=smoothing,
+            target_faces=target_faces,
+            alpha=alpha,
+            multi_threshold=multi_threshold,
+            series_uid=info.series_uid,
+            verbose=verbose,
+        )
+        return
+
+    # Multiple series detected
+    if sys.stdin.isatty():
+        # Interactive selection
+        _print_series_table(series_list, input_path)
+        selected = _interactive_select_series(series_list)
+    else:
+        # Non-TTY: auto-select best (first after sorting)
+        selected = [series_list[0]]
+        logger.warning(
+            f"Multiple series found, auto-selecting best: "
+            f"{selected[0].description or selected[0].series_uid} "
+            f"({selected[0].data_type}, {selected[0].detail})"
+        )
+
+    # Convert each selected series
+    for i, info in enumerate(selected):
+        out_path = _make_output_path(output, i, len(selected))
+        effective_method = method_name if method_explicit else info.recommended_method
+        console.print(
+            f"\n[bold]Converting series {i + 1}/{len(selected)}: "
+            f"{info.description or info.series_uid} ({info.data_type})[/bold]"
+        )
+        _convert_series(
+            input_path=input_path,
+            output=out_path,
+            method_name=effective_method,
+            format=format,
+            animate=animate,
+            threshold=threshold,
+            smoothing=smoothing,
+            target_faces=target_faces,
+            alpha=alpha,
+            multi_threshold=multi_threshold,
+            series_uid=info.series_uid,
+            verbose=verbose,
+        )
+
+
+def _print_series_table(series_list: list[SeriesInfo], input_path: Path) -> None:
+    """Display a Rich table of DICOM series with classification info."""
+    table = Table(title=f"DICOM Series in {input_path}")
+    table.add_column("#", style="bold", justify="right")
+    table.add_column("Modality", style="green")
+    table.add_column("Description")
+    table.add_column("Data Type", style="cyan")
+    table.add_column("Detail", justify="right")
+    table.add_column("Recommended", style="yellow")
+
+    for i, info in enumerate(series_list, 1):
+        desc = info.description if info.description else "(no desc)"
+        # Truncate long descriptions
+        if len(desc) > 20:
+            desc = desc[:17] + "..."
+        table.add_row(
+            str(i),
+            info.modality,
+            desc,
+            info.data_type,
+            info.detail,
+            info.recommended_output,
+        )
+
+    console.print(table)
+
+    # Print recommendation
+    best = series_list[0]
+    console.print(
+        f"\nRecommendation: Series 1 ({best.data_type}, {best.detail})"
+    )
+
+
+def _interactive_select_series(series_list: list[SeriesInfo]) -> list[SeriesInfo]:
+    """Prompt user to select series interactively. Returns selected SeriesInfo list."""
+    choice = Prompt.ask(
+        "Select series to convert",
+        default="1",
+        console=console,
+    )
+    return _parse_selection(choice, series_list)
+
+
+def _parse_selection(choice: str, series_list: list[SeriesInfo]) -> list[SeriesInfo]:
+    """Parse user selection string into list of SeriesInfo.
+
+    Accepts: "1", "1,3", "all"
+    """
+    choice = choice.strip().lower()
+    if choice == "all":
+        return list(series_list)
+
+    selected = []
+    for part in choice.split(","):
+        part = part.strip()
+        try:
+            idx = int(part) - 1  # 1-based to 0-based
+        except ValueError:
+            raise ValueError(f"Invalid selection: '{part}'. Use numbers like '1', '1,3', or 'all'.")
+        if idx < 0 or idx >= len(series_list):
+            raise ValueError(
+                f"Selection {part} out of range. Choose 1-{len(series_list)}."
+            )
+        selected.append(series_list[idx])
+    return selected
+
+
+def _make_output_path(base: Path, index: int, total: int) -> Path:
+    """Generate output path for multi-series conversion.
+
+    Single series: output.glb
+    Multiple series: output_1.glb, output_2.glb, ...
+    """
+    if total <= 1:
+        return base
+    return base.parent / f"{base.stem}_{index + 1}{base.suffix}"
+
+
+def _convert_series(
+    input_path: Path,
+    output: Path,
+    method_name: str,
+    format: str,
+    animate: bool,
+    threshold: float | None,
+    smoothing: int,
+    target_faces: int,
+    alpha: float,
+    multi_threshold: str | None,
+    series_uid: str | None,
+    verbose: bool,
+) -> None:
+    """Execute the full conversion pipeline for a single series."""
     from dicom2glb.io.dicom_reader import InputType, load_dicom_directory
     from dicom2glb.methods.registry import _ensure_methods_loaded, get_method
 
@@ -229,7 +425,7 @@ def _run_pipeline(
     ) as progress:
         # Step 1: Load DICOM
         task = progress.add_task("Loading DICOM data...", total=None)
-        input_type, data = load_dicom_directory(input_path, series_uid=series)
+        input_type, data = load_dicom_directory(input_path, series_uid=series_uid)
         progress.update(task, description=f"Loaded {input_type.value} data")
         progress.remove_task(task)
 
@@ -238,6 +434,32 @@ def _run_pipeline(
         converter = get_method(method_name)
 
         # Step 3: Convert
+
+        # Detect 2D temporal data (multi-frame ultrasound cine clips)
+        # and route to textured plane export since 3D methods can't handle it.
+        if input_type == InputType.TEMPORAL:
+            from dicom2glb.core.volume import TemporalSequence
+            if isinstance(data, TemporalSequence) and data.frames[0].voxels.shape[0] == 1:
+                # 2D cine — export first frame as textured plane
+                task = progress.add_task("Building textured plane from 2D echo...", total=None)
+                from dicom2glb.glb.texture import build_textured_plane_glb
+
+                console.print(
+                    f"[yellow]2D ultrasound cine detected ({data.frame_count} frames). "
+                    f"Exporting first frame as textured plane.[/yellow]"
+                )
+                build_textured_plane_glb(data.frames[0], output)
+                progress.remove_task(task)
+
+                file_size = output.stat().st_size / 1024
+                elapsed = time.time() - start_time
+                console.print(f"\n[green]Conversion complete![/green]")
+                console.print(f"  Input:    2D echo cine ({data.frame_count} frames)")
+                console.print(f"  Output:   {output}")
+                console.print(f"  Size:     {file_size:.1f} KB")
+                console.print(f"  Time:     {elapsed:.1f}s")
+                return
+
         if input_type == InputType.SINGLE_SLICE:
             task = progress.add_task("Building textured plane...", total=None)
             from dicom2glb.glb.texture import build_textured_plane_glb
