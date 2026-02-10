@@ -345,10 +345,15 @@ def _detect_multiframe(
         f"{getattr(best, 'filename', 'unknown')}"
     )
 
-    pixel_array = best.pixel_array.astype(np.float32)
+    raw_array = best.pixel_array
+    pixel_array = raw_array.astype(np.float32)
 
-    # Convert RGB to grayscale if needed
+    # Preserve original RGB data before converting to grayscale
+    rgb_frames: np.ndarray | None = None
     if pixel_array.ndim == 4 and pixel_array.shape[-1] in (3, 4):
+        # Store original RGB as uint8 (n_frames, rows, cols, 3)
+        rgb_frames = np.clip(raw_array[..., :3], 0, 255).astype(np.uint8)
+        # Convert to grayscale for voxels
         pixel_array = (
             0.299 * pixel_array[..., 0]
             + 0.587 * pixel_array[..., 1]
@@ -367,6 +372,7 @@ def _detect_multiframe(
     frames = []
     for i in range(pixel_array.shape[0]):
         frame_voxels = pixel_array[i][np.newaxis, ...]  # (1, rows, cols)
+        frame_rgb = rgb_frames[i][np.newaxis, ...] if rgb_frames is not None else None
         volume = DicomVolume(
             voxels=frame_voxels,
             pixel_spacing=pixel_spacing,
@@ -377,6 +383,7 @@ def _detect_multiframe(
                 "patient_name": str(getattr(best, "PatientName", "")),
                 "study_description": getattr(best, "StudyDescription", ""),
             },
+            rgb_data=frame_rgb,
         )
         frames.append(volume)
 
@@ -577,14 +584,20 @@ def _load_single_file(
     if hasattr(ds, "NumberOfFrames") and int(ds.NumberOfFrames) > 1:
         return _detect_multiframe([ds])  # type: ignore[return-value]
 
-    pixel_array = ds.pixel_array.astype(np.float32)
+    raw_array = ds.pixel_array
+    pixel_array = raw_array.astype(np.float32)
 
     slope = getattr(ds, "RescaleSlope", 1.0)
     intercept = getattr(ds, "RescaleIntercept", 0.0)
     pixel_array = pixel_array * float(slope) + float(intercept)
 
-    # Convert RGB to grayscale if needed
+    # Preserve original RGB data before converting to grayscale
+    rgb_data: np.ndarray | None = None
     if pixel_array.ndim == 3 and pixel_array.shape[-1] in (3, 4):
+        # Store original RGB as uint8 (Y, X, 3)
+        rgb_data = np.clip(raw_array[..., :3], 0, 255).astype(np.uint8)
+        rgb_data = rgb_data[np.newaxis, ...]  # (1, Y, X, 3)
+        # Convert to grayscale for voxels
         pixel_array = (
             0.299 * pixel_array[..., 0]
             + 0.587 * pixel_array[..., 1]
@@ -607,6 +620,7 @@ def _load_single_file(
             "patient_name": str(getattr(ds, "PatientName", "")),
             "study_description": getattr(ds, "StudyDescription", ""),
         },
+        rgb_data=rgb_data,
     )
 
     return InputType.SINGLE_SLICE, volume

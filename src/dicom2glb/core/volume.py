@@ -20,6 +20,7 @@ class DicomVolume:
     modality: str = "US"
     vendor: str | None = None
     metadata: dict = field(default_factory=dict)
+    rgb_data: np.ndarray | None = None  # uint8 [Z, Y, X, 3] original RGB if available
 
     @property
     def spacing(self) -> tuple[float, float, float]:
