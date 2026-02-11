@@ -93,8 +93,17 @@ def _extract_pixel_data(ds: pydicom.Dataset) -> np.ndarray:
     """Extract 2D pixel data from a DICOM dataset.
 
     Returns [Y, X] grayscale (float32) or [Y, X, 3] RGB (uint8).
+    Multi-frame files use the first frame only.
     """
     raw = ds.pixel_array
+
+    # Multi-frame: squeeze or take first frame to get a 2D/3D array
+    num_frames = int(getattr(ds, "NumberOfFrames", 1))
+    if num_frames > 1 and raw.ndim >= 3:
+        raw = raw[0]
+    # Squeeze any remaining leading singleton dimensions (e.g. (1, Y, X) → (Y, X))
+    while raw.ndim > 3 or (raw.ndim == 3 and raw.shape[0] == 1 and raw.shape[-1] not in (3, 4)):
+        raw = raw[0]
 
     spp = int(getattr(ds, "SamplesPerPixel", 1))
     if spp == 3 or (raw.ndim == 3 and raw.shape[-1] in (3, 4)):
