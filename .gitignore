@@ -33,5 +33,11 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 
+# Output
+output/
+
+# Windows artifacts
+nul
+
 # Distribution
 *.tar.gz
