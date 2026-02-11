@@ -4,18 +4,18 @@ Convert DICOM medical imaging data to GLB 3D models optimized for AR viewing.
 
 Supports 3D echocardiography, cardiac CT/MRI, 2D cine clips, and single DICOM slices. Outputs GLB files with PBR materials, animated cardiac cycles, and multi-structure segmentation with per-structure coloring.
 
-## Description
+## Why dicom2glb?
 
 No existing end-to-end CLI tool converts DICOM directly to animated GLB for augmented reality. Existing tools (3D Slicer, DicomToMesh, InVesalius) produce static STL/OBJ via a GUI. dicom2glb fills this gap as a single command that takes DICOM data in and produces AR-ready GLB out.
 
 **Key features:**
 
-- **Animated cardiac output** -- 2D cine clips become animated GLB with per-frame texture planes and full RGB color; 3D temporal volumes use morph targets
+- **Animated cardiac output** -- 2D cine clips become animated GLB with per-frame texture planes; 3D temporal volumes use morph targets
+- **Gallery mode** -- convert every slice to textured quads with three layouts: individual GLBs, lightbox grid, and spatial fan positioned using DICOM metadata
 - **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and MedSAM2 (echo/general)
 - **Automatic series detection** -- multi-series DICOM folders are analyzed and classified (3D volume, 2D cine, still image) with per-series conversion recommendations
 - **Interactive series selection** -- choose which series to convert from a Rich table, or let the tool auto-select the best one
 - **Multi-format export** -- GLB (with animation and PBR materials), STL, and OBJ
-- **Step-by-step progress** -- real-time progress reporting shows what processing step the method is on (e.g. "Smoothing volume... 1/5", "Running TotalSegmentator AI segmentation...")
 - **AR-optimized meshes** -- Taubin smoothing (volume-preserving), decimation to configurable triangle count, and configurable transparency
 - **Multi-threshold layered output** -- extract multiple structures at different intensity thresholds with per-layer colors and transparency
 
@@ -42,19 +42,19 @@ pip install -e ".[dev]"
 ## Quick Start
 
 ```bash
-# Convert a DICOM directory to GLB
+# Convert a DICOM directory to GLB (3D mesh)
 dicom2glb ./dicom_folder/ -o output.glb
 
 # Animated 3D echo (cardiac cycle with morph targets)
 dicom2glb ./echo_folder/ -o heart.glb --animate
 
-# Multi-series folder (interactive selection)
-dicom2glb ./echo_folder/ -o output.glb
-
 # Single DICOM image to textured plane
 dicom2glb image.dcm -o plane.glb
 
-# Cardiac CT with AI segmentation (7 structures: chambers, myocardium, great vessels)
+# Gallery mode: individual GLBs + lightbox grid + spatial fan
+dicom2glb ./dicom_folder/ -o output/ --gallery
+
+# Cardiac CT with AI segmentation (7 structures)
 dicom2glb ./ct_folder/ -o heart.glb --method totalseg
 
 # Multi-threshold layered output
@@ -63,6 +63,36 @@ dicom2glb ./data/ -o layers.glb --multi-threshold "200:bone:1.0,100:tissue:0.5"
 # Export as STL or OBJ
 dicom2glb ./data/ -o model.stl -f stl
 ```
+
+## Gallery Mode
+
+Gallery mode converts every DICOM slice to a textured quad GLB -- nothing is filtered or dropped, regardless of slice dimensions. This is useful for reviewing all slices in a series or for AR viewing of 2D data.
+
+Three outputs are produced:
+
+| Output | Description |
+|---|---|
+| `series_name/slice_NNN.glb` | One GLB per slice (or per spatial position if animated) |
+| `series_name_lightbox.glb` | All slices in a grid layout (configurable columns) |
+| `series_name_spatial.glb` | Slices positioned at their real-world DICOM coordinates |
+
+If the series contains temporal data (multiple frames per position), animation is **enabled by default** -- each position cycles through its temporal frames. Use `--no-animate` to force static output.
+
+```bash
+# Basic gallery mode
+dicom2glb ./dicom_folder/ -o output/ --gallery
+
+# Custom grid columns (default: 6)
+dicom2glb ./dicom_folder/ -o output/ --gallery --columns 8
+
+# Force static output from temporal data
+dicom2glb ./dicom_folder/ -o output/ --gallery --no-animate
+
+# Select a specific series by UID
+dicom2glb ./dicom_folder/ -o output/ --gallery --series 1.2.840...
+```
+
+The spatial layout uses `ImagePositionPatient` and `ImageOrientationPatient` from the DICOM metadata to place each quad at its real-world position. If no spatial metadata is available, it falls back to a lightbox grid.
 
 ## Series Selection
 
@@ -80,7 +110,7 @@ When a DICOM folder contains multiple series, dicom2glb analyzes each series and
 
 Recommendation: Series 1 (2D cine, 132 frames) → classical
 
-Select series to convert [1]: 1,3
+Enter number (1-3), comma-separated (1,3), or 'all' [1]: 1,3
 ```
 
 - Enter a number (`1`), comma-separated list (`1,3`), or `all`
@@ -107,15 +137,13 @@ dicom2glb --list-methods
 
 ### Classical (default)
 
-Full pipeline: Gaussian smoothing to reduce noise, adaptive Otsu threshold, morphological cleanup, largest-component extraction, then marching cubes for surface extraction. Best for noisy 3D echo data.
-
-#### Usage
+Full pipeline: Gaussian smoothing, adaptive Otsu threshold, morphological cleanup, largest-component extraction, then marching cubes for surface extraction. Best for noisy 3D echo data.
 
 ```bash
-# Basic — auto-detects threshold via Otsu's method
+# Basic -- auto-detects threshold via Otsu's method
 dicom2glb ./echo_folder/ -o heart.glb
 
-# Set an explicit intensity threshold
+# Explicit intensity threshold
 dicom2glb ./echo_folder/ -o heart.glb --threshold 400
 
 # Animated cardiac cycle (morph targets from temporal 3D echo)
@@ -131,50 +159,22 @@ dicom2glb ./echo_folder/ -o heart.glb --faces 40000
 dicom2glb ./echo_folder/ -o heart.glb --alpha 0.6
 ```
 
-### Marching cubes
+### Marching Cubes
 
-Minimal pipeline: threshold then marching cubes. No morphological cleanup — fast but noisier. Supports multi-threshold mode for extracting multiple structures at different intensity levels.
-
-#### Usage
+Minimal pipeline: threshold then marching cubes. No morphological cleanup -- fast but noisier. Supports multi-threshold mode for extracting multiple structures at different intensity levels.
 
 ```bash
 # Basic with auto threshold
 dicom2glb ./data/ -o model.glb --method marching-cubes
 
-# Explicit threshold
-dicom2glb ./data/ -o model.glb --method marching-cubes --threshold 300
-
-# Animated output from temporal data
-dicom2glb ./echo_folder/ -o heart.glb --method marching-cubes --animate
-
 # Multi-threshold: extract bone and soft tissue as separate layers
-# Format: "threshold:label:alpha,..."
 dicom2glb ./ct_folder/ -o layers.glb --method marching-cubes \
   --multi-threshold "200:bone:1.0,100:tissue:0.5,50:skin:0.3"
 ```
 
-### MedSAM2
+### TotalSegmentator
 
-AI segmentation via MedSAM2 for 3D echo and general cardiac imaging. Produces multi-structure output with per-structure colors (similar to totalseg but for echo/MRI data). Currently uses a heuristic pseudo-segmentation; full MedSAM2 model integration is planned.
-
-#### Usage
-
-```bash
-# Basic — segments cardiac structures from 3D echo
-dicom2glb ./echo_folder/ -o heart.glb --method medsam2
-
-# Animated cardiac cycle
-dicom2glb ./echo_folder/ -o heart.glb --method medsam2 --animate
-
-# Lighter mesh
-dicom2glb ./echo_folder/ -o heart.glb --method medsam2 --faces 50000
-```
-
-Requires AI dependencies: `pip install dicom2glb[ai]`
-
-### TotalSegmentator details
-
-The `totalseg` method uses TotalSegmentator's `heartchambers_highres` task, which segments 7 cardiac structures into a single GLB with per-structure PBR materials and colors:
+Uses TotalSegmentator's `heartchambers_highres` task to segment 7 cardiac structures into a single GLB with per-structure PBR materials:
 
 | Structure | Color |
 |---|---|
@@ -188,32 +188,32 @@ The `totalseg` method uses TotalSegmentator's `heartchambers_highres` task, whic
 
 Requires a contrast-enhanced cardiac CT for best results. The `heartchambers_highres` model may require a TotalSegmentator license for commercial use.
 
-#### Usage
-
 ```bash
-# Basic — segments all 7 cardiac structures into one GLB
+# Segment all 7 cardiac structures
 dicom2glb ./ct_folder/ -o heart.glb --method totalseg
-
-# Select a specific series from a multi-series DICOM folder
-dicom2glb ./ct_folder/ -o heart.glb --method totalseg --series 1.2.840...
 
 # Reduce mesh complexity (default: 80000 faces per structure)
 dicom2glb ./ct_folder/ -o heart.glb --method totalseg --faces 50000
 
-# Increase smoothing for a cleaner surface (default: 15 iterations)
-dicom2glb ./ct_folder/ -o heart.glb --method totalseg --smoothing 30
-
-# Disable smoothing entirely
-dicom2glb ./ct_folder/ -o heart.glb --method totalseg --smoothing 0
-
 # Make all structures semi-transparent
 dicom2glb ./ct_folder/ -o heart.glb --method totalseg --alpha 0.7
-
-# Export as STL or OBJ instead of GLB
-dicom2glb ./ct_folder/ -o heart.stl --method totalseg -f stl
 ```
 
-The `--threshold` option has no effect on `totalseg` since segmentation is AI-driven (not intensity-based). The `--animate` option is also not supported since cardiac CT is a single time point.
+The `--threshold` and `--animate` options have no effect on `totalseg` (AI-driven segmentation, single time point).
+
+### MedSAM2
+
+AI segmentation for 3D echo and general cardiac imaging. Produces multi-structure output with per-structure colors. Currently uses a heuristic pseudo-segmentation; full MedSAM2 model integration is planned.
+
+```bash
+# Segment cardiac structures from 3D echo
+dicom2glb ./echo_folder/ -o heart.glb --method medsam2
+
+# Animated cardiac cycle
+dicom2glb ./echo_folder/ -o heart.glb --method medsam2 --animate
+```
+
+Requires AI dependencies: `pip install dicom2glb[ai]`
 
 ## CLI Reference
 
@@ -225,14 +225,17 @@ Arguments:
 
 Options:
   -o, --output PATH       Output file path (default: output.glb)
-  -m, --method TEXT        Conversion method (default: classical)
+  -m, --method TEXT        Conversion method: classical, marching-cubes, totalseg, medsam2
   -f, --format TEXT        Output format: glb, stl, obj (default: glb)
   --animate               Enable animation for temporal data
+  --no-animate            Force static output even if temporal data is detected
   --threshold FLOAT       Intensity threshold for isosurface extraction
   --smoothing INTEGER     Taubin smoothing iterations, 0 to disable (default: 15)
   --faces INTEGER         Target triangle count after decimation (default: 80000)
   --alpha FLOAT           Global transparency 0.0-1.0 (default: 1.0)
-  --multi-threshold TEXT   Multi-threshold: "val:label:alpha,..."
+  --multi-threshold TEXT   Multi-threshold config: "val:label:alpha,..."
+  --gallery               Gallery mode: individual GLBs, lightbox grid, and spatial fan
+  --columns INTEGER       Lightbox grid columns in gallery mode (default: 6)
   --series TEXT           Select DICOM series by UID (partial match)
   --list-methods          List available methods and exit
   --list-series           List DICOM series in input directory and exit
@@ -259,13 +262,14 @@ Options:
 ```
 src/dicom2glb/
 ├── cli.py              # Typer CLI entry point
-├── core/               # Data types (MeshData, DicomVolume, etc.)
+├── core/               # Data types (MeshData, DicomVolume, GallerySlice, etc.)
 ├── io/                 # DICOM reading, echo reader, exporters
 ├── methods/            # Pluggable conversion methods (registry pattern)
 │   ├── classical.py    # Gaussian smoothing + adaptive threshold
 │   ├── marching_cubes.py  # Basic isosurface extraction
 │   ├── totalseg.py     # TotalSegmentator AI segmentation
 │   └── medsam2.py      # MedSAM2 AI segmentation
+├── gallery/            # Gallery mode (individual, lightbox, spatial)
 ├── mesh/               # Taubin smoothing, decimation, temporal processing
 └── glb/                # GLB builder, morph target animation, textures
 ```
