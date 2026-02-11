@@ -318,17 +318,20 @@ def _print_series_table(series_list: list[SeriesInfo], input_path: Path) -> None
     table.add_column("Description", max_width=40)
     table.add_column("Data Type", style="cyan")
     table.add_column("Detail", justify="right")
+    table.add_column("Animated", justify="center")
     table.add_column("Recommended Output", style="yellow")
     table.add_column("Recommended Method", style="magenta")
 
     for i, info in enumerate(series_list, 1):
         desc = info.description if info.description else "(no desc)"
+        animated = "[green]Yes[/green]" if info.data_type in ("2D cine", "3D+T volume") else "[dim]No[/dim]"
         table.add_row(
             str(i),
             info.modality,
             desc,
             info.data_type,
             info.detail,
+            animated,
             info.recommended_output,
             info.recommended_method,
         )

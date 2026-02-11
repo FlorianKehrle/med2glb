@@ -70,13 +70,13 @@ When a DICOM folder contains multiple series, dicom2glb analyzes each series and
 
 ```
   DICOM Series in echo_folder
-┏━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┓
-┃ # ┃ Modality ┃ Description              ┃ Data Type   ┃ Detail      ┃ Recommended Output ┃ Recommended Method ┃
-┡━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━┩
-┃ 1 ┃ US       ┃ Echokardiographie 4D     ┃ 2D cine     ┃ 132 frames  ┃ textured plane     ┃ classical          ┃
-┃ 2 ┃ US       ┃ (no desc)                ┃ 2D cine     ┃ 65 frames   ┃ textured plane     ┃ classical          ┃
-┃ 3 ┃ CT       ┃ Thorax mit Kontrastmittel┃ 3D volume   ┃ 120 slices  ┃ 3D mesh            ┃ marching-cubes     ┃
-└━━━┴━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━┴━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━━━┴━━━━━━━━━━━━━━━━━━━━┘
+┌───┬──────────┬──────────────────────────┬─────────────┬─────────────┬──────────┬────────────────────┬────────────────────┐
+│ # │ Modality │ Description              │ Data Type   │ Detail      │ Animated │ Recommended Output │ Recommended Method │
+├───┼──────────┼──────────────────────────┼─────────────┼─────────────┼──────────┼────────────────────┼────────────────────┤
+│ 1 │ US       │ Echokardiographie 4D     │ 2D cine     │ 132 frames  │   Yes    │ textured plane     │ classical          │
+│ 2 │ US       │ (no desc)                │ 2D cine     │ 65 frames   │   Yes    │ textured plane     │ classical          │
+│ 3 │ CT       │ Thorax mit Kontrastmittel│ 3D volume   │ 120 slices  │    No    │ 3D mesh            │ marching-cubes     │
+└───┴──────────┴──────────────────────────┴─────────────┴─────────────┴──────────┴────────────────────┴────────────────────┘
 
 Recommendation: Series 1 (2D cine, 132 frames) → classical
 
