@@ -618,77 +618,123 @@ def _run_gallery_mode(
 
     start_time = time.time()
 
-    # Series selection
-    series_uid = series
-    if not series_uid and input_path.is_dir():
+    # Determine which series to process
+    if series:
+        target_uids = [series]
+    elif input_path.is_dir():
         series_list = analyze_series(input_path)
         if len(series_list) > 1 and sys.stdin.isatty():
             _print_series_table(series_list, input_path)
             selected = _interactive_select_series(series_list)
-            series_uid = selected[0].series_uid
         else:
-            series_uid = series_list[0].series_uid
+            selected = series_list
+        target_uids = [s.series_uid for s in selected]
+    else:
+        target_uids = [None]
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        # Step 1: Load all slices
-        task = progress.add_task("Loading all DICOM slices...", total=None)
-        slices = load_all_slices(input_path, series_uid=series_uid)
-        progress.update(task, description=f"Loaded {len(slices)} slices")
-        progress.remove_task(task)
+    # Build a lookup for series descriptions
+    series_info_map: dict[str, SeriesInfo] = {}
+    if input_path.is_dir():
+        for info in analyze_series(input_path):
+            series_info_map[info.series_uid] = info
 
-        if not slices:
-            raise ValueError("No slices loaded for gallery mode.")
+    output_dir = Path(output) if output.suffix == "" else output.parent
 
-        # Auto-detect temporal data
-        has_temporal = any(s.temporal_index is not None for s in slices)
-        animate = has_temporal and not no_animate
+    total_slices = 0
+    series_summaries: list[dict] = []
 
-        # Determine series name for output directory
-        desc = slices[0].modality
-        # Use output path as base directory
-        output_dir = Path(output) if output.suffix == "" else output.parent
-        series_name = _sanitize_name(desc)
+    for uid in target_uids:
+        # Derive a meaningful folder name
+        info = series_info_map.get(uid) if uid else None
+        if info and info.description:
+            series_name = _sanitize_name(info.description)
+        elif info:
+            series_name = _sanitize_name(f"{info.modality}_{info.data_type}")
+        else:
+            series_name = "series"
+
+        # Deduplicate folder names
         series_dir = output_dir / series_name
+        if series_dir.exists() and series_summaries:
+            series_dir = output_dir / f"{series_name}_{len(series_summaries) + 1}"
 
-        # Step 2: Individual GLBs
-        task = progress.add_task("Building individual GLBs...", total=None)
-        individual_paths = build_individual_glbs(
-            slices, series_dir, animate=animate,
+        console.print(
+            f"\n[bold]Processing series: "
+            f"{info.description or info.series_uid if info else 'default'} "
+            f"({info.data_type}, {info.detail})[/bold]" if info else
+            f"\n[bold]Processing series...[/bold]"
         )
-        progress.update(task, description=f"Built {len(individual_paths)} individual GLBs")
-        progress.remove_task(task)
 
-        # Step 3: Lightbox GLB
-        lightbox_path = output_dir / f"{series_name}_lightbox.glb"
-        task = progress.add_task("Building lightbox grid...", total=None)
-        build_lightbox_glb(
-            slices, lightbox_path, columns=columns, animate=animate,
-        )
-        progress.remove_task(task)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            # Step 1: Load all slices
+            task = progress.add_task("Loading DICOM slices...", total=None)
+            slices = load_all_slices(input_path, series_uid=uid)
+            progress.update(task, description=f"Loaded {len(slices)} slices")
+            progress.remove_task(task)
 
-        # Step 4: Spatial fan GLB
-        spatial_path = output_dir / f"{series_name}_spatial.glb"
-        task = progress.add_task("Building spatial fan...", total=None)
-        spatial_created = build_spatial_glb(
-            slices, spatial_path, animate=animate,
-        )
-        progress.remove_task(task)
+            if not slices:
+                console.print(f"  [yellow]No slices loaded — skipping.[/yellow]")
+                continue
+
+            total_slices += len(slices)
+
+            # Auto-detect temporal data
+            has_temporal = any(s.temporal_index is not None for s in slices)
+            animate = has_temporal and not no_animate
+
+            # Step 2: Individual GLBs
+            task = progress.add_task("Building individual GLBs...", total=None)
+            individual_paths = build_individual_glbs(
+                slices, series_dir, animate=animate,
+            )
+            progress.update(task, description=f"Built {len(individual_paths)} individual GLBs")
+            progress.remove_task(task)
+
+            # Step 3: Lightbox GLB (inside the series folder)
+            lightbox_path = series_dir / "lightbox.glb"
+            task = progress.add_task("Building lightbox grid...", total=None)
+            build_lightbox_glb(
+                slices, lightbox_path, columns=columns, animate=animate,
+            )
+            progress.remove_task(task)
+
+            # Step 4: Spatial fan GLB (inside the series folder)
+            spatial_path = series_dir / "spatial.glb"
+            task = progress.add_task("Building spatial fan...", total=None)
+            spatial_created = build_spatial_glb(
+                slices, spatial_path, animate=animate,
+            )
+            progress.remove_task(task)
+
+        summary = {
+            "name": series_name,
+            "dir": series_dir,
+            "slices": len(slices),
+            "individual": len(individual_paths),
+            "animated": animate,
+            "spatial": spatial_created,
+        }
+        series_summaries.append(summary)
 
     # Summary
     elapsed = time.time() - start_time
     console.print(f"\n[green]Gallery mode complete![/green]")
-    console.print(f"  Slices:     {len(slices)}")
-    console.print(f"  Animated:   {'Yes' if animate else 'No'}")
-    console.print(f"  Individual: {series_dir}/ ({len(individual_paths)} files)")
-    console.print(f"  Lightbox:   {lightbox_path}")
-    if spatial_created:
-        console.print(f"  Spatial:    {spatial_path}")
-    else:
-        console.print(f"  Spatial:    [dim]skipped (no spatial metadata)[/dim]")
+    console.print(f"  Series:     {len(series_summaries)}")
+    console.print(f"  Slices:     {total_slices}")
+    for s in series_summaries:
+        console.print(f"\n  [bold]{s['name']}/[/bold]")
+        console.print(f"    Individual: {s['individual']} files")
+        console.print(f"    Lightbox:   lightbox.glb")
+        if s["spatial"]:
+            console.print(f"    Spatial:    spatial.glb")
+        else:
+            console.print(f"    Spatial:    [dim]skipped (no spatial metadata)[/dim]")
+        console.print(f"    Animated:   {'Yes' if s['animated'] else 'No'}")
+    console.print(f"\n  Output:     {output_dir}")
     console.print(f"  Time:       {elapsed:.1f}s")
 
 

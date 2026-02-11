@@ -66,20 +66,27 @@ dicom2glb ./data/ -o model.stl -f stl
 
 ## Gallery Mode
 
-Gallery mode converts every DICOM slice to a textured quad GLB -- nothing is filtered or dropped, regardless of slice dimensions. This is useful for reviewing all slices in a series or for AR viewing of 2D data.
+Gallery mode converts every DICOM slice to a textured quad GLB -- nothing is filtered or dropped, regardless of slice dimensions. Each series gets its own subfolder with individual GLBs, a lightbox overview, and (if spatial metadata is available) a spatial fan.
 
-Three outputs are produced:
+```
+output/
+  Echokardiographie_4D/
+    slice_001.glb
+    slice_002.glb
+    ...
+    lightbox.glb        # grid overview of all slices
+    spatial.glb          # only if ImagePositionPatient is present
+  Thorax_mit_Kontrastmittel/
+    slice_001.glb
+    ...
+    lightbox.glb
+    spatial.glb
+```
 
-| Output | Description |
-|---|---|
-| `series_name/slice_NNN.glb` | One GLB per slice (or per spatial position if animated) |
-| `series_name_lightbox.glb` | All slices in a grid layout (configurable columns) |
-| `series_name_spatial.glb` | Slices positioned at their real-world DICOM coordinates |
-
-If the series contains temporal data (multiple frames per position), animation is **enabled by default** -- each position cycles through its temporal frames. Use `--no-animate` to force static output.
+Multi-frame DICOMs (e.g. ultrasound cine clips) are automatically expanded into one slice per frame with animation enabled by default. Use `--no-animate` to force static output.
 
 ```bash
-# Basic gallery mode
+# All series, each in its own subfolder
 dicom2glb ./dicom_folder/ -o output/ --gallery
 
 # Custom grid columns (default: 6)
@@ -92,7 +99,7 @@ dicom2glb ./dicom_folder/ -o output/ --gallery --no-animate
 dicom2glb ./dicom_folder/ -o output/ --gallery --series 1.2.840...
 ```
 
-The spatial layout uses `ImagePositionPatient` and `ImageOrientationPatient` from the DICOM metadata to place each quad at its real-world position. If no spatial metadata is available, it falls back to a lightbox grid.
+The spatial layout uses `ImagePositionPatient` and `ImageOrientationPatient` from the DICOM metadata to place each quad at its real-world position. If no spatial metadata is available, the spatial output is skipped.
 
 ## Series Selection
 
