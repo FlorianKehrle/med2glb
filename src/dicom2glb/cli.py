@@ -147,6 +147,16 @@ def main(
         "--no-animate",
         help="Force static output even if temporal data is detected.",
     ),
+    max_size: int = typer.Option(
+        99,
+        "--max-size",
+        help="Maximum output GLB file size in MB (0 to disable).",
+    ),
+    compress: str = typer.Option(
+        "draco",
+        "--compress",
+        help="Compression strategy: draco (default), downscale, jpeg.",
+    ),
     do_list_series: bool = typer.Option(
         False,
         "--list-series",
@@ -190,6 +200,8 @@ def main(
                 series=series,
                 columns=columns,
                 no_animate=no_animate,
+                max_size_mb=max_size,
+                compress_strategy=compress,
                 verbose=verbose,
             )
         else:
@@ -206,6 +218,8 @@ def main(
                 alpha=alpha,
                 multi_threshold=multi_threshold,
                 series=series,
+                max_size_mb=max_size,
+                compress_strategy=compress,
                 verbose=verbose,
             )
     except ValueError as e:
@@ -251,6 +265,8 @@ def _run_pipeline(
     alpha: float,
     multi_threshold: str | None,
     series: str | None,
+    max_size_mb: int,
+    compress_strategy: str,
     verbose: bool,
 ) -> None:
     """Execute the conversion pipeline with series selection."""
@@ -268,6 +284,8 @@ def _run_pipeline(
             alpha=alpha,
             multi_threshold=multi_threshold,
             series_uid=series,
+            max_size_mb=max_size_mb,
+            compress_strategy=compress_strategy,
             verbose=verbose,
         )
         return
@@ -293,6 +311,8 @@ def _run_pipeline(
             alpha=alpha,
             multi_threshold=multi_threshold,
             series_uid=info.series_uid,
+            max_size_mb=max_size_mb,
+            compress_strategy=compress_strategy,
             verbose=verbose,
         )
         return
@@ -331,6 +351,8 @@ def _run_pipeline(
             alpha=alpha,
             multi_threshold=multi_threshold,
             series_uid=info.series_uid,
+            max_size_mb=max_size_mb,
+            compress_strategy=compress_strategy,
             verbose=verbose,
         )
 
@@ -429,7 +451,9 @@ def _convert_series(
     alpha: float,
     multi_threshold: str | None,
     series_uid: str | None,
-    verbose: bool,
+    max_size_mb: int = 0,
+    compress_strategy: str = "draco",
+    verbose: bool = False,
 ) -> None:
     """Execute the full conversion pipeline for a single series."""
     from dicom2glb.io.dicom_reader import InputType, load_dicom_directory
@@ -481,6 +505,8 @@ def _convert_series(
                 )
                 build_textured_plane_glb(data.frames[0], output)
                 progress.remove_task(task)
+                if max_size_mb > 0:
+                    _enforce_size_limit(output, max_size_mb, compress_strategy, progress)
 
                 file_size = output.stat().st_size / 1024
                 elapsed = time.time() - start_time
@@ -497,6 +523,8 @@ def _convert_series(
 
             build_textured_plane_glb(data, output)
             progress.remove_task(task)
+            if max_size_mb > 0:
+                _enforce_size_limit(output, max_size_mb, compress_strategy, progress)
 
             # Print summary for single slice
             file_size = output.stat().st_size / 1024
@@ -519,6 +547,8 @@ def _convert_series(
 
                 build_animated_textured_plane_glb(data, output)
                 progress.remove_task(task)
+                if max_size_mb > 0:
+                    _enforce_size_limit(output, max_size_mb, compress_strategy, progress)
 
                 file_size = output.stat().st_size / 1024
                 elapsed = time.time() - start_time
@@ -579,6 +609,10 @@ def _convert_series(
         _export(result, output, format, animate)
         progress.remove_task(task)
 
+        # Step 6: Constrain file size
+        if max_size_mb > 0 and format == "glb":
+            _enforce_size_limit(output, max_size_mb, compress_strategy, progress)
+
     # Print summary
     elapsed = time.time() - start_time
     total_verts = sum(len(m.vertices) for m in result.meshes)
@@ -599,13 +633,39 @@ def _convert_series(
         err_console.print(f"[yellow]Warning: {w}[/yellow]")
 
 
+def _enforce_size_limit(
+    path: Path,
+    max_size_mb: int,
+    strategy: str,
+    progress: Progress,
+) -> None:
+    """Compress a GLB file if it exceeds the size limit."""
+    max_bytes = max_size_mb * 1024 * 1024
+    if not path.exists() or path.stat().st_size <= max_bytes:
+        return
+
+    from dicom2glb.glb.compress import constrain_glb_size
+
+    original_kb = path.stat().st_size / 1024
+    task = progress.add_task(
+        f"Compressing GLB ({original_kb:.0f} KB > {max_size_mb} MB limit)...",
+        total=None,
+    )
+    constrain_glb_size(path, max_bytes, strategy=strategy)
+    new_kb = path.stat().st_size / 1024
+    progress.update(task, description=f"Compressed: {original_kb:.0f} KB → {new_kb:.0f} KB")
+    progress.remove_task(task)
+
+
 def _run_gallery_mode(
     input_path: Path,
     output: Path,
     series: str | None,
     columns: int,
     no_animate: bool,
-    verbose: bool,
+    max_size_mb: int = 0,
+    compress_strategy: str = "draco",
+    verbose: bool = False,
 ) -> None:
     """Execute gallery mode: individual GLBs, lightbox grid, and spatial fan."""
     from dicom2glb.gallery import (
@@ -693,6 +753,9 @@ def _run_gallery_mode(
             )
             progress.update(task, description=f"Built {len(individual_paths)} individual GLBs")
             progress.remove_task(task)
+            if max_size_mb > 0:
+                for p in individual_paths:
+                    _enforce_size_limit(p, max_size_mb, compress_strategy, progress)
 
             # Step 3: Lightbox GLB (inside the series folder)
             lightbox_path = series_dir / "lightbox.glb"
@@ -701,6 +764,8 @@ def _run_gallery_mode(
                 slices, lightbox_path, columns=columns, animate=animate,
             )
             progress.remove_task(task)
+            if max_size_mb > 0:
+                _enforce_size_limit(lightbox_path, max_size_mb, compress_strategy, progress)
 
             # Step 4: Spatial fan GLB (inside the series folder)
             spatial_path = series_dir / "spatial.glb"
@@ -709,6 +774,8 @@ def _run_gallery_mode(
                 slices, spatial_path, animate=animate,
             )
             progress.remove_task(task)
+            if max_size_mb > 0 and spatial_created:
+                _enforce_size_limit(spatial_path, max_size_mb, compress_strategy, progress)
 
         summary = {
             "name": series_name,
