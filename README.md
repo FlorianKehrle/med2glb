@@ -107,7 +107,7 @@ The spatial layout uses `ImagePositionPatient` and `ImageOrientationPatient` fro
 
 ## GLB Size Constraint
 
-Output GLB files are automatically constrained to 99 MB (configurable) to fit AR viewer limits. If a GLB exceeds the limit, it is compressed using one of three strategies:
+Output GLB files are automatically constrained to 99 MB (configurable) to fit AR viewer limits. If a GLB exceeds the limit, the original file is kept and a compressed copy is saved alongside it with a `_compressed` suffix (e.g. `lightbox.glb` + `lightbox_compressed.glb`). Three compression strategies are available:
 
 | Strategy | Method | Quality | Speed |
 |---|---|---|---|
