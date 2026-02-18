@@ -1,13 +1,13 @@
-# CLI Contract: dicom2glb
+# CLI Contract: med2glb
 
 **Date**: 2026-02-09
 
-## Command: `dicom2glb`
+## Command: `med2glb`
 
 ### Synopsis
 
 ```
-dicom2glb [OPTIONS] INPUT_PATH
+med2glb [OPTIONS] INPUT_PATH
 ```
 
 ### Arguments
@@ -50,33 +50,33 @@ dicom2glb [OPTIONS] INPUT_PATH
 
 ```bash
 # Basic conversion (auto-detect input type, classical method)
-dicom2glb ./dicom_dir/ -o heart.glb
+med2glb ./dicom_dir/ -o heart.glb
 
 # 3D echo with animation
-dicom2glb ./echo_data/ -o beating_heart.glb --animate
+med2glb ./echo_data/ -o beating_heart.glb --animate
 
 # Try different methods for comparison
-dicom2glb ./echo_data/ -o heart_mc.glb --method marching-cubes --threshold 400
-dicom2glb ./echo_data/ -o heart_cl.glb --method classical --smoothing 20
-dicom2glb ./echo_data/ -o heart_ai.glb --method medsam2 --animate
+med2glb ./echo_data/ -o heart_mc.glb --method marching-cubes --threshold 400
+med2glb ./echo_data/ -o heart_cl.glb --method classical --smoothing 20
+med2glb ./echo_data/ -o heart_ai.glb --method medsam2 --animate
 
 # CT with TotalSegmentator segmentation
-dicom2glb ./ct_scan/ -o heart_segmented.glb --method totalseg
+med2glb ./ct_scan/ -o heart_segmented.glb --method totalseg
 
 # Multi-threshold layered output
-dicom2glb ./ct_scan/ -o heart_layers.glb --multi-threshold "200:blood_pool:0.3,500:myocardium:1.0"
+med2glb ./ct_scan/ -o heart_layers.glb --multi-threshold "200:blood_pool:0.3,500:myocardium:1.0"
 
 # Export as STL for Blender post-processing
-dicom2glb ./dicom_dir/ -o heart.stl --format stl
+med2glb ./dicom_dir/ -o heart.stl --format stl
 
 # List available methods
-dicom2glb --list-methods
+med2glb --list-methods
 
 # List series in a directory
-dicom2glb ./dicom_dir/ --list-series
+med2glb ./dicom_dir/ --list-series
 
 # Select a specific series
-dicom2glb ./dicom_dir/ -o heart.glb --series "1.2.840.113619"
+med2glb ./dicom_dir/ -o heart.glb --series "1.2.840.113619"
 ```
 
 ### Output: `--list-methods`
@@ -96,11 +96,11 @@ Available conversion methods:
   totalseg         AI cardiac segmentation via TotalSegmentator.
                    Segments: LV, RV, LA, RA, aorta, myocardium.
                    Best for: Cardiac CT with contrast.
-                   Requires: pip install dicom2glb[ai]
+                   Requires: pip install med2glb[ai]
 
   medsam2          AI segmentation via MedSAM2.
                    Best for: 3D echo, general cardiac imaging.
-                   Requires: pip install dicom2glb[ai]
+                   Requires: pip install med2glb[ai]
 ```
 
 ### Standard Output Behavior

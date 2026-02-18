@@ -8,11 +8,11 @@ import numpy as np
 import pygltflib
 import pytest
 
-from dicom2glb.core.types import GallerySlice
-from dicom2glb.gallery.individual import build_individual_glbs
-from dicom2glb.gallery.lightbox import build_lightbox_glb
-from dicom2glb.gallery.loader import load_all_slices
-from dicom2glb.gallery.spatial import build_spatial_glb
+from med2glb.core.types import GallerySlice
+from med2glb.gallery.individual import build_individual_glbs
+from med2glb.gallery.lightbox import build_lightbox_glb
+from med2glb.gallery.loader import load_all_slices
+from med2glb.gallery.spatial import build_spatial_glb
 
 
 # ─── Loader Tests ──────────────────────────────────────────────

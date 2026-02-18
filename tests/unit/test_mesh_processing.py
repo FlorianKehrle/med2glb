@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dicom2glb.core.types import MaterialConfig, MeshData
-from dicom2glb.mesh.processing import (
+from med2glb.core.types import MaterialConfig, MeshData
+from med2glb.mesh.processing import (
     compute_normals,
     decimate,
     fill_holes,

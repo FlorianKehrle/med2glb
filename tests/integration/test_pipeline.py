@@ -7,11 +7,11 @@ from pathlib import Path
 import pygltflib
 import pytest
 
-from dicom2glb.core.types import MethodParams
-from dicom2glb.io.dicom_reader import InputType, load_dicom_directory
-from dicom2glb.io.exporters import export_glb, export_stl
-from dicom2glb.mesh.processing import process_mesh
-from dicom2glb.methods.registry import _ensure_methods_loaded, get_method
+from med2glb.core.types import MethodParams
+from med2glb.io.dicom_reader import InputType, load_dicom_directory
+from med2glb.io.exporters import export_glb, export_stl
+from med2glb.mesh.processing import process_mesh
+from med2glb.methods.registry import _ensure_methods_loaded, get_method
 
 
 @pytest.fixture(autouse=True)
@@ -96,7 +96,7 @@ def test_single_slice_to_textured_glb(tmp_path):
     assert input_type == InputType.SINGLE_SLICE
 
     # Build textured plane GLB
-    from dicom2glb.glb.texture import build_textured_plane_glb
+    from med2glb.glb.texture import build_textured_plane_glb
     output = tmp_path / "plane.glb"
     build_textured_plane_glb(volume, output)
 
@@ -116,7 +116,7 @@ def test_temporal_to_animated_glb(dicom_temporal_directory, tmp_path):
     params = MethodParams(threshold=250.0, smoothing_iterations=3, target_faces=2000)
 
     # Convert each frame
-    from dicom2glb.core.volume import TemporalSequence
+    from med2glb.core.volume import TemporalSequence
     assert isinstance(data, TemporalSequence)
 
     frame_results = []
@@ -127,7 +127,7 @@ def test_temporal_to_animated_glb(dicom_temporal_directory, tmp_path):
         frame_results.append(result)
 
     # Build morph targets
-    from dicom2glb.mesh.temporal import build_morph_targets_from_frames
+    from med2glb.mesh.temporal import build_morph_targets_from_frames
     animated = build_morph_targets_from_frames(frame_results, data.temporal_resolution)
 
     assert len(animated.base_meshes) >= 1
@@ -135,7 +135,7 @@ def test_temporal_to_animated_glb(dicom_temporal_directory, tmp_path):
     assert len(animated.frame_times) == data.frame_count
 
     # Export animated GLB
-    from dicom2glb.glb.animation import build_animated_glb
+    from med2glb.glb.animation import build_animated_glb
     output = tmp_path / "animated.glb"
     build_animated_glb(animated, output)
 

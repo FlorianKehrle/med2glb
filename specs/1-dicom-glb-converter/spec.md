@@ -105,8 +105,8 @@ A new user installs the tool via pip and runs their first conversion, guided by 
 
 **Acceptance Scenarios**:
 
-1. **Given** a Python environment, **When** the user runs `pip install dicom2glb`, **Then** the tool installs with all core dependencies and the `dicom2glb` command is available.
-2. **Given** a freshly installed tool, **When** the user runs `dicom2glb --help`, **Then** clear usage instructions with examples are displayed.
+1. **Given** a Python environment, **When** the user runs `pip install med2glb`, **Then** the tool installs with all core dependencies and the `med2glb` command is available.
+2. **Given** a freshly installed tool, **When** the user runs `med2glb --help`, **Then** clear usage instructions with examples are displayed.
 3. **Given** the README documentation, **When** a new user reads it, **Then** they can understand what each conversion method is best suited for, AR viewer compatibility, and follow step-by-step examples.
 
 ---
@@ -142,7 +142,7 @@ A new user installs the tool via pip and runs their first conversion, guided by 
 - **FR-006**: System MUST support configurable mesh quality parameters: smoothing level (Taubin iterations), target face count (default 50K-100K), and threshold values.
 - **FR-007**: System MUST support per-structure PBR materials in GLB output including distinct colors and configurable transparency (`alphaMode: BLEND`, `metallicFactor: 0.0`, `roughnessFactor: 0.6-0.8`).
 - **FR-008**: System MUST support multi-threshold extraction to produce layered visualizations (e.g., blood pool as semi-transparent, myocardium as opaque).
-- **FR-009**: AI segmentation methods (`totalseg`, `medsam2`) MUST be optional dependencies installable via `pip install dicom2glb[ai]`, not required for core functionality.
+- **FR-009**: AI segmentation methods (`totalseg`, `medsam2`) MUST be optional dependencies installable via `pip install med2glb[ai]`, not required for core functionality.
 - **FR-010**: System MUST display progress indication during processing for long-running operations.
 - **FR-011**: System MUST provide a `--list-methods` command showing available methods with descriptions and recommended data types.
 - **FR-012**: System MUST provide clear, actionable error messages for common failure cases (no DICOM found, missing dependencies, insufficient memory).
@@ -150,7 +150,7 @@ A new user installs the tool via pip and runs their first conversion, guided by 
 - **FR-014**: The `classical` method MUST apply: Gaussian volume smoothing, adaptive thresholding, morphological operations, Taubin mesh smoothing (volume-preserving), quadric edge collapse decimation, and hole filling.
 - **FR-015**: The `totalseg` method MUST leverage TotalSegmentator to segment cardiac CT structures (at minimum: LV, RV, LA, RA, aorta, myocardium) into separate colored/transparent meshes.
 - **FR-016**: The `medsam2` method MUST leverage MedSAM2 for segmentation of cardiac structures from echo and other modalities, with per-frame segmentation for 4D data producing segmented animated output.
-- **FR-017**: System MUST be installable via `pip install` with a `dicom2glb` CLI entry point via `pyproject.toml`.
+- **FR-017**: System MUST be installable via `pip install` with a `med2glb` CLI entry point via `pyproject.toml`.
 - **FR-018**: System MUST include comprehensive README with installation instructions, usage examples, method comparison guide, AR viewer compatibility matrix, and cross-platform viewing tips.
 - **FR-019**: System MUST group DICOM files by Series Instance UID when a directory contains multiple series, with a `--series` flag to select a specific series.
 - **FR-020**: System MUST correctly read DICOM metadata (pixel spacing, slice thickness, image orientation) to produce anatomically accurate 3D models.

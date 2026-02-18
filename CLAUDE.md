@@ -1,4 +1,4 @@
-# dicom2glb Development Guidelines
+# med2glb Development Guidelines
 
 Auto-generated from all feature plans. Last updated: 2026-02-09
 
@@ -17,7 +17,7 @@ Auto-generated from all feature plans. Last updated: 2026-02-09
 ## Project Structure
 
 ```text
-src/dicom2glb/
+src/med2glb/
 ├── cli.py              # Typer CLI entry point
 ├── io/                 # DICOM reading + file export
 ├── methods/            # Pluggable conversion methods (registry pattern)
@@ -41,11 +41,11 @@ pip install -e ".[dev]"
 pip install -e ".[ai,dev]"
 
 # Run
-dicom2glb ./input/ -o output.glb
+med2glb ./input/ -o output.glb
 
 # Test
 pytest
-pytest --cov=dicom2glb
+pytest --cov=med2glb
 ```
 
 ## Code Style

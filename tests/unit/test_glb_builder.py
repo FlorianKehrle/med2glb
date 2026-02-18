@@ -8,8 +8,8 @@ import numpy as np
 import pygltflib
 import pytest
 
-from dicom2glb.core.types import MaterialConfig, MeshData
-from dicom2glb.glb.builder import build_glb
+from med2glb.core.types import MaterialConfig, MeshData
+from med2glb.glb.builder import build_glb
 
 
 def test_build_glb_single_mesh(synthetic_mesh, tmp_path):

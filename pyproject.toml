@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dicom2glb"
+name = "med2glb"
 version = "0.1.0"
 description = "Convert DICOM medical imaging data to GLB 3D models optimized for AR viewing"
 readme = "README.md"
@@ -47,7 +47,7 @@ dev = [
 ]
 
 [project.scripts]
-dicom2glb = "dicom2glb.cli:app"
+med2glb = "med2glb.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

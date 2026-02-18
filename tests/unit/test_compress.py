@@ -8,13 +8,13 @@ import numpy as np
 import pygltflib
 import pytest
 
-from dicom2glb.glb.compress import constrain_glb_size, _reencode_image
+from med2glb.glb.compress import constrain_glb_size, _reencode_image
 
 
 def _build_textured_glb(path: Path, num_textures: int = 1, size: int = 128) -> None:
     """Build a simple textured GLB for testing compression."""
-    from dicom2glb.glb.builder import _pad_to_4
-    from dicom2glb.glb.texture import pixel_data_to_png
+    from med2glb.glb.builder import _pad_to_4
+    from med2glb.glb.texture import pixel_data_to_png
 
     gltf = pygltflib.GLTF2(
         scene=0,
@@ -115,8 +115,8 @@ def _build_textured_glb(path: Path, num_textures: int = 1, size: int = 128) -> N
 
 def _build_animated_textured_glb(path: Path, num_frames: int = 3, size: int = 128) -> None:
     """Build a textured GLB with scale-toggle animation (like gallery lightbox)."""
-    from dicom2glb.glb.builder import _pad_to_4, write_accessor
-    from dicom2glb.glb.texture import pixel_data_to_png
+    from med2glb.glb.builder import _pad_to_4, write_accessor
+    from med2glb.glb.texture import pixel_data_to_png
 
     gltf = pygltflib.GLTF2(
         scene=0,
@@ -354,7 +354,7 @@ class TestReencodeImage:
 
     def test_jpeg_reencode(self):
         """PNG data should be re-encoded as JPEG."""
-        from dicom2glb.glb.texture import pixel_data_to_png
+        from med2glb.glb.texture import pixel_data_to_png
 
         pixel_data = np.random.randint(0, 255, (64, 64), dtype=np.uint8)
         png_bytes = pixel_data_to_png(pixel_data.astype(np.float32))
@@ -365,7 +365,7 @@ class TestReencodeImage:
 
     def test_downscale_reduces_resolution(self):
         """Downscaling should produce smaller PNG."""
-        from dicom2glb.glb.texture import pixel_data_to_png
+        from med2glb.glb.texture import pixel_data_to_png
 
         pixel_data = np.random.randint(0, 255, (128, 128), dtype=np.uint8)
         png_bytes = pixel_data_to_png(pixel_data.astype(np.float32))

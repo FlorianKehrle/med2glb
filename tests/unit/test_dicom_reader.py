@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from dicom2glb.core.volume import DicomVolume, TemporalSequence
-from dicom2glb.io.dicom_reader import (
+from med2glb.core.volume import DicomVolume, TemporalSequence
+from med2glb.io.dicom_reader import (
     InputType,
     analyze_series,
     list_series,

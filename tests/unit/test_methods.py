@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dicom2glb.core.types import MethodParams
-from dicom2glb.core.volume import DicomVolume
-from dicom2glb.methods.registry import (
+from med2glb.core.types import MethodParams
+from med2glb.core.volume import DicomVolume
+from med2glb.methods.registry import (
     _ensure_methods_loaded,
     get_method,
     list_methods,

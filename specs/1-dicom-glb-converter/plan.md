@@ -5,7 +5,7 @@
 
 ## Summary
 
-Build a Python CLI tool (`dicom2glb`) that converts DICOM medical imaging data — primarily 3D echocardiography cardiac loops — to GLB 3D models with animation, optimized for AR viewing. The tool supports pluggable conversion methods (marching-cubes, classical, TotalSegmentator, MedSAM2) and outputs animated GLB using morph targets via pygltflib. Core pipeline: DICOM → volume assembly → segmentation/thresholding → marching cubes → Taubin smoothing → decimation → GLB export with PBR materials and morph target animation.
+Build a Python CLI tool (`med2glb`) that converts DICOM medical imaging data — primarily 3D echocardiography cardiac loops — to GLB 3D models with animation, optimized for AR viewing. The tool supports pluggable conversion methods (marching-cubes, classical, TotalSegmentator, MedSAM2) and outputs animated GLB using morph targets via pygltflib. Core pipeline: DICOM → volume assembly → segmentation/thresholding → marching cubes → Taubin smoothing → decimation → GLB export with PBR materials and morph target animation.
 
 ## Technical Context
 
@@ -49,9 +49,9 @@ specs/1-dicom-glb-converter/
 ### Source Code (repository root)
 
 ```text
-src/dicom2glb/
+src/med2glb/
 ├── __init__.py              # Package version and public API
-├── __main__.py              # python -m dicom2glb support
+├── __main__.py              # python -m med2glb support
 ├── cli.py                   # Typer CLI: entry point, argument parsing, --list-methods
 ├── io/
 │   ├── __init__.py
@@ -96,7 +96,7 @@ pyproject.toml                # Build config, dependencies, entry points, [ai] e
 README.md                     # Comprehensive documentation
 ```
 
-**Structure Decision**: Single Python package (`src/dicom2glb/`) with clear module boundaries: `io` (DICOM reading + export), `methods` (pluggable conversion pipelines), `mesh` (shared mesh processing), `glb` (GLB-specific construction), `core` (data structures). This flat structure avoids unnecessary abstraction while keeping concerns separated. The `methods/registry.py` enables the pluggable architecture via a simple decorator pattern.
+**Structure Decision**: Single Python package (`src/med2glb/`) with clear module boundaries: `io` (DICOM reading + export), `methods` (pluggable conversion pipelines), `mesh` (shared mesh processing), `glb` (GLB-specific construction), `core` (data structures). This flat structure avoids unnecessary abstraction while keeping concerns separated. The `methods/registry.py` enables the pluggable architecture via a simple decorator pattern.
 
 ## Complexity Tracking
 

@@ -1,4 +1,4 @@
-# Quickstart: dicom2glb Development
+# Quickstart: med2glb Development
 
 ## Prerequisites
 
@@ -9,8 +9,8 @@
 
 ```bash
 # Clone the repo
-git clone https://github.com/FlorianKehrle/dicom2glb.git
-cd dicom2glb
+git clone https://github.com/FlorianKehrle/med2glb.git
+cd med2glb
 
 # Create virtual environment
 python -m venv .venv
@@ -28,13 +28,13 @@ pip install -e ".[ai,dev]"
 
 ```bash
 # Basic conversion
-dicom2glb ./path/to/dicom/ -o output.glb
+med2glb ./path/to/dicom/ -o output.glb
 
 # With animation (3D echo)
-dicom2glb ./path/to/echo/ -o heart.glb --animate
+med2glb ./path/to/echo/ -o heart.glb --animate
 
 # List available methods
-dicom2glb --list-methods
+med2glb --list-methods
 ```
 
 ## Test
@@ -47,13 +47,13 @@ pytest
 pytest tests/unit/test_mesh_processing.py
 
 # Run with coverage
-pytest --cov=dicom2glb
+pytest --cov=med2glb
 ```
 
 ## Project Structure
 
 ```
-src/dicom2glb/
+src/med2glb/
 ├── cli.py           # CLI entry point
 ├── io/              # DICOM reading + file export (extensible for future input types)
 ├── methods/         # Pluggable conversion methods
@@ -76,7 +76,7 @@ src/dicom2glb/
 
 ## Adding a New Conversion Method
 
-1. Create `src/dicom2glb/methods/your_method.py`
+1. Create `src/med2glb/methods/your_method.py`
 2. Implement `ConversionMethod` ABC
 3. Register with `@register_method("your-method")`
 4. The method auto-appears in `--list-methods` and `--method` choices

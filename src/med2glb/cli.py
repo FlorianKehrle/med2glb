@@ -1,0 +1,980 @@
+"""CLI entry point for med2glb."""
+
+from __future__ import annotations
+
+import logging
+import sys
+import time
+from pathlib import Path
+
+import typer
+from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+from rich.prompt import Prompt
+from rich.table import Table
+
+from med2glb import __version__
+from med2glb.core.types import (
+    MaterialConfig,
+    MethodParams,
+    SeriesInfo,
+    ThresholdLayer,
+)
+
+app = typer.Typer(
+    name="med2glb",
+    help="Convert DICOM medical imaging data to GLB 3D models.",
+    add_completion=False,
+)
+
+# Reconfigure stdout/stderr to UTF-8 to avoid Windows charmap encoding errors
+# with Rich's Unicode spinners.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, OSError):
+    pass
+
+console = Console()
+err_console = Console(stderr=True)
+
+logger = logging.getLogger("med2glb")
+
+
+def version_callback(value: bool):
+    if value:
+        console.print(f"med2glb {__version__}")
+        raise typer.Exit()
+
+
+def list_methods_callback(value: bool):
+    if value:
+        from med2glb.methods.registry import _ensure_methods_loaded, list_methods
+
+        _ensure_methods_loaded()
+        methods = list_methods()
+
+        console.print("\n[bold]Available conversion methods:[/bold]\n")
+        for m in methods:
+            status = "[green]installed[/green]" if m["available"] else "[red]not installed[/red]"
+            console.print(f"  [bold]{m['name']:<18}[/bold] {m['description']}")
+            console.print(f"  {'':18} Best for: {m['recommended_for']}")
+            console.print(f"  {'':18} Status: {status} — {m['dependency_message']}")
+            console.print()
+        raise typer.Exit()
+
+
+@app.command()
+def main(
+    ctx: typer.Context,
+    input_path: Path = typer.Argument(
+        ...,
+        help="Path to a DICOM file or directory containing DICOM files.",
+        exists=True,
+    ),
+    output: Path = typer.Option(
+        None,
+        "-o",
+        "--output",
+        help="Output file path (default: <input_name>.glb).",
+    ),
+    method: str = typer.Option(
+        "classical",
+        "-m",
+        "--method",
+        help="Conversion method: marching-cubes, classical, totalseg, medsam2.",
+    ),
+    format: str = typer.Option(
+        "glb",
+        "-f",
+        "--format",
+        help="Output format: glb, stl, obj.",
+    ),
+    animate: bool = typer.Option(
+        False,
+        "--animate",
+        help="Enable animation for temporal (4D) data.",
+    ),
+    threshold: float = typer.Option(
+        None,
+        "--threshold",
+        help="Intensity threshold for isosurface extraction.",
+    ),
+    smoothing: int = typer.Option(
+        15,
+        "--smoothing",
+        help="Taubin smoothing iterations (0 to disable).",
+    ),
+    faces: int = typer.Option(
+        80000,
+        "--faces",
+        help="Target triangle count after decimation.",
+    ),
+    alpha: float = typer.Option(
+        1.0,
+        "--alpha",
+        help="Global transparency (0.0-1.0) for non-segmented output.",
+    ),
+    multi_threshold: str = typer.Option(
+        None,
+        "--multi-threshold",
+        help='Multi-threshold config: "val1:label1:alpha1,val2:label2:alpha2".',
+    ),
+    series: str = typer.Option(
+        None,
+        "--series",
+        help="Select specific DICOM series by UID (partial match supported).",
+    ),
+    do_list_methods: bool = typer.Option(
+        False,
+        "--list-methods",
+        callback=list_methods_callback,
+        is_eager=True,
+        help="List available conversion methods and exit.",
+    ),
+    gallery: bool = typer.Option(
+        False,
+        "--gallery",
+        help="Gallery mode: individual GLBs, lightbox grid, and spatial fan.",
+    ),
+    columns: int = typer.Option(
+        6,
+        "--columns",
+        help="Number of columns in the lightbox grid (gallery mode).",
+    ),
+    no_animate: bool = typer.Option(
+        False,
+        "--no-animate",
+        help="Force static output even if temporal data is detected.",
+    ),
+    max_size: int = typer.Option(
+        99,
+        "--max-size",
+        help="Maximum output GLB file size in MB (0 to disable).",
+    ),
+    compress: str = typer.Option(
+        "draco",
+        "--compress",
+        help="Compression strategy: draco (default), downscale, jpeg.",
+    ),
+    do_list_series: bool = typer.Option(
+        False,
+        "--list-series",
+        help="List DICOM series found in input directory and exit.",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "-v",
+        "--verbose",
+        help="Show detailed processing information.",
+    ),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+):
+    """Convert DICOM medical imaging data to GLB 3D models."""
+    # Setup logging
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
+
+    # Detect if --method was explicitly provided
+    method_explicit = _was_option_provided(ctx, "method")
+
+    # Handle --list-series
+    if do_list_series:
+        from med2glb.io.dicom_reader import analyze_series
+
+        series_list = analyze_series(input_path)
+        _print_series_table(series_list, input_path)
+        raise typer.Exit()
+
+    # Derive output path from input name when not fully specified
+    stem = input_path.stem if input_path.is_file() else input_path.name
+    parent = input_path.parent if input_path.is_file() else input_path.parent
+    if output is None or (not gallery and output.suffix == ""):
+        label = _get_data_type_label(input_path, series)
+        auto_stem = f"{stem}_{label}" if label else stem
+        if output is None:
+            if gallery:
+                # Gallery: directory as sibling to input
+                output = parent / auto_stem
+            else:
+                # Place GLB as sibling to input folder/file
+                output = parent / f"{auto_stem}.{format}"
+        else:
+            # -o points to a directory — put <input_name>_<type>.<format> inside it
+            output = output / f"{auto_stem}.{format}"
+
+    try:
+        if gallery:
+            _run_gallery_mode(
+                input_path=input_path,
+                output=output,
+                series=series,
+                columns=columns,
+                no_animate=no_animate,
+                max_size_mb=max_size,
+                compress_strategy=compress,
+                verbose=verbose,
+            )
+        else:
+            _run_pipeline(
+                input_path=input_path,
+                output=output,
+                method_name=method,
+                method_explicit=method_explicit,
+                format=format,
+                animate=animate,
+                threshold=threshold,
+                smoothing=smoothing,
+                target_faces=faces,
+                alpha=alpha,
+                multi_threshold=multi_threshold,
+                series=series,
+                max_size_mb=max_size,
+                compress_strategy=compress,
+                verbose=verbose,
+            )
+    except ValueError as e:
+        err_console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=1)
+    except FileNotFoundError as e:
+        err_console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(code=4)
+    except ImportError as e:
+        err_console.print(
+            f"[red]Missing dependency: {e}[/red]\n"
+            "Install AI dependencies with: pip install med2glb[ai]"
+        )
+        raise typer.Exit(code=3)
+    except Exception as e:
+        err_console.print(f"[red]Error: {e}[/red]")
+        if verbose:
+            import traceback
+            err_console.print(traceback.format_exc())
+        raise typer.Exit(code=1)
+
+
+def _was_option_provided(ctx: typer.Context, param_name: str) -> bool:
+    """Check if a CLI option was explicitly provided by the user."""
+    # typer/click stores the source of each parameter value
+    source = ctx.get_parameter_source(param_name)
+    if source is None:
+        return False
+    import click
+    return source == click.core.ParameterSource.COMMANDLINE
+
+
+def _run_pipeline(
+    input_path: Path,
+    output: Path,
+    method_name: str,
+    method_explicit: bool,
+    format: str,
+    animate: bool,
+    threshold: float | None,
+    smoothing: int,
+    target_faces: int,
+    alpha: float,
+    multi_threshold: str | None,
+    series: str | None,
+    max_size_mb: int,
+    compress_strategy: str,
+    verbose: bool,
+) -> None:
+    """Execute the conversion pipeline with series selection."""
+    # If --series provided or input is a single file, pass through directly
+    if series or input_path.is_file():
+        _convert_series(
+            input_path=input_path,
+            output=output,
+            method_name=method_name,
+            format=format,
+            animate=animate,
+            threshold=threshold,
+            smoothing=smoothing,
+            target_faces=target_faces,
+            alpha=alpha,
+            multi_threshold=multi_threshold,
+            series_uid=series,
+            max_size_mb=max_size_mb,
+            compress_strategy=compress_strategy,
+            verbose=verbose,
+        )
+        return
+
+    # Directory input — analyze series
+    from med2glb.io.dicom_reader import analyze_series
+
+    series_list = analyze_series(input_path)
+
+    if len(series_list) == 1:
+        # Single series — proceed automatically
+        info = series_list[0]
+        effective_method = method_name if method_explicit else info.recommended_method
+        _convert_series(
+            input_path=input_path,
+            output=output,
+            method_name=effective_method,
+            format=format,
+            animate=animate,
+            threshold=threshold,
+            smoothing=smoothing,
+            target_faces=target_faces,
+            alpha=alpha,
+            multi_threshold=multi_threshold,
+            series_uid=info.series_uid,
+            max_size_mb=max_size_mb,
+            compress_strategy=compress_strategy,
+            verbose=verbose,
+        )
+        return
+
+    # Multiple series detected
+    if sys.stdin.isatty():
+        # Interactive selection
+        _print_series_table(series_list, input_path)
+        selected = _interactive_select_series(series_list)
+    else:
+        # Non-TTY: auto-select best (first after sorting)
+        selected = [series_list[0]]
+        logger.warning(
+            f"Multiple series found, auto-selecting best: "
+            f"{selected[0].description or selected[0].series_uid} "
+            f"({selected[0].data_type}, {selected[0].detail})"
+        )
+
+    # Convert each selected series
+    for i, info in enumerate(selected):
+        out_path = _make_output_path(output, i, len(selected))
+        effective_method = method_name if method_explicit else info.recommended_method
+        console.print(
+            f"\n[bold]Converting series {i + 1}/{len(selected)}: "
+            f"{info.description or info.series_uid} ({info.data_type})[/bold]"
+        )
+        _convert_series(
+            input_path=input_path,
+            output=out_path,
+            method_name=effective_method,
+            format=format,
+            animate=animate,
+            threshold=threshold,
+            smoothing=smoothing,
+            target_faces=target_faces,
+            alpha=alpha,
+            multi_threshold=multi_threshold,
+            series_uid=info.series_uid,
+            max_size_mb=max_size_mb,
+            compress_strategy=compress_strategy,
+            verbose=verbose,
+        )
+
+
+def _print_series_table(series_list: list[SeriesInfo], input_path: Path) -> None:
+    """Display a Rich table of DICOM series with classification info."""
+    table = Table(title=f"DICOM Series in {input_path}")
+    table.add_column("#", style="bold", justify="right")
+    table.add_column("Modality", style="green")
+    table.add_column("Description", max_width=40)
+    table.add_column("Data Type", style="cyan")
+    table.add_column("Detail", justify="right")
+    table.add_column("Animated", justify="center")
+    table.add_column("Recommended Output", style="yellow")
+    table.add_column("Recommended Method", style="magenta")
+
+    for i, info in enumerate(series_list, 1):
+        desc = info.description if info.description else "(no desc)"
+        animated = "[green]Yes[/green]" if info.data_type in ("2D cine", "3D+T volume") else "[dim]No[/dim]"
+        table.add_row(
+            str(i),
+            info.modality,
+            desc,
+            info.data_type,
+            info.detail,
+            animated,
+            info.recommended_output,
+            info.recommended_method,
+        )
+
+    console.print(table)
+
+    # Print recommendation
+    best = series_list[0]
+    console.print(
+        f"\nRecommendation: Series 1 ({best.data_type}, {best.detail}) "
+        f"→ [magenta]{best.recommended_method}[/magenta]"
+    )
+
+
+def _interactive_select_series(series_list: list[SeriesInfo]) -> list[SeriesInfo]:
+    """Prompt user to select series interactively. Returns selected SeriesInfo list."""
+    n = len(series_list)
+    choice = Prompt.ask(
+        f"Enter number (1-{n}), comma-separated (1,3), or 'all'",
+        default="1",
+        console=console,
+    )
+    return _parse_selection(choice, series_list)
+
+
+def _parse_selection(choice: str, series_list: list[SeriesInfo]) -> list[SeriesInfo]:
+    """Parse user selection string into list of SeriesInfo.
+
+    Accepts: "1", "1,3", "all"
+    """
+    choice = choice.strip().lower()
+    if choice == "all":
+        return list(series_list)
+
+    selected = []
+    for part in choice.split(","):
+        part = part.strip()
+        try:
+            idx = int(part) - 1  # 1-based to 0-based
+        except ValueError:
+            raise ValueError(f"Invalid selection: '{part}'. Use numbers like '1', '1,3', or 'all'.")
+        if idx < 0 or idx >= len(series_list):
+            raise ValueError(
+                f"Selection {part} out of range. Choose 1-{len(series_list)}."
+            )
+        selected.append(series_list[idx])
+    return selected
+
+
+def _make_output_path(base: Path, index: int, total: int) -> Path:
+    """Generate output path for multi-series conversion.
+
+    Single series: output.glb
+    Multiple series: output_1.glb, output_2.glb, ...
+    """
+    if total <= 1:
+        return base
+    return base.parent / f"{base.stem}_{index + 1}{base.suffix}"
+
+
+def _convert_series(
+    input_path: Path,
+    output: Path,
+    method_name: str,
+    format: str,
+    animate: bool,
+    threshold: float | None,
+    smoothing: int,
+    target_faces: int,
+    alpha: float,
+    multi_threshold: str | None,
+    series_uid: str | None,
+    max_size_mb: int = 0,
+    compress_strategy: str = "draco",
+    verbose: bool = False,
+) -> None:
+    """Execute the full conversion pipeline for a single series."""
+    from med2glb.io.dicom_reader import InputType, load_dicom_directory
+    from med2glb.methods.registry import _ensure_methods_loaded, get_method
+
+    start_time = time.time()
+
+    # Parse multi-threshold if provided
+    mt_layers = _parse_multi_threshold(multi_threshold) if multi_threshold else None
+
+    params = MethodParams(
+        threshold=threshold,
+        smoothing_iterations=smoothing,
+        target_faces=target_faces,
+        multi_threshold=mt_layers,
+    )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        # Step 1: Load DICOM
+        task = progress.add_task("Loading DICOM data...", total=None)
+        input_type, data = load_dicom_directory(input_path, series_uid=series_uid)
+        progress.update(task, description=f"Loaded {input_type.value} data")
+        progress.remove_task(task)
+
+        # Step 2: Get conversion method
+        _ensure_methods_loaded()
+        converter = get_method(method_name)
+
+        # Step 3: Convert
+
+        # Detect 2D temporal data (multi-frame ultrasound cine clips).
+        # Without --animate, export first frame as a static textured plane.
+        # With --animate, fall through to the animated pipeline.
+        if input_type == InputType.TEMPORAL and not animate:
+            from med2glb.core.volume import TemporalSequence
+            if isinstance(data, TemporalSequence) and data.frames[0].voxels.shape[0] == 1:
+                # 2D cine without --animate — export first frame as textured plane
+                task = progress.add_task("Building textured plane from 2D echo...", total=None)
+                from med2glb.glb.texture import build_textured_plane_glb
+
+                console.print(
+                    f"[yellow]2D ultrasound cine detected ({data.frame_count} frames). "
+                    f"Exporting first frame as textured plane. "
+                    f"Use --animate for animated output.[/yellow]"
+                )
+                build_textured_plane_glb(data.frames[0], output)
+                progress.remove_task(task)
+                if max_size_mb > 0:
+                    _enforce_size_limit(output, max_size_mb, compress_strategy, progress)
+
+                file_size = output.stat().st_size / 1024
+                elapsed = time.time() - start_time
+                console.print(f"\n[green]Conversion complete![/green]")
+                console.print(f"  Input:    2D echo cine ({data.frame_count} frames)")
+                console.print(f"  Output:   {output}")
+                console.print(f"  Size:     {file_size:.1f} KB")
+                console.print(f"  Time:     {elapsed:.1f}s")
+                return
+
+        if input_type == InputType.SINGLE_SLICE:
+            task = progress.add_task("Building textured plane...", total=None)
+            from med2glb.glb.texture import build_textured_plane_glb
+
+            build_textured_plane_glb(data, output)
+            progress.remove_task(task)
+            if max_size_mb > 0:
+                _enforce_size_limit(output, max_size_mb, compress_strategy, progress)
+
+            # Print summary for single slice
+            file_size = output.stat().st_size / 1024
+            elapsed = time.time() - start_time
+            console.print(f"\n[green]Conversion complete![/green]")
+            console.print(f"  Input:    single slice ({input_path})")
+            console.print(f"  Output:   {output}")
+            console.print(f"  Size:     {file_size:.1f} KB")
+            console.print(f"  Time:     {elapsed:.1f}s")
+            return
+
+        if input_type == InputType.TEMPORAL and animate:
+            from med2glb.core.volume import TemporalSequence
+            if isinstance(data, TemporalSequence) and data.frames[0].voxels.shape[0] == 1:
+                # 2D cine + --animate → animated height-map textured plane
+                task = progress.add_task(
+                    f"Building animated surface from {data.frame_count} frames...", total=None
+                )
+                from med2glb.glb.texture import build_animated_textured_plane_glb
+
+                build_animated_textured_plane_glb(data, output)
+                progress.remove_task(task)
+                if max_size_mb > 0:
+                    _enforce_size_limit(output, max_size_mb, compress_strategy, progress)
+
+                file_size = output.stat().st_size / 1024
+                elapsed = time.time() - start_time
+                console.print(f"\n[green]Conversion complete![/green]")
+                console.print(f"  Input:    2D echo cine ({data.frame_count} frames)")
+                console.print(f"  Output:   {output} (animated)")
+                console.print(f"  Size:     {file_size:.1f} KB")
+                console.print(f"  Time:     {elapsed:.1f}s")
+                return
+            # 3D temporal + --animate → standard morph target pipeline
+            result = _run_animated_pipeline(data, converter, params, alpha, progress)
+        else:
+            if input_type == InputType.TEMPORAL:
+                from med2glb.core.volume import TemporalSequence
+                if isinstance(data, TemporalSequence):
+                    data = data.frames[0]
+                    console.print(
+                        "[yellow]Temporal data detected but --animate not set. "
+                        "Using first frame only.[/yellow]"
+                    )
+
+            task = progress.add_task(f"Converting with {method_name}...", total=None)
+
+            def on_progress(desc, current=None, total=None):
+                if total is not None:
+                    progress.update(task, description=desc, completed=current, total=total)
+                else:
+                    progress.update(task, description=desc)
+
+            result = converter.convert(data, params, progress=on_progress)
+            progress.remove_task(task)
+
+            # Apply alpha override
+            if alpha < 1.0:
+                for mesh in result.meshes:
+                    mesh.material = MaterialConfig(
+                        base_color=mesh.material.base_color,
+                        alpha=alpha,
+                        metallic=mesh.material.metallic,
+                        roughness=mesh.material.roughness,
+                        name=mesh.material.name,
+                    )
+
+            # Step 4: Mesh processing
+            task = progress.add_task("Processing meshes...", total=None)
+            from med2glb.mesh.processing import process_mesh
+
+            processed = []
+            for mesh in result.meshes:
+                processed.append(
+                    process_mesh(mesh, smoothing_iterations=smoothing, target_faces=target_faces)
+                )
+            result.meshes = processed
+            progress.remove_task(task)
+
+        # Step 5: Export
+        task = progress.add_task(f"Exporting {format.upper()}...", total=None)
+        _export(result, output, format, animate)
+        progress.remove_task(task)
+
+        # Step 6: Constrain file size
+        if max_size_mb > 0 and format == "glb":
+            _enforce_size_limit(output, max_size_mb, compress_strategy, progress)
+
+    # Print summary
+    elapsed = time.time() - start_time
+    total_verts = sum(len(m.vertices) for m in result.meshes)
+    total_faces = sum(len(m.faces) for m in result.meshes)
+    file_size = output.stat().st_size / 1024
+
+    console.print(f"\n[green]Conversion complete![/green]")
+    console.print(f"  Input:    {input_type.value} ({input_path})")
+    console.print(f"  Method:   {method_name}")
+    console.print(f"  Output:   {output}")
+    console.print(f"  Meshes:   {len(result.meshes)}")
+    console.print(f"  Vertices: {total_verts:,}")
+    console.print(f"  Faces:    {total_faces:,}")
+    console.print(f"  Size:     {file_size:.1f} KB")
+    console.print(f"  Time:     {elapsed:.1f}s")
+
+    for w in result.warnings:
+        err_console.print(f"[yellow]Warning: {w}[/yellow]")
+
+
+def _enforce_size_limit(
+    path: Path,
+    max_size_mb: int,
+    strategy: str,
+    progress: Progress,
+) -> None:
+    """Compress a GLB file if it exceeds the size limit.
+
+    Keeps the original file and writes the compressed version with a
+    ``_compressed`` suffix so the user can compare quality.
+    """
+    import shutil
+
+    max_bytes = max_size_mb * 1024 * 1024
+    if not path.exists() or path.stat().st_size <= max_bytes:
+        return
+
+    from med2glb.glb.compress import constrain_glb_size
+
+    original_kb = path.stat().st_size / 1024
+    task = progress.add_task(
+        f"Compressing GLB ({original_kb:.0f} KB > {max_size_mb} MB limit)...",
+        total=None,
+    )
+
+    compressed_path = path.with_stem(path.stem + "_compressed")
+    shutil.copy2(str(path), str(compressed_path))
+    constrain_glb_size(compressed_path, max_bytes, strategy=strategy)
+
+    new_kb = compressed_path.stat().st_size / 1024
+    progress.update(task, description=f"Compressed: {original_kb:.0f} KB → {new_kb:.0f} KB ({compressed_path.name})")
+    progress.remove_task(task)
+
+
+def _run_gallery_mode(
+    input_path: Path,
+    output: Path,
+    series: str | None,
+    columns: int,
+    no_animate: bool,
+    max_size_mb: int = 0,
+    compress_strategy: str = "draco",
+    verbose: bool = False,
+) -> None:
+    """Execute gallery mode: individual GLBs, lightbox grid, and spatial fan."""
+    from med2glb.gallery import (
+        build_individual_glbs,
+        build_lightbox_glb,
+        build_spatial_glb,
+        load_all_slices,
+    )
+    from med2glb.io.dicom_reader import analyze_series
+
+    start_time = time.time()
+
+    # Determine which series to process
+    if series:
+        target_uids = [series]
+    elif input_path.is_dir():
+        series_list = analyze_series(input_path)
+        if len(series_list) > 1 and sys.stdin.isatty():
+            _print_series_table(series_list, input_path)
+            selected = _interactive_select_series(series_list)
+        else:
+            selected = series_list
+        target_uids = [s.series_uid for s in selected]
+    else:
+        target_uids = [None]
+
+    # Build a lookup for series descriptions
+    series_info_map: dict[str, SeriesInfo] = {}
+    if input_path.is_dir():
+        for info in analyze_series(input_path):
+            series_info_map[info.series_uid] = info
+
+    output_dir = Path(output) if output.suffix == "" else output.parent
+
+    total_slices = 0
+    series_summaries: list[dict] = []
+
+    for uid in target_uids:
+        # Derive a meaningful folder name
+        info = series_info_map.get(uid) if uid else None
+        if info and info.description:
+            series_name = _sanitize_name(info.description)
+        elif info:
+            series_name = _sanitize_name(f"{info.modality}_{info.data_type}")
+        else:
+            series_name = "series"
+
+        # Deduplicate folder names
+        series_dir = output_dir / series_name
+        if series_dir.exists() and series_summaries:
+            series_dir = output_dir / f"{series_name}_{len(series_summaries) + 1}"
+
+        console.print(
+            f"\n[bold]Processing series: "
+            f"{info.description or info.series_uid if info else 'default'} "
+            f"({info.data_type}, {info.detail})[/bold]" if info else
+            f"\n[bold]Processing series...[/bold]"
+        )
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            # Step 1: Load all slices
+            task = progress.add_task("Loading DICOM slices...", total=None)
+            slices = load_all_slices(input_path, series_uid=uid)
+            progress.update(task, description=f"Loaded {len(slices)} slices")
+            progress.remove_task(task)
+
+            if not slices:
+                console.print(f"  [yellow]No slices loaded — skipping.[/yellow]")
+                continue
+
+            total_slices += len(slices)
+
+            # Auto-detect temporal data
+            has_temporal = any(s.temporal_index is not None for s in slices)
+            animate = has_temporal and not no_animate
+
+            # Step 2: Individual GLBs
+            task = progress.add_task("Building individual GLBs...", total=None)
+            individual_paths = build_individual_glbs(
+                slices, series_dir, animate=animate,
+            )
+            progress.update(task, description=f"Built {len(individual_paths)} individual GLBs")
+            progress.remove_task(task)
+            if max_size_mb > 0:
+                for p in individual_paths:
+                    _enforce_size_limit(p, max_size_mb, compress_strategy, progress)
+
+            # Step 3: Lightbox GLB (inside the series folder)
+            lightbox_path = series_dir / "lightbox.glb"
+            task = progress.add_task("Building lightbox grid...", total=None)
+            build_lightbox_glb(
+                slices, lightbox_path, columns=columns, animate=animate,
+            )
+            progress.remove_task(task)
+            if max_size_mb > 0:
+                _enforce_size_limit(lightbox_path, max_size_mb, compress_strategy, progress)
+
+            # Step 4: Spatial fan GLB (inside the series folder)
+            spatial_path = series_dir / "spatial.glb"
+            task = progress.add_task("Building spatial fan...", total=None)
+            spatial_created = build_spatial_glb(
+                slices, spatial_path, animate=animate,
+            )
+            progress.remove_task(task)
+            if max_size_mb > 0 and spatial_created:
+                _enforce_size_limit(spatial_path, max_size_mb, compress_strategy, progress)
+
+        summary = {
+            "name": series_name,
+            "dir": series_dir,
+            "slices": len(slices),
+            "individual": len(individual_paths),
+            "animated": animate,
+            "spatial": spatial_created,
+        }
+        series_summaries.append(summary)
+
+    # Summary
+    elapsed = time.time() - start_time
+    console.print(f"\n[green]Gallery mode complete![/green]")
+    console.print(f"  Series:     {len(series_summaries)}")
+    console.print(f"  Slices:     {total_slices}")
+    for s in series_summaries:
+        console.print(f"\n  [bold]{s['name']}/[/bold]")
+        console.print(f"    Individual: {s['individual']} files")
+        console.print(f"    Lightbox:   lightbox.glb")
+        if s["spatial"]:
+            console.print(f"    Spatial:    spatial.glb")
+        else:
+            console.print(f"    Spatial:    [dim]skipped (no spatial metadata)[/dim]")
+        console.print(f"    Animated:   {'Yes' if s['animated'] else 'No'}")
+    console.print(f"\n  Output:     {output_dir}")
+    console.print(f"  Time:       {elapsed:.1f}s")
+
+
+def _sanitize_name(name: str) -> str:
+    """Sanitize a string for use as a directory/file name."""
+    import re
+    clean = re.sub(r"[^\w\s-]", "", name).strip()
+    clean = re.sub(r"[\s]+", "_", clean)
+    return clean or "series"
+
+
+def _data_type_label(modality: str, data_type: str) -> str:
+    """Create a physician-friendly label from modality and data type."""
+    modality_names = {
+        "US": "Echo",
+        "MR": "MRI",
+        "CT": "CT",
+        "XA": "Angio",
+        "NM": "Nuclear",
+    }
+    clinical = modality_names.get(modality, modality)
+    dim_label = {
+        "2D cine": "2D_animated",
+        "3D volume": "3D",
+        "3D+T volume": "3D_animated",
+        "still image": "2D",
+    }
+    dt = dim_label.get(data_type, data_type.replace(" ", "_"))
+    return f"{clinical}_{dt}"
+
+
+def _get_data_type_label(input_path: Path, series_uid: str | None) -> str:
+    """Analyze input to produce a data type label for auto-naming output files."""
+    try:
+        if input_path.is_file():
+            import pydicom
+
+            ds = pydicom.dcmread(str(input_path), stop_before_pixels=True)
+            modality = getattr(ds, "Modality", "unknown")
+            n_frames = int(getattr(ds, "NumberOfFrames", 1))
+            if n_frames > 1:
+                return _data_type_label(modality, "2D cine")
+            return _data_type_label(modality, "still image")
+
+        from med2glb.io.dicom_reader import analyze_series
+
+        series_list = analyze_series(input_path)
+        if not series_list:
+            return ""
+
+        if series_uid:
+            for info in series_list:
+                if series_uid in info.series_uid:
+                    return _data_type_label(info.modality, info.data_type)
+
+        return _data_type_label(series_list[0].modality, series_list[0].data_type)
+    except Exception:
+        return ""
+
+
+def _run_animated_pipeline(data, converter, params, alpha, progress):
+    """Run the animated conversion pipeline for temporal data."""
+    from med2glb.core.types import AnimatedResult
+    from med2glb.core.volume import TemporalSequence
+    from med2glb.mesh.processing import process_mesh
+    from med2glb.mesh.temporal import build_morph_targets_from_frames
+
+    if not isinstance(data, TemporalSequence):
+        raise ValueError("Animation requires temporal data")
+
+    task = progress.add_task(
+        f"Converting {data.frame_count} frames...", total=data.frame_count
+    )
+
+    # Convert each frame
+    frame_results = []
+    for i, frame in enumerate(data.frames):
+        progress.update(task, description=f"Converting frame {i + 1}/{data.frame_count}...")
+        result = converter.convert(frame, params)
+        processed = []
+        for mesh in result.meshes:
+            processed.append(
+                process_mesh(
+                    mesh,
+                    smoothing_iterations=params.smoothing_iterations,
+                    target_faces=params.target_faces,
+                )
+            )
+        result.meshes = processed
+        frame_results.append(result)
+        progress.update(task, advance=1)
+    progress.remove_task(task)
+
+    # Build morph targets
+    task = progress.add_task("Building morph targets...", total=None)
+    animated = build_morph_targets_from_frames(frame_results, data.temporal_resolution)
+    progress.remove_task(task)
+
+    # Apply alpha
+    if alpha < 1.0:
+        for mesh in animated.base_meshes:
+            mesh.material = MaterialConfig(
+                base_color=mesh.material.base_color,
+                alpha=alpha,
+                metallic=mesh.material.metallic,
+                roughness=mesh.material.roughness,
+                name=mesh.material.name,
+            )
+
+    return animated
+
+
+def _export(result, output: Path, format: str, animate: bool) -> None:
+    """Export conversion result to file."""
+    from med2glb.core.types import AnimatedResult
+    from med2glb.io.exporters import export_glb, export_obj, export_stl
+
+    if format == "glb":
+        if isinstance(result, AnimatedResult) and animate:
+            from med2glb.glb.animation import build_animated_glb
+            build_animated_glb(result, output)
+        else:
+            export_glb(result.meshes, output)
+    elif format == "stl":
+        export_stl(result.meshes, output)
+    elif format == "obj":
+        export_obj(result.meshes, output)
+    else:
+        raise ValueError(f"Unsupported format: {format}")
+
+
+def _parse_multi_threshold(spec: str) -> list[ThresholdLayer]:
+    """Parse multi-threshold CLI string: 'val:label:alpha,val:label:alpha,...'."""
+    layers = []
+    for part in spec.split(","):
+        parts = part.strip().split(":")
+        if len(parts) != 3:
+            raise ValueError(
+                f"Invalid multi-threshold format: '{part}'. Expected: 'value:label:alpha'"
+            )
+        val, label, a = parts
+        layers.append(
+            ThresholdLayer(
+                threshold=float(val),
+                label=label,
+                material=MaterialConfig(alpha=float(a), name=label),
+            )
+        )
+    return layers

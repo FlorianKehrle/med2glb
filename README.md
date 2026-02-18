@@ -1,12 +1,12 @@
-# dicom2glb
+# med2glb
 
 Convert DICOM medical imaging data to GLB 3D models optimized for AR viewing.
 
 Supports 3D echocardiography, cardiac CT/MRI, 2D cine clips, and single DICOM slices. Outputs GLB files with PBR materials, animated cardiac cycles, and multi-structure segmentation with per-structure coloring.
 
-## Why dicom2glb?
+## Why med2glb?
 
-No existing end-to-end CLI tool converts DICOM directly to animated GLB for augmented reality. Existing tools (3D Slicer, DicomToMesh, InVesalius) produce static STL/OBJ via a GUI. dicom2glb fills this gap as a single command that takes DICOM data in and produces AR-ready GLB out.
+No existing end-to-end CLI tool converts DICOM directly to animated GLB for augmented reality. Existing tools (3D Slicer, DicomToMesh, InVesalius) produce static STL/OBJ via a GUI. med2glb fills this gap as a single command that takes DICOM data in and produces AR-ready GLB out.
 
 **Key features:**
 
@@ -23,20 +23,20 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 ## Installation
 
 ```bash
-pip install dicom2glb
+pip install med2glb
 ```
 
 For AI-powered segmentation (TotalSegmentator, MedSAM2):
 
 ```bash
-pip install dicom2glb[ai]
+pip install med2glb[ai]
 ```
 
 Development:
 
 ```bash
-git clone https://github.com/FlorianKehrle/dicom2glb.git
-cd dicom2glb
+git clone https://github.com/FlorianKehrle/med2glb.git
+cd med2glb
 pip install -e ".[dev]"
 ```
 
@@ -44,33 +44,33 @@ pip install -e ".[dev]"
 
 ```bash
 # Convert a DICOM directory — output placed next to input with auto-detected type
-dicom2glb ./echo_folder/        # → ./echo_folder_Echo_3D_animated.glb
-dicom2glb ./ct_scan/            # → ./ct_scan_CT_3D.glb
-dicom2glb image.dcm             # → ./image_Echo_2D.glb
+med2glb ./echo_folder/        # → ./echo_folder_Echo_3D_animated.glb
+med2glb ./ct_scan/            # → ./ct_scan_CT_3D.glb
+med2glb image.dcm             # → ./image_Echo_2D.glb
 
 # Explicit output name
-dicom2glb ./echo_folder/ -o heart.glb
+med2glb ./echo_folder/ -o heart.glb
 
 # Output to a directory — filename derived from input
-dicom2glb ./echo_folder/ -o output/   # → output/echo_folder_Echo_3D_animated.glb
+med2glb ./echo_folder/ -o output/   # → output/echo_folder_Echo_3D_animated.glb
 
 # Animated 3D echo (cardiac cycle with morph targets)
-dicom2glb ./echo_folder/ -o heart.glb --animate
+med2glb ./echo_folder/ -o heart.glb --animate
 
 # Gallery mode: individual GLBs + lightbox grid + spatial fan
-dicom2glb ./dicom_folder/ --gallery
+med2glb ./dicom_folder/ --gallery
 
 # Cardiac CT with AI segmentation (7 structures)
-dicom2glb ./ct_folder/ -o heart.glb --method totalseg
+med2glb ./ct_folder/ -o heart.glb --method totalseg
 
 # Multi-threshold layered output
-dicom2glb ./data/ -o layers.glb --multi-threshold "200:bone:1.0,100:tissue:0.5"
+med2glb ./data/ -o layers.glb --multi-threshold "200:bone:1.0,100:tissue:0.5"
 
 # Export as STL or OBJ
-dicom2glb ./data/ -o model.stl -f stl
+med2glb ./data/ -o model.stl -f stl
 
 # Limit output to 50 MB with JPEG compression
-dicom2glb ./data/ --max-size 50 --compress jpeg
+med2glb ./data/ --max-size 50 --compress jpeg
 ```
 
 ## Gallery Mode
@@ -96,16 +96,16 @@ Multi-frame DICOMs (e.g. ultrasound cine clips) are automatically expanded into 
 
 ```bash
 # All series, each in its own subfolder
-dicom2glb ./dicom_folder/ -o output/ --gallery
+med2glb ./dicom_folder/ -o output/ --gallery
 
 # Custom grid columns (default: 6)
-dicom2glb ./dicom_folder/ -o output/ --gallery --columns 8
+med2glb ./dicom_folder/ -o output/ --gallery --columns 8
 
 # Force static output from temporal data
-dicom2glb ./dicom_folder/ -o output/ --gallery --no-animate
+med2glb ./dicom_folder/ -o output/ --gallery --no-animate
 
 # Select a specific series by UID
-dicom2glb ./dicom_folder/ -o output/ --gallery --series 1.2.840...
+med2glb ./dicom_folder/ -o output/ --gallery --series 1.2.840...
 ```
 
 The spatial layout uses `ImagePositionPatient` and `ImageOrientationPatient` from the DICOM metadata to place each quad at its real-world position. If no spatial metadata is available, the spatial output is skipped.
@@ -124,21 +124,21 @@ Draco compresses mesh geometry losslessly and falls back to texture downscaling 
 
 ```bash
 # Default: 99 MB limit with Draco strategy
-dicom2glb ./data/ -o output.glb
+med2glb ./data/ -o output.glb
 
 # Custom size limit
-dicom2glb ./data/ -o output.glb --max-size 50
+med2glb ./data/ -o output.glb --max-size 50
 
 # Use JPEG compression (smaller but lossy)
-dicom2glb ./data/ -o output.glb --compress jpeg
+med2glb ./data/ -o output.glb --compress jpeg
 
 # Disable size constraint
-dicom2glb ./data/ -o output.glb --max-size 0
+med2glb ./data/ -o output.glb --max-size 0
 ```
 
 ## Series Selection
 
-When a DICOM folder contains multiple series, dicom2glb analyzes each series and presents an interactive selection table:
+When a DICOM folder contains multiple series, med2glb analyzes each series and presents an interactive selection table:
 
 ```
   DICOM Series in echo_folder
@@ -174,7 +174,7 @@ Use `--list-series` to view the table without converting, or `--series <UID>` to
 List available methods and their install status:
 
 ```bash
-dicom2glb --list-methods
+med2glb --list-methods
 ```
 
 ### Classical (default)
@@ -183,22 +183,22 @@ Full pipeline: Gaussian smoothing, adaptive Otsu threshold, morphological cleanu
 
 ```bash
 # Basic -- auto-detects threshold via Otsu's method
-dicom2glb ./echo_folder/ -o heart.glb
+med2glb ./echo_folder/ -o heart.glb
 
 # Explicit intensity threshold
-dicom2glb ./echo_folder/ -o heart.glb --threshold 400
+med2glb ./echo_folder/ -o heart.glb --threshold 400
 
 # Animated cardiac cycle (morph targets from temporal 3D echo)
-dicom2glb ./echo_folder/ -o heart.glb --animate
+med2glb ./echo_folder/ -o heart.glb --animate
 
 # More smoothing for noisy data (default: 15 iterations)
-dicom2glb ./echo_folder/ -o heart.glb --smoothing 30
+med2glb ./echo_folder/ -o heart.glb --smoothing 30
 
 # Fewer triangles for a lighter file (default: 80000)
-dicom2glb ./echo_folder/ -o heart.glb --faces 40000
+med2glb ./echo_folder/ -o heart.glb --faces 40000
 
 # Semi-transparent output for layered AR viewing
-dicom2glb ./echo_folder/ -o heart.glb --alpha 0.6
+med2glb ./echo_folder/ -o heart.glb --alpha 0.6
 ```
 
 ### Marching Cubes
@@ -207,10 +207,10 @@ Minimal pipeline: threshold then marching cubes. No morphological cleanup -- fas
 
 ```bash
 # Basic with auto threshold
-dicom2glb ./data/ -o model.glb --method marching-cubes
+med2glb ./data/ -o model.glb --method marching-cubes
 
 # Multi-threshold: extract bone and soft tissue as separate layers
-dicom2glb ./ct_folder/ -o layers.glb --method marching-cubes \
+med2glb ./ct_folder/ -o layers.glb --method marching-cubes \
   --multi-threshold "200:bone:1.0,100:tissue:0.5,50:skin:0.3"
 ```
 
@@ -232,13 +232,13 @@ Requires a contrast-enhanced cardiac CT for best results. The `heartchambers_hig
 
 ```bash
 # Segment all 7 cardiac structures
-dicom2glb ./ct_folder/ -o heart.glb --method totalseg
+med2glb ./ct_folder/ -o heart.glb --method totalseg
 
 # Reduce mesh complexity (default: 80000 faces per structure)
-dicom2glb ./ct_folder/ -o heart.glb --method totalseg --faces 50000
+med2glb ./ct_folder/ -o heart.glb --method totalseg --faces 50000
 
 # Make all structures semi-transparent
-dicom2glb ./ct_folder/ -o heart.glb --method totalseg --alpha 0.7
+med2glb ./ct_folder/ -o heart.glb --method totalseg --alpha 0.7
 ```
 
 The `--threshold` and `--animate` options have no effect on `totalseg` (AI-driven segmentation, single time point).
@@ -249,18 +249,18 @@ AI segmentation for 3D echo and general cardiac imaging. Produces multi-structur
 
 ```bash
 # Segment cardiac structures from 3D echo
-dicom2glb ./echo_folder/ -o heart.glb --method medsam2
+med2glb ./echo_folder/ -o heart.glb --method medsam2
 
 # Animated cardiac cycle
-dicom2glb ./echo_folder/ -o heart.glb --method medsam2 --animate
+med2glb ./echo_folder/ -o heart.glb --method medsam2 --animate
 ```
 
-Requires AI dependencies: `pip install dicom2glb[ai]`
+Requires AI dependencies: `pip install med2glb[ai]`
 
 ## CLI Reference
 
 ```
-dicom2glb [OPTIONS] INPUT_PATH
+med2glb [OPTIONS] INPUT_PATH
 
 Arguments:
   INPUT_PATH              Path to DICOM file or directory
@@ -304,7 +304,7 @@ Options:
 ## Architecture
 
 ```
-src/dicom2glb/
+src/med2glb/
 ├── cli.py              # Typer CLI entry point
 ├── core/               # Data types (MeshData, DicomVolume, GallerySlice, etc.)
 ├── io/                 # DICOM reading, echo reader, exporters
@@ -322,7 +322,7 @@ src/dicom2glb/
 
 ```bash
 pytest
-pytest --cov=dicom2glb
+pytest --cov=med2glb
 ```
 
 ## License

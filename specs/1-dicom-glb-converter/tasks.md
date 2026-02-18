@@ -19,10 +19,10 @@
 
 **Purpose**: Project initialization, directory structure, build configuration
 
-- [ ] T001 Create project directory structure per plan.md (src/dicom2glb/ with io/, methods/, mesh/, glb/, core/ subdirectories, tests/unit/, tests/integration/)
-- [ ] T002 Create pyproject.toml with project metadata, dependencies (pydicom, numpy, scipy, scikit-image, trimesh, pyvista, pygltflib, typer, rich), [ai] optional extra (totalsegmentator, torch, monai), [dev] extra (pytest, pytest-cov), and `dicom2glb` CLI entry point
+- [ ] T001 Create project directory structure per plan.md (src/med2glb/ with io/, methods/, mesh/, glb/, core/ subdirectories, tests/unit/, tests/integration/)
+- [ ] T002 Create pyproject.toml with project metadata, dependencies (pydicom, numpy, scipy, scikit-image, trimesh, pyvista, pygltflib, typer, rich), [ai] optional extra (totalsegmentator, torch, monai), [dev] extra (pytest, pytest-cov), and `med2glb` CLI entry point
 - [ ] T003 [P] Create .gitignore with Python patterns (__pycache__/, *.pyc, .venv/, dist/, *.egg-info/, .env*)
-- [ ] T004 [P] Create src/dicom2glb/__init__.py with package version and src/dicom2glb/__main__.py for `python -m dicom2glb` support
+- [ ] T004 [P] Create src/med2glb/__init__.py with package version and src/med2glb/__main__.py for `python -m med2glb` support
 
 ---
 
@@ -32,15 +32,15 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 [P] Implement core types (MeshData, MaterialConfig, MethodParams, ThresholdLayer, ConversionResult, AnimatedResult) in src/dicom2glb/core/types.py per data-model.md
-- [ ] T006 [P] Implement DicomVolume and TemporalSequence dataclasses in src/dicom2glb/core/volume.py per data-model.md
-- [ ] T007 Implement ConversionMethod ABC with `convert(volume, params) -> ConversionResult` and `supports_animation() -> bool` in src/dicom2glb/methods/base.py
-- [ ] T008 Implement method registry with @register_method decorator, list_methods(), get_method(), and availability checking in src/dicom2glb/methods/registry.py
-- [ ] T009 Implement DICOM reader: load directory, group by Series Instance UID, detect input type (single/volume/temporal), assemble DicomVolume with metadata (pixel spacing, slice thickness, orientation) in src/dicom2glb/io/dicom_reader.py
-- [ ] T010 [P] Implement mesh processing: Taubin smoothing (configurable iterations), quadric edge collapse decimation (target face count), hole filling, normal recalculation in src/dicom2glb/mesh/processing.py
-- [ ] T011 [P] Implement PBR material definitions with cardiac structure color map (LV red, RV blue, LA pink, RA light blue, myocardium tan, aorta red, etc.) per data-model.md in src/dicom2glb/glb/materials.py
-- [ ] T012 Implement basic GLB builder: create glTF scene, add meshes with PBR materials (alphaMode BLEND, metallicFactor 0.0, roughnessFactor 0.7), export via pygltflib in src/dicom2glb/glb/builder.py
-- [ ] T013 Implement CLI skeleton with typer: INPUT_PATH argument, -o/--output, -m/--method, -f/--format, --animate, --threshold, --smoothing, --faces, --alpha, --multi-threshold, --series, --list-methods, --list-series, -v/--verbose flags per contracts/cli-contract.md in src/dicom2glb/cli.py
+- [ ] T005 [P] Implement core types (MeshData, MaterialConfig, MethodParams, ThresholdLayer, ConversionResult, AnimatedResult) in src/med2glb/core/types.py per data-model.md
+- [ ] T006 [P] Implement DicomVolume and TemporalSequence dataclasses in src/med2glb/core/volume.py per data-model.md
+- [ ] T007 Implement ConversionMethod ABC with `convert(volume, params) -> ConversionResult` and `supports_animation() -> bool` in src/med2glb/methods/base.py
+- [ ] T008 Implement method registry with @register_method decorator, list_methods(), get_method(), and availability checking in src/med2glb/methods/registry.py
+- [ ] T009 Implement DICOM reader: load directory, group by Series Instance UID, detect input type (single/volume/temporal), assemble DicomVolume with metadata (pixel spacing, slice thickness, orientation) in src/med2glb/io/dicom_reader.py
+- [ ] T010 [P] Implement mesh processing: Taubin smoothing (configurable iterations), quadric edge collapse decimation (target face count), hole filling, normal recalculation in src/med2glb/mesh/processing.py
+- [ ] T011 [P] Implement PBR material definitions with cardiac structure color map (LV red, RV blue, LA pink, RA light blue, myocardium tan, aorta red, etc.) per data-model.md in src/med2glb/glb/materials.py
+- [ ] T012 Implement basic GLB builder: create glTF scene, add meshes with PBR materials (alphaMode BLEND, metallicFactor 0.0, roughnessFactor 0.7), export via pygltflib in src/med2glb/glb/builder.py
+- [ ] T013 Implement CLI skeleton with typer: INPUT_PATH argument, -o/--output, -m/--method, -f/--format, --animate, --threshold, --smoothing, --faces, --alpha, --multi-threshold, --series, --list-methods, --list-series, -v/--verbose flags per contracts/cli-contract.md in src/med2glb/cli.py
 - [ ] T014 [P] Create __init__.py files for all subpackages: io/, methods/, mesh/, glb/, core/
 
 **Checkpoint**: Foundation ready — method registry, DICOM reading, mesh processing, GLB export, and CLI skeleton all functional
@@ -51,21 +51,21 @@
 
 **Goal**: Convert 3D echo DICOM data to animated GLB with morph targets showing the beating heart. User can switch between methods via --method flag.
 
-**Independent Test**: Provide 3D echo DICOM files, run `dicom2glb ./echo/ -o heart.glb --animate`, open resulting GLB in AR viewer to see smooth cardiac loop. Run `dicom2glb --list-methods` to see available methods. Switch methods with `--method marching-cubes` vs `--method classical`.
+**Independent Test**: Provide 3D echo DICOM files, run `med2glb ./echo/ -o heart.glb --animate`, open resulting GLB in AR viewer to see smooth cardiac loop. Run `med2glb --list-methods` to see available methods. Switch methods with `--method marching-cubes` vs `--method classical`.
 
 ### Implementation
 
-- [ ] T015 [US1] Implement vendor-specific 3D echo DICOM reader for Philips and GE formats (reference SlicerHeart) with temporal frame detection via Temporal Position Index / Instance Number in src/dicom2glb/io/echo_reader.py
-- [ ] T016 [P] [US1] Implement marching-cubes method: isosurface extraction at configurable threshold using scikit-image marching_cubes, then Taubin smoothing + decimation in src/dicom2glb/methods/marching_cubes.py
-- [ ] T017 [P] [US1] Implement classical method: Gaussian volume smoothing (scipy), adaptive thresholding, morphological ops (scikit-image), marching cubes, Taubin smoothing, quadric decimation, hole filling in src/dicom2glb/methods/classical.py
-- [ ] T018 [US1] Implement temporal mesh smoothing: vertex position smoothing across time frames using weighted moving average to prevent animation flickering in src/dicom2glb/mesh/temporal.py
-- [ ] T019 [US1] Implement consistent mesh topology for animation: extract mesh from first frame, deform vertices for subsequent frames via nearest-surface-point correspondence to ensure identical vertex count across all morph targets in src/dicom2glb/mesh/temporal.py
-- [ ] T020 [US1] Implement morph target animation: create glTF morph targets from per-frame vertex displacements, build AnimationChannel targeting node weights, build AnimationSampler with keyframe times, configure looping in src/dicom2glb/glb/animation.py
-- [ ] T021 [P] [US1] Implement multi-format exporter: GLB (animated via pygltflib), STL (trimesh), OBJ (trimesh) with format selection in src/dicom2glb/io/exporters.py
-- [ ] T022 [US1] Wire CLI --animate flag: detect temporal data, run per-frame conversion, apply temporal smoothing, build morph targets, export animated GLB with progress bar in src/dicom2glb/cli.py
-- [ ] T023 [US1] Wire CLI --list-methods: query registry, display method name, description, recommended data types, dependency status (installed/not installed) per contracts/cli-contract.md in src/dicom2glb/cli.py
-- [ ] T024 [US1] Wire CLI --method switching: validate method exists, check optional deps available, graceful error with install instructions if AI method missing in src/dicom2glb/cli.py
-- [ ] T025 [US1] Implement end-to-end pipeline integration: DICOM dir → detect type → select method → convert (per frame if temporal) → mesh processing → temporal smoothing → GLB export with progress indication in src/dicom2glb/cli.py
+- [ ] T015 [US1] Implement vendor-specific 3D echo DICOM reader for Philips and GE formats (reference SlicerHeart) with temporal frame detection via Temporal Position Index / Instance Number in src/med2glb/io/echo_reader.py
+- [ ] T016 [P] [US1] Implement marching-cubes method: isosurface extraction at configurable threshold using scikit-image marching_cubes, then Taubin smoothing + decimation in src/med2glb/methods/marching_cubes.py
+- [ ] T017 [P] [US1] Implement classical method: Gaussian volume smoothing (scipy), adaptive thresholding, morphological ops (scikit-image), marching cubes, Taubin smoothing, quadric decimation, hole filling in src/med2glb/methods/classical.py
+- [ ] T018 [US1] Implement temporal mesh smoothing: vertex position smoothing across time frames using weighted moving average to prevent animation flickering in src/med2glb/mesh/temporal.py
+- [ ] T019 [US1] Implement consistent mesh topology for animation: extract mesh from first frame, deform vertices for subsequent frames via nearest-surface-point correspondence to ensure identical vertex count across all morph targets in src/med2glb/mesh/temporal.py
+- [ ] T020 [US1] Implement morph target animation: create glTF morph targets from per-frame vertex displacements, build AnimationChannel targeting node weights, build AnimationSampler with keyframe times, configure looping in src/med2glb/glb/animation.py
+- [ ] T021 [P] [US1] Implement multi-format exporter: GLB (animated via pygltflib), STL (trimesh), OBJ (trimesh) with format selection in src/med2glb/io/exporters.py
+- [ ] T022 [US1] Wire CLI --animate flag: detect temporal data, run per-frame conversion, apply temporal smoothing, build morph targets, export animated GLB with progress bar in src/med2glb/cli.py
+- [ ] T023 [US1] Wire CLI --list-methods: query registry, display method name, description, recommended data types, dependency status (installed/not installed) per contracts/cli-contract.md in src/med2glb/cli.py
+- [ ] T024 [US1] Wire CLI --method switching: validate method exists, check optional deps available, graceful error with install instructions if AI method missing in src/med2glb/cli.py
+- [ ] T025 [US1] Implement end-to-end pipeline integration: DICOM dir → detect type → select method → convert (per frame if temporal) → mesh processing → temporal smoothing → GLB export with progress indication in src/med2glb/cli.py
 
 **Checkpoint**: 3D echo → animated GLB works end-to-end. Methods switchable via --method. --list-methods shows available options.
 
@@ -75,14 +75,14 @@
 
 **Goal**: Convert cardiac CT to GLB with individually segmented, colored, transparent cardiac structures via TotalSegmentator.
 
-**Independent Test**: Provide cardiac CT DICOM directory, run `dicom2glb ./ct/ -o heart.glb --method totalseg`, verify GLB contains separate colored structures (LV, RV, LA, RA, aorta, myocardium) with transparency.
+**Independent Test**: Provide cardiac CT DICOM directory, run `med2glb ./ct/ -o heart.glb --method totalseg`, verify GLB contains separate colored structures (LV, RV, LA, RA, aorta, myocardium) with transparency.
 
 ### Implementation
 
-- [ ] T026 [US2] Implement TotalSegmentator method: wrap totalsegmentator API, run cardiac segmentation, extract per-structure binary masks, generate mesh per structure with assigned cardiac color/material in src/dicom2glb/methods/totalseg.py
-- [ ] T027 [US2] Implement multi-threshold extraction: parse --multi-threshold CLI arg ("val:label:alpha,..."), extract isosurface per threshold, assign material per layer in src/dicom2glb/methods/marching_cubes.py
-- [ ] T028 [US2] Wire multi-structure GLB export: multiple meshes in single GLB scene, each with distinct PBR material (color + alpha from cardiac color map) in src/dicom2glb/glb/builder.py
-- [ ] T029 [US2] Wire CLI --multi-threshold flag and --series flag for series selection in src/dicom2glb/cli.py
+- [ ] T026 [US2] Implement TotalSegmentator method: wrap totalsegmentator API, run cardiac segmentation, extract per-structure binary masks, generate mesh per structure with assigned cardiac color/material in src/med2glb/methods/totalseg.py
+- [ ] T027 [US2] Implement multi-threshold extraction: parse --multi-threshold CLI arg ("val:label:alpha,..."), extract isosurface per threshold, assign material per layer in src/med2glb/methods/marching_cubes.py
+- [ ] T028 [US2] Wire multi-structure GLB export: multiple meshes in single GLB scene, each with distinct PBR material (color + alpha from cardiac color map) in src/med2glb/glb/builder.py
+- [ ] T029 [US2] Wire CLI --multi-threshold flag and --series flag for series selection in src/med2glb/cli.py
 
 **Checkpoint**: Cardiac CT → segmented GLB with colored structures. Multi-threshold layered output works.
 
@@ -92,12 +92,12 @@
 
 **Goal**: Convert a single DICOM image to a GLB textured plane viewable in AR.
 
-**Independent Test**: Provide single .dcm file, run `dicom2glb image.dcm -o output.glb`, verify GLB shows the image as a textured 3D plane with correct aspect ratio.
+**Independent Test**: Provide single .dcm file, run `med2glb image.dcm -o output.glb`, verify GLB shows the image as a textured 3D plane with correct aspect ratio.
 
 ### Implementation
 
-- [ ] T030 [US3] Implement single-slice detection and handling: detect single DICOM file, extract pixel data and metadata, create textured quad mesh with correct aspect ratio from pixel spacing in src/dicom2glb/io/dicom_reader.py
-- [ ] T031 [US3] Implement textured plane GLB export: create quad mesh, embed DICOM image as PNG texture in GLB, apply as baseColorTexture material in src/dicom2glb/glb/builder.py
+- [ ] T030 [US3] Implement single-slice detection and handling: detect single DICOM file, extract pixel data and metadata, create textured quad mesh with correct aspect ratio from pixel spacing in src/med2glb/io/dicom_reader.py
+- [ ] T031 [US3] Implement textured plane GLB export: create quad mesh, embed DICOM image as PNG texture in GLB, apply as baseColorTexture material in src/med2glb/glb/builder.py
 
 **Checkpoint**: Single DICOM → textured GLB plane works.
 
@@ -111,9 +111,9 @@
 
 ### Implementation
 
-- [ ] T032 [US5] Write comprehensive README.md: project overview, installation (pip install dicom2glb, pip install dicom2glb[ai]), quick start examples, method comparison table (marching-cubes vs classical vs totalseg vs medsam2 with recommended data types), CLI reference, AR viewer compatibility matrix (Android Scene Viewer, model-viewer web component), output format comparison, contributing guide
-- [ ] T033 [US5] Polish CLI --help output: add rich formatting, usage examples in epilog, method descriptions, version display per contracts/cli-contract.md in src/dicom2glb/cli.py
-- [ ] T034 [US5] Validate pyproject.toml: verify pip install works in clean venv, verify dicom2glb entry point resolves, verify [ai] extra installs correctly, verify [dev] extra works
+- [ ] T032 [US5] Write comprehensive README.md: project overview, installation (pip install med2glb, pip install med2glb[ai]), quick start examples, method comparison table (marching-cubes vs classical vs totalseg vs medsam2 with recommended data types), CLI reference, AR viewer compatibility matrix (Android Scene Viewer, model-viewer web component), output format comparison, contributing guide
+- [ ] T033 [US5] Polish CLI --help output: add rich formatting, usage examples in epilog, method descriptions, version display per contracts/cli-contract.md in src/med2glb/cli.py
+- [ ] T034 [US5] Validate pyproject.toml: verify pip install works in clean venv, verify med2glb entry point resolves, verify [ai] extra installs correctly, verify [dev] extra works
 
 **Checkpoint**: README complete. Clean pip install works. CLI help is informative.
 
@@ -123,12 +123,12 @@
 
 **Goal**: Add MedSAM2-based segmentation for 3D echo, including per-frame segmentation for animated segmented output.
 
-**Independent Test**: Run `dicom2glb ./echo/ -o heart.glb --method medsam2 --animate`, verify segmented animated output with distinct structures.
+**Independent Test**: Run `med2glb ./echo/ -o heart.glb --method medsam2 --animate`, verify segmented animated output with distinct structures.
 
 ### Implementation
 
-- [ ] T035 [US1] Implement MedSAM2 method: wrap MedSAM2 API, run cardiac segmentation on echo volumes, extract per-structure masks, generate meshes with cardiac materials in src/dicom2glb/methods/medsam2.py
-- [ ] T036 [US1] Implement per-frame AI segmentation: run MedSAM2 on each temporal frame, maintain structure consistency across frames, combine with temporal smoothing and morph target animation in src/dicom2glb/methods/medsam2.py
+- [ ] T035 [US1] Implement MedSAM2 method: wrap MedSAM2 API, run cardiac segmentation on echo volumes, extract per-structure masks, generate meshes with cardiac materials in src/med2glb/methods/medsam2.py
+- [ ] T036 [US1] Implement per-frame AI segmentation: run MedSAM2 on each temporal frame, maintain structure consistency across frames, combine with temporal smoothing and morph target animation in src/med2glb/methods/medsam2.py
 
 **Checkpoint**: MedSAM2 segmentation produces multi-structure animated GLB from 3D echo.
 
@@ -145,8 +145,8 @@
 - [ ] T041 [P] Unit tests for method registry (registration, listing, availability) in tests/unit/test_methods.py
 - [ ] T042 Integration test: end-to-end DICOM directory → GLB file with validation (valid glTF, correct mesh stats) in tests/integration/test_pipeline.py
 - [ ] T043 Integration test: CLI argument parsing, --list-methods output, error messages for missing deps in tests/integration/test_cli.py
-- [ ] T044 Implement error handling for edge cases: no DICOM found (exit 4), missing AI deps (exit 3), mixed series warning, inconsistent slice spacing warning, memory errors in src/dicom2glb/cli.py
-- [ ] T045 Add --list-series command: scan directory, display series UIDs with metadata (modality, description, slice count) in src/dicom2glb/cli.py
+- [ ] T044 Implement error handling for edge cases: no DICOM found (exit 4), missing AI deps (exit 3), mixed series warning, inconsistent slice spacing warning, memory errors in src/med2glb/cli.py
+- [ ] T045 Add --list-series command: scan directory, display series UIDs with metadata (modality, description, slice count) in src/med2glb/cli.py
 - [ ] T046 Code cleanup: add type hints to all public functions, add docstrings to public API, ensure consistent naming
 
 **Checkpoint**: All tests pass. Edge cases handled. CLI polished.
@@ -195,13 +195,13 @@
 
 ```bash
 # Launch parallel method implementations:
-Task T016: "Implement marching-cubes method in src/dicom2glb/methods/marching_cubes.py"
-Task T017: "Implement classical method in src/dicom2glb/methods/classical.py"
+Task T016: "Implement marching-cubes method in src/med2glb/methods/marching_cubes.py"
+Task T017: "Implement classical method in src/med2glb/methods/classical.py"
 
 # Launch parallel after T016/T017 complete:
-Task T021: "Implement multi-format exporter in src/dicom2glb/io/exporters.py"
+Task T021: "Implement multi-format exporter in src/med2glb/io/exporters.py"
 # While also working on:
-Task T018: "Implement temporal mesh smoothing in src/dicom2glb/mesh/temporal.py"
+Task T018: "Implement temporal mesh smoothing in src/med2glb/mesh/temporal.py"
 ```
 
 ---

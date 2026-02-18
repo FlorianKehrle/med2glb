@@ -6,8 +6,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from dicom2glb.cli import _make_output_path, _parse_selection, app
-from dicom2glb.core.types import SeriesInfo
+from med2glb.cli import _make_output_path, _parse_selection, app
+from med2glb.core.types import SeriesInfo
 
 runner = CliRunner()
 

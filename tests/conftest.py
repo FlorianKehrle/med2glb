@@ -10,8 +10,8 @@ import pytest
 from pydicom.dataset import FileDataset
 from pydicom.uid import ExplicitVRLittleEndian, generate_uid
 
-from dicom2glb.core.types import MaterialConfig, MeshData
-from dicom2glb.core.volume import DicomVolume, TemporalSequence
+from med2glb.core.types import MaterialConfig, MeshData
+from med2glb.core.volume import DicomVolume, TemporalSequence
 
 
 @pytest.fixture
