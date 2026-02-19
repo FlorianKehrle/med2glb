@@ -21,10 +21,9 @@ from med2glb.glb.builder import _pad_to_4, write_accessor
 
 logger = logging.getLogger("med2glb")
 
-# Highlight ring parameters
-_RING_WIDTH = 0.04  # σ of Gaussian (fraction of LAT range) — narrow bright band
-_HIGHLIGHT_COLOR = np.array([0.85, 1.0, 1.0], dtype=np.float32)  # bright cyan-white
-_HIGHLIGHT_INTENSITY = 0.75  # blend strength (0=invisible, 1=fully replaces base)
+# Highlight ring parameters (tuned to match CARTO PRIME V7 "Map Replay" video)
+_RING_WIDTH = 0.025  # σ of Gaussian — narrow, sharp band like the real CARTO system
+_HIGHLIGHT_ADD = np.array([0.55, 0.55, 0.55], dtype=np.float32)  # additive white brightness
 
 
 def build_carto_animated_glb(
@@ -110,9 +109,10 @@ def build_carto_animated_glb(
         ring = np.exp(-((lat_norm - t) ** 2) / (2 * _RING_WIDTH ** 2))
         ring[~valid_lat] = 0.0
 
-        # Blend: base * (1 - blend) + highlight * blend
-        blend = (ring * _HIGHLIGHT_INTENSITY).reshape(-1, 1)
-        colors[:, :3] = colors[:, :3] * (1 - blend) + _HIGHLIGHT_COLOR * blend
+        # Additive brightening: preserves base hue, adds white light
+        # (red→yellow, green→bright green, blue→cyan — matches real CARTO)
+        add = ring.reshape(-1, 1) * _HIGHLIGHT_ADD
+        colors[:, :3] = np.minimum(colors[:, :3] + add, 1.0)
         colors[:, 3] = 1.0
 
         frame_colors.append(colors.astype(np.float32))

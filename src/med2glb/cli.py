@@ -142,7 +142,7 @@ def main(
         help="CARTO coloring scheme: lat, bipolar, unipolar.",
     ),
     subdivide: int = typer.Option(
-        1,
+        2,
         "--subdivide",
         help="CARTO mesh subdivision level (0-3). Higher = smoother color maps, more vertices.",
         min=0,
@@ -481,6 +481,11 @@ def _run_carto_pipeline(
 
     start_time = time.time()
 
+    # Pre-count mesh files so progress bar has a total from the start
+    from med2glb.io.carto_reader import _find_export_dir
+    _export_dir = _find_export_dir(input_path)
+    _n_mesh_files = len(list(_export_dir.glob("*.mesh")))
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -489,7 +494,7 @@ def _run_carto_pipeline(
         console=console,
     ) as progress:
         # Step 1: Load CARTO study
-        task = progress.add_task("Loading CARTO data...", total=None)
+        task = progress.add_task("Loading CARTO data...", total=_n_mesh_files)
 
         def _load_progress(desc: str, current: int, total: int) -> None:
             progress.update(task, description=desc, completed=current, total=total)
@@ -500,6 +505,7 @@ def _run_carto_pipeline(
             description=f"Loaded {_carto_version_label(study.version)}: "
             f"{len(study.meshes)} mesh(es), "
             f"{sum(len(p) for p in study.points.values())} points",
+            completed=_n_mesh_files,
         )
         progress.remove_task(task)
 
@@ -564,6 +570,15 @@ def _run_carto_pipeline(
             f"({coloring} coloring)"
         )
 
+        # Determine total steps upfront so progress bar never shows "?"
+        _n_frames = 30  # must match build_carto_animated_glb default
+        if animate and points:
+            # Steps: map vertices + subdivide LAT + map LAT + N frames + assemble
+            _total_steps = 3 + _n_frames + 1
+        else:
+            # Steps: map vertices + build GLB
+            _total_steps = 2
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -571,23 +586,13 @@ def _run_carto_pipeline(
             MofNCompleteColumn(),
             console=console,
         ) as progress:
-            # Step 2: Map points to vertex colors
-            task = progress.add_task("Subdividing & mapping vertices...", total=None)
+            task = progress.add_task("Subdividing & mapping vertices...", total=_total_steps)
             mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring, subdivide=subdivide)
-            progress.update(
-                task,
-                description=f"Mapped: {len(mesh_data.vertices):,} vertices, "
-                f"{len(mesh_data.faces):,} faces",
-            )
-            progress.remove_task(task)
+            progress.update(task, advance=1,
+                description=f"Mapped {len(mesh_data.vertices):,} verts, "
+                f"{len(mesh_data.faces):,} faces")
 
             if animate and points:
-                # Step 3a: Build animated GLB
-                task = progress.add_task("Building excitation ring animation...", total=None)
-
-                def _anim_progress(desc: str, current: int, total: int) -> None:
-                    progress.update(task, description=desc, completed=current, total=total)
-
                 from med2glb.glb.carto_builder import build_carto_animated_glb
                 from med2glb.io.carto_mapper import (
                     map_points_to_vertices,
@@ -601,6 +606,7 @@ def _run_carto_pipeline(
                 if subdivide > 0:
                     progress.update(task, description="Subdividing mesh for LAT extraction...")
                     anim_mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
+                progress.update(task, advance=1)
 
                 progress.update(task, description="Mapping LAT values...")
                 if subdivide > 0:
@@ -611,18 +617,25 @@ def _run_carto_pipeline(
                 # Filter to active vertices
                 active_mask = anim_mesh.group_ids != -1000000
                 active_lat = lat_values[active_mask]
+                progress.update(task, advance=1)
 
+                def _anim_progress(desc: str, current: int, _total: int) -> None:
+                    # Map frame progress into our unified step counter
+                    progress.update(task, description=desc,
+                                    completed=3 + current + 1)
+
+                progress.update(task, description="Building excitation ring animation...")
                 build_carto_animated_glb(
                     mesh_data, active_lat, out_path,
                     target_faces=target_faces,
                     progress=_anim_progress,
                 )
-                progress.remove_task(task)
+                progress.update(task, completed=_total_steps)
             else:
-                # Step 3b: Build static GLB
-                task = progress.add_task("Building GLB...", total=None)
+                # Static GLB
+                progress.update(task, description="Building GLB...")
                 build_glb([mesh_data], out_path)
-                progress.remove_task(task)
+                progress.update(task, completed=_total_steps)
 
             # Step 4: Compress if needed
             if max_size_mb > 0:
