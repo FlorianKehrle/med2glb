@@ -11,6 +11,8 @@ from med2glb.io.carto_mapper import (
     carto_mesh_to_mesh_data,
     interpolate_sparse_values,
     map_points_to_vertices,
+    map_points_to_vertices_idw,
+    subdivide_carto_mesh,
 )
 
 
@@ -85,7 +87,7 @@ class TestBuildInactiveMask:
 class TestCartoMeshToMeshData:
     def test_basic_conversion(self, synthetic_carto_mesh, synthetic_carto_points):
         mesh_data = carto_mesh_to_mesh_data(
-            synthetic_carto_mesh, synthetic_carto_points, coloring="lat"
+            synthetic_carto_mesh, synthetic_carto_points, coloring="lat", subdivide=0,
         )
         assert mesh_data.vertices is not None
         assert mesh_data.faces is not None
@@ -98,7 +100,7 @@ class TestCartoMeshToMeshData:
         mesh = parse_mesh_file(carto_mesh_dir / "1-TestMap.mesh")
         _, points = parse_car_file(carto_mesh_dir / "1-TestMap_car.txt")
 
-        mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat")
+        mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat", subdivide=0)
         # Original has 4 verts (1 inactive), so should have 3 active
         assert len(mesh_data.vertices) == 3
         # Original has 2 faces (1 inactive), so should have 1
@@ -106,7 +108,7 @@ class TestCartoMeshToMeshData:
 
     def test_no_points_fallback(self, synthetic_carto_mesh):
         mesh_data = carto_mesh_to_mesh_data(
-            synthetic_carto_mesh, None, coloring="lat"
+            synthetic_carto_mesh, None, coloring="lat", subdivide=0,
         )
         assert mesh_data.vertex_colors is not None
         # Should be mesh default color (green)
@@ -114,7 +116,7 @@ class TestCartoMeshToMeshData:
 
     def test_vertex_colors_are_float32(self, synthetic_carto_mesh, synthetic_carto_points):
         mesh_data = carto_mesh_to_mesh_data(
-            synthetic_carto_mesh, synthetic_carto_points
+            synthetic_carto_mesh, synthetic_carto_points, subdivide=0,
         )
         assert mesh_data.vertex_colors.dtype == np.float32
 
@@ -157,3 +159,118 @@ class TestColormaps:
         colors = lat_colormap(values, clamp_range=(-200, 200))
         # Values outside range should be clamped (first red, last purple)
         assert colors[0, 0] > 0.8  # red
+
+
+@pytest.fixture
+def _manifold_carto_mesh():
+    """Create a closed manifold CARTO mesh (octahedron) suitable for Loop subdivision."""
+    from med2glb.core.types import CartoMesh
+
+    # Regular octahedron — 6 vertices, 8 faces, fully closed manifold
+    vertices = np.array([
+        [0, 0, 1], [1, 0, 0], [0, 1, 0],
+        [-1, 0, 0], [0, -1, 0], [0, 0, -1],
+    ], dtype=np.float64) * 30
+
+    faces = np.array([
+        [0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1],
+        [5, 2, 1], [5, 3, 2], [5, 4, 3], [5, 1, 4],
+    ], dtype=np.int32)
+
+    normals = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
+
+    group_ids = np.zeros(len(vertices), dtype=np.int32)
+    face_group_ids = np.zeros(len(faces), dtype=np.int32)
+
+    return CartoMesh(
+        mesh_id=1,
+        vertices=vertices,
+        faces=faces,
+        normals=normals,
+        group_ids=group_ids,
+        face_group_ids=face_group_ids,
+        mesh_color=(0.0, 1.0, 0.0, 1.0),
+        color_names=["Unipolar", "Bipolar", "LAT"],
+        structure_name="test_octa",
+    )
+
+
+class TestSubdivideCartoMesh:
+    def test_increases_vertex_count(self, _manifold_carto_mesh):
+        result = subdivide_carto_mesh(_manifold_carto_mesh, iterations=1)
+        assert len(result.vertices) > len(_manifold_carto_mesh.vertices)
+        assert len(result.faces) > len(_manifold_carto_mesh.faces)
+
+    def test_zero_iterations_noop(self, _manifold_carto_mesh):
+        result = subdivide_carto_mesh(_manifold_carto_mesh, iterations=0)
+        assert result is _manifold_carto_mesh
+
+    def test_group_id_propagation(self, _manifold_carto_mesh):
+        _manifold_carto_mesh.group_ids[0] = -1000000
+        result = subdivide_carto_mesh(_manifold_carto_mesh, iterations=1)
+        assert np.any(result.group_ids == -1000000)
+        assert np.any(result.group_ids != -1000000)
+
+    def test_normals_computed(self, _manifold_carto_mesh):
+        result = subdivide_carto_mesh(_manifold_carto_mesh, iterations=1)
+        norms = np.linalg.norm(result.normals, axis=1)
+        np.testing.assert_allclose(norms, 1.0, atol=0.01)
+
+    def test_preserves_metadata(self, _manifold_carto_mesh):
+        result = subdivide_carto_mesh(_manifold_carto_mesh, iterations=1)
+        assert result.mesh_id == _manifold_carto_mesh.mesh_id
+        assert result.structure_name == _manifold_carto_mesh.structure_name
+        assert result.mesh_color == _manifold_carto_mesh.mesh_color
+
+
+class TestMapPointsToVerticesIdw:
+    def test_basic_mapping(self, synthetic_carto_mesh, synthetic_carto_points):
+        values = map_points_to_vertices_idw(
+            synthetic_carto_mesh, synthetic_carto_points, field="lat"
+        )
+        assert len(values) == len(synthetic_carto_mesh.vertices)
+        assert not np.all(np.isnan(values))
+
+    def test_differs_from_nn(self, synthetic_carto_mesh, synthetic_carto_points):
+        nn_values = map_points_to_vertices(
+            synthetic_carto_mesh, synthetic_carto_points, field="lat"
+        )
+        idw_values = map_points_to_vertices_idw(
+            synthetic_carto_mesh, synthetic_carto_points, field="lat"
+        )
+        assert not np.allclose(nn_values, idw_values)
+
+    def test_empty_points(self, synthetic_carto_mesh):
+        values = map_points_to_vertices_idw(synthetic_carto_mesh, [], field="lat")
+        assert np.all(np.isnan(values))
+
+    def test_k_clamping(self, synthetic_carto_mesh):
+        """When fewer points than k exist, k is clamped without error."""
+        from med2glb.core.types import CartoPoint
+
+        points = [
+            CartoPoint(0, [0, 0, 0], [0, 0, 0], 1.0, 1.0, -50.0),
+            CartoPoint(1, [30, 0, 0], [0, 0, 0], 2.0, 2.0, 50.0),
+        ]
+        values = map_points_to_vertices_idw(
+            synthetic_carto_mesh, points, field="lat", k=6,
+        )
+        assert len(values) == len(synthetic_carto_mesh.vertices)
+        assert not np.all(np.isnan(values))
+
+
+class TestCartoMeshToMeshDataWithSubdivide:
+    def test_subdivide_increases_vertices(self, _manifold_carto_mesh, synthetic_carto_points):
+        mesh_no_sub = carto_mesh_to_mesh_data(
+            _manifold_carto_mesh, synthetic_carto_points, coloring="lat", subdivide=0,
+        )
+        mesh_sub = carto_mesh_to_mesh_data(
+            _manifold_carto_mesh, synthetic_carto_points, coloring="lat", subdivide=1,
+        )
+        assert len(mesh_sub.vertices) > len(mesh_no_sub.vertices)
+
+    def test_subdivide_zero_matches_original(self, _manifold_carto_mesh, synthetic_carto_points):
+        mesh_data = carto_mesh_to_mesh_data(
+            _manifold_carto_mesh, synthetic_carto_points, coloring="lat", subdivide=0,
+        )
+        assert len(mesh_data.vertices) == len(_manifold_carto_mesh.vertices)

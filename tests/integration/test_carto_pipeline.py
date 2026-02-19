@@ -49,7 +49,7 @@ class TestCartoEndToEnd:
         mesh = study.meshes[0]
         points = study.points.get(mesh.structure_name)
 
-        mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat")
+        mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat", subdivide=0)
         lat_values = map_points_to_vertices(mesh, points, field="lat")
         lat_values = interpolate_sparse_values(mesh, lat_values)
         active_mask = mesh.group_ids != -1000000
@@ -173,7 +173,7 @@ class TestRealCartoV72:
         mesh = study.meshes[0]
         points = study.points.get(mesh.structure_name)
 
-        mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat")
+        mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat", subdivide=0)
         lat_values = map_points_to_vertices(mesh, points, field="lat")
         lat_values = interpolate_sparse_values(mesh, lat_values)
         active_mask = mesh.group_ids != -1000000

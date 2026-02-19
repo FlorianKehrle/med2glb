@@ -141,6 +141,13 @@ def main(
         "--coloring",
         help="CARTO coloring scheme: lat, bipolar, unipolar.",
     ),
+    subdivide: int = typer.Option(
+        1,
+        "--subdivide",
+        help="CARTO mesh subdivision level (0-3). Higher = smoother color maps, more vertices.",
+        min=0,
+        max=3,
+    ),
     gallery: bool = typer.Option(
         False,
         "--gallery",
@@ -227,6 +234,7 @@ def main(
                     input_path=input_path,
                     output=output,
                     coloring=coloring,
+                    subdivide=subdivide,
                     animate=animate,
                     max_size_mb=max_size,
                     compress_strategy=compress,
@@ -457,6 +465,7 @@ def _run_carto_pipeline(
     input_path: Path,
     output: Path,
     coloring: str,
+    subdivide: int,
     animate: bool,
     max_size_mb: int,
     compress_strategy: str,
@@ -556,7 +565,7 @@ def _run_carto_pipeline(
         ) as progress:
             # Step 2: Map points to vertex colors
             task = progress.add_task("Mapping points to vertices...", total=None)
-            mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring)
+            mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring, subdivide=subdivide)
             progress.update(
                 task,
                 description=f"Mapped: {len(mesh_data.vertices):,} vertices, "
@@ -568,12 +577,25 @@ def _run_carto_pipeline(
                 # Step 3a: Build animated GLB
                 task = progress.add_task("Building LAT wavefront animation...", total=None)
                 from med2glb.glb.carto_builder import build_carto_animated_glb
-                from med2glb.io.carto_mapper import map_points_to_vertices, interpolate_sparse_values
+                from med2glb.io.carto_mapper import (
+                    map_points_to_vertices,
+                    map_points_to_vertices_idw,
+                    interpolate_sparse_values,
+                    subdivide_carto_mesh,
+                )
 
-                lat_values = map_points_to_vertices(mesh, points, field="lat")
-                lat_values = interpolate_sparse_values(mesh, lat_values)
+                # Use the same subdivided mesh for animation LAT extraction
+                anim_mesh = mesh
+                if subdivide > 0:
+                    anim_mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
+
+                if subdivide > 0:
+                    lat_values = map_points_to_vertices_idw(anim_mesh, points, field="lat")
+                else:
+                    lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
+                    lat_values = interpolate_sparse_values(anim_mesh, lat_values)
                 # Filter to active vertices
-                active_mask = mesh.group_ids != -1000000
+                active_mask = anim_mesh.group_ids != -1000000
                 active_lat = lat_values[active_mask]
 
                 build_carto_animated_glb(
@@ -614,6 +636,8 @@ def _run_carto_pipeline(
             console.print(f"  Study:      {study.study_name}")
         console.print(f"  Map:        {mesh.structure_name}")
         console.print(f"  Coloring:   {coloring}")
+        if subdivide > 0:
+            console.print(f"  Subdivide:  level {subdivide} (~{4**subdivide}x face increase)")
         if clamp_info:
             console.print(f"  Color range: {clamp_info}")
 

@@ -19,6 +19,30 @@ from med2glb.io.carto_reader import _INACTIVE_GROUP_ID
 logger = logging.getLogger("med2glb")
 
 
+def _extract_point_field(
+    points: list[CartoPoint],
+    field: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract positions and values for a given field, filtering NaN values.
+
+    Returns:
+        Tuple of (positions [K, 3], values [K]) with NaN entries removed.
+        Both arrays may be empty if no valid points exist.
+    """
+    point_positions = np.array([p.position for p in points], dtype=np.float64)
+    if field == "lat":
+        point_values = np.array([p.lat for p in points], dtype=np.float64)
+    elif field == "bipolar":
+        point_values = np.array([p.bipolar_voltage for p in points], dtype=np.float64)
+    elif field == "unipolar":
+        point_values = np.array([p.unipolar_voltage for p in points], dtype=np.float64)
+    else:
+        raise ValueError(f"Unknown field: {field}. Use 'lat', 'bipolar', or 'unipolar'.")
+
+    valid = ~np.isnan(point_values)
+    return point_positions[valid], point_values[valid]
+
+
 def map_points_to_vertices(
     mesh: CartoMesh,
     points: list[CartoPoint],
@@ -40,24 +64,9 @@ def map_points_to_vertices(
     if not points:
         return values
 
-    # Extract point positions and field values
-    point_positions = np.array([p.position for p in points], dtype=np.float64)
-    if field == "lat":
-        point_values = np.array([p.lat for p in points], dtype=np.float64)
-    elif field == "bipolar":
-        point_values = np.array([p.bipolar_voltage for p in points], dtype=np.float64)
-    elif field == "unipolar":
-        point_values = np.array([p.unipolar_voltage for p in points], dtype=np.float64)
-    else:
-        raise ValueError(f"Unknown field: {field}. Use 'lat', 'bipolar', or 'unipolar'.")
-
-    # Filter out points with NaN values
-    valid = ~np.isnan(point_values)
-    if not np.any(valid):
+    point_positions, point_values = _extract_point_field(points, field)
+    if len(point_values) == 0:
         return values
-
-    point_positions = point_positions[valid]
-    point_values = point_values[valid]
 
     # Build KDTree from point positions and query for nearest neighbor per vertex
     tree = KDTree(point_positions)
@@ -66,6 +75,58 @@ def map_points_to_vertices(
     # Assign nearest-neighbor values to all vertices
     values[:] = point_values[indices]
 
+    return values
+
+
+def map_points_to_vertices_idw(
+    mesh: CartoMesh,
+    points: list[CartoPoint],
+    field: str = "lat",
+    k: int = 6,
+    power: float = 2.0,
+) -> np.ndarray:
+    """Map sparse point measurements to mesh vertices via k-NN IDW interpolation.
+
+    Uses inverse-distance weighting with *k* nearest neighbors for smooth
+    gradients between measurement points.
+
+    Args:
+        mesh: CARTO mesh with vertex positions.
+        points: List of measurement points with 3D positions and values.
+        field: Which field to map — "lat", "bipolar", or "unipolar".
+        k: Number of nearest neighbors to use.
+        power: IDW exponent (higher = sharper falloff).
+
+    Returns:
+        Per-vertex values array [N]. NaN where no valid points exist.
+    """
+    n_verts = len(mesh.vertices)
+    values = np.full(n_verts, np.nan, dtype=np.float64)
+
+    if not points:
+        return values
+
+    point_positions, point_values = _extract_point_field(points, field)
+    if len(point_values) == 0:
+        return values
+
+    # Clamp k to number of available points
+    k = min(k, len(point_values))
+
+    tree = KDTree(point_positions)
+    distances, indices = tree.query(mesh.vertices, k=k)
+
+    # When k==1 scipy returns 1-D arrays — reshape to 2-D
+    if k == 1:
+        distances = distances.reshape(-1, 1)
+        indices = indices.reshape(-1, 1)
+
+    # IDW weights: w = 1 / (d^power + epsilon)
+    weights = 1.0 / (np.power(distances, power) + 1e-10)
+    weight_sums = weights.sum(axis=1, keepdims=True)
+    weights /= weight_sums
+
+    values[:] = np.sum(weights * point_values[indices], axis=1)
     return values
 
 
@@ -117,11 +178,71 @@ def build_inactive_mask(mesh: CartoMesh) -> np.ndarray:
     return mesh.group_ids == _INACTIVE_GROUP_ID
 
 
+def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
+    """Loop-subdivide a CARTO mesh for finer spatial resolution.
+
+    Each iteration roughly quadruples the face count while smoothing the
+    surface geometry.  Vertex metadata (group_ids, face_group_ids) is
+    propagated via nearest-neighbor lookup from the original mesh.
+
+    Args:
+        mesh: Source CARTO mesh.
+        iterations: Number of Loop-subdivision passes (0 = no-op).
+
+    Returns:
+        A new CartoMesh with subdivided geometry, or the original if
+        *iterations* <= 0.
+    """
+    if iterations <= 0:
+        return mesh
+
+    import trimesh
+    from trimesh.remesh import subdivide_loop
+
+    try:
+        new_vertices, new_faces = subdivide_loop(
+            mesh.vertices, mesh.faces, iterations=iterations,
+        )
+    except (ValueError, AssertionError) as exc:
+        # Non-manifold meshes (edges shared by >2 faces) or degenerate
+        # geometry cannot be Loop-subdivided — fall back to original mesh.
+        logger.warning(
+            "Loop subdivision failed for '%s': %s  — using original mesh",
+            mesh.structure_name, exc,
+        )
+        return mesh
+
+    # Propagate group_ids to new vertices via nearest-neighbor from originals
+    tree = KDTree(mesh.vertices)
+    _, nn_idx = tree.query(new_vertices)
+    new_group_ids = mesh.group_ids[nn_idx]
+
+    # Derive face_group_ids from vertex 0 of each face
+    new_face_group_ids = new_group_ids[new_faces[:, 0]]
+
+    # Recompute normals from the subdivided geometry
+    tm = trimesh.Trimesh(vertices=new_vertices, faces=new_faces, process=False)
+    new_normals = np.array(tm.vertex_normals, dtype=np.float64)
+
+    return CartoMesh(
+        mesh_id=mesh.mesh_id,
+        vertices=new_vertices.astype(np.float64),
+        faces=new_faces.astype(np.int32),
+        normals=new_normals,
+        group_ids=new_group_ids.astype(np.int32),
+        face_group_ids=new_face_group_ids.astype(np.int32),
+        mesh_color=mesh.mesh_color,
+        color_names=mesh.color_names,
+        structure_name=mesh.structure_name,
+    )
+
+
 def carto_mesh_to_mesh_data(
     mesh: CartoMesh,
     points: list[CartoPoint] | None,
     coloring: str = "lat",
     clamp_range: tuple[float, float] | None = None,
+    subdivide: int = 1,
 ) -> MeshData:
     """Convert a CartoMesh + points into a MeshData with vertex colors.
 
@@ -132,10 +253,17 @@ def carto_mesh_to_mesh_data(
         points: Measurement points (may be None for color fallback).
         coloring: Color scheme — "lat", "bipolar", or "unipolar".
         clamp_range: Optional value range for colormap normalization.
+        subdivide: Loop-subdivision iterations (0 = no subdivision, NN mapping).
 
     Returns:
         MeshData with vertex_colors set.
     """
+    actually_subdivided = False
+    if subdivide > 0:
+        original_mesh = mesh
+        mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
+        actually_subdivided = mesh is not original_mesh
+
     # Build mask of active vertices and faces
     active_verts = mesh.group_ids != _INACTIVE_GROUP_ID
     active_faces_mask = mesh.face_group_ids != _INACTIVE_GROUP_ID
@@ -163,8 +291,11 @@ def carto_mesh_to_mesh_data(
     vertex_colors = None
     if points:
         # Map sparse points to all mesh vertices first, then filter
-        all_values = map_points_to_vertices(mesh, points, field=coloring)
-        all_values = interpolate_sparse_values(mesh, all_values)
+        if actually_subdivided:
+            all_values = map_points_to_vertices_idw(mesh, points, field=coloring)
+        else:
+            all_values = map_points_to_vertices(mesh, points, field=coloring)
+            all_values = interpolate_sparse_values(mesh, all_values)
         active_values = all_values[active_verts]
 
         colormap_fn = COLORMAPS.get(coloring)
