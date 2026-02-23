@@ -10,7 +10,8 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 
 **Key features:**
 
-- **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring overlay (works with all coloring modes); Loop subdivision with IDW interpolation for smooth color maps
+- **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring overlay (works with all coloring modes); animated LAT streamline vectors showing conduction direction; Loop subdivision with IDW interpolation for smooth color maps
+- **Interactive wizard** -- when run without flags, analyzes the input and presents relevant options (coloring, output mode, vectors, quality) via Rich prompts; falls back to sensible defaults in non-TTY environments
 - **Animated cardiac output** -- 2D cine clips become animated GLB with per-frame texture planes; 3D temporal volumes use morph targets; CARTO excitation ring animation
 - **Gallery mode** -- convert every slice to textured quads with three layouts: individual GLBs, lightbox grid, and spatial fan positioned using DICOM metadata
 - **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and MedSAM2 (echo/general)
@@ -96,8 +97,16 @@ med2glb ./Export_Study/ --animate
 med2glb ./Export_Study/ --coloring bipolar --animate
 # → ./Export_Study/glb/ReBS_V_SR_11_bipolar_animated.glb
 
-# Smoother color maps with more subdivision (default: 1)
-med2glb ./Export_Study/ --subdivide 2
+# Animated LAT streamline vectors (conduction direction arrows)
+med2glb ./Export_Study/ --animate --vectors
+# → ./Export_Study/glb/ReBS_V_SR_11_lat_animated_vectors.glb
+
+# Static output with vectors overlay
+med2glb ./Export_Study/ --vectors
+# → ./Export_Study/glb/ReBS_V_SR_11_lat_vectors.glb
+
+# Smoother color maps with more subdivision (default: 2)
+med2glb ./Export_Study/ --subdivide 3
 
 # Original nearest-neighbor mapping (no subdivision)
 med2glb ./Export_Study/ --subdivide 0
@@ -108,13 +117,13 @@ med2glb ./Export_Study/ -o left_atrium_lat.glb --coloring lat
 
 **Mesh subdivision (`--subdivide`):**
 
-By default, CARTO meshes are Loop-subdivided once (`--subdivide 1`) before mapping measurement points. This increases mesh resolution (~4x faces per level) and uses k-NN inverse-distance weighting (IDW) interpolation instead of single nearest-neighbor, producing smooth color gradients between measurement points. Use `--subdivide 0` to get the original blocky nearest-neighbor behavior, or `--subdivide 2`/`3` for even smoother results at the cost of more vertices. Non-manifold meshes that cannot be subdivided automatically fall back to the original geometry.
+By default, CARTO meshes are Loop-subdivided twice (`--subdivide 2`) before mapping measurement points. This increases mesh resolution (~4x faces per level) and uses k-NN inverse-distance weighting (IDW) interpolation instead of single nearest-neighbor, producing smooth color gradients between measurement points. Use `--subdivide 0` to get the original blocky nearest-neighbor behavior, or `--subdivide 3` for even smoother results at the cost of more vertices. Non-manifold meshes that cannot be subdivided automatically fall back to the original geometry.
 
 | Level | Faces | Mapping | Use Case |
 |---|---|---|---|
 | `0` | Original | Nearest-neighbor + linear interpolation | Fast preview, original behavior |
-| `1` (default) | ~4x | k-NN IDW (k=6) | Good balance of quality and speed |
-| `2` | ~16x | k-NN IDW (k=6) | High quality, more vertices |
+| `1` | ~4x | k-NN IDW (k=6) | Moderate quality |
+| `2` (default) | ~16x | k-NN IDW (k=6) | Good balance of quality and speed |
 | `3` | ~64x | k-NN IDW (k=6) | Maximum smoothness, large meshes |
 
 **Coloring schemes:**
@@ -131,6 +140,26 @@ By default, CARTO meshes are Loop-subdivided once (`--subdivide 1`) before mappi
 - LAT sentinel value `-10000` is treated as unmapped (rendered as transparent gray)
 
 When a CARTO export contains multiple meshes (e.g. LA, RA), an interactive selection table is displayed.
+
+**LAT conduction vectors (`--vectors`):**
+
+When enabled, animated streamline arrows are overlaid on the mesh showing the direction of electrical conduction derived from the LAT gradient field. The arrows flow along curved paths following the gradient, with dashes that advance each frame in sync with the excitation ring animation. In static mode, a single frame of arrows is rendered as an extra mesh node.
+
+## Interactive Wizard
+
+When run without any pipeline flags (no `--method`, `--coloring`, `--animate`, etc.), med2glb analyzes the input and launches an interactive wizard:
+
+```bash
+# Wizard mode — prompts for coloring, output mode, vectors, subdivision
+med2glb ./Export_Study/
+
+# Bypass wizard — use explicit flags
+med2glb ./Export_Study/ --coloring bipolar --animate
+```
+
+The wizard detects whether the input is CARTO or DICOM, prints a summary of the data, and presents only relevant options. For CARTO data: map selection, coloring, output mode (static/animated/both), LAT vectors, and subdivision level. For DICOM data: series selection, conversion method (filtered to available), quality preset, and animation.
+
+In non-TTY environments (piped input, CI), the wizard is skipped and sensible defaults are used with a summary logged.
 
 ## Gallery Mode
 
@@ -329,7 +358,8 @@ Options:
   -m, --method TEXT        Conversion method: classical, marching-cubes, totalseg, medsam2
   -f, --format TEXT        Output format: glb, stl, obj (default: glb)
   --coloring TEXT         CARTO coloring: lat, bipolar, unipolar (default: lat)
-  --subdivide INTEGER     CARTO mesh subdivision level 0-3 (default: 1)
+  --subdivide INTEGER     CARTO mesh subdivision level 0-3 (default: 2)
+  --vectors               Add animated LAT streamline arrows (CARTO LAT maps)
   --animate               Enable animation for temporal data
   --no-animate            Force static output even if temporal data is detected
   --threshold FLOAT       Intensity threshold for isosurface extraction
@@ -367,7 +397,8 @@ Options:
 ```
 src/med2glb/
 ├── cli.py              # Typer CLI entry point
-├── core/               # Data types (MeshData, DicomVolume, GallerySlice, etc.)
+├── cli_wizard.py       # Interactive wizard (data-driven prompts)
+├── core/               # Data types (MeshData, DicomVolume, CartoConfig, etc.)
 ├── io/                 # DICOM reading, echo reader, CARTO reader/mapper, exporters
 ├── methods/            # Pluggable conversion methods (registry pattern)
 │   ├── classical.py    # Gaussian smoothing + adaptive threshold
@@ -375,8 +406,8 @@ src/med2glb/
 │   ├── totalseg.py     # TotalSegmentator AI segmentation
 │   └── medsam2.py      # MedSAM2 AI segmentation
 ├── gallery/            # Gallery mode (individual, lightbox, spatial)
-├── mesh/               # Taubin smoothing, decimation, temporal processing
-└── glb/                # GLB builder, morph target animation, CARTO animation, textures, compression
+├── mesh/               # Taubin smoothing, decimation, temporal processing, LAT vectors
+└── glb/                # GLB builder, morph target animation, CARTO animation, arrow builder, textures, compression
 ```
 
 ## Testing

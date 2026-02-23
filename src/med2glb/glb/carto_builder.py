@@ -33,6 +33,7 @@ def build_carto_animated_glb(
     n_frames: int = 30,
     loop_duration_s: float = 2.0,
     target_faces: int = 20000,
+    vectors: bool = False,
     progress: Callable[[str, int, int], None] | None = None,
 ) -> None:
     """Build animated GLB with CARTO-style highlight ring over static colormap.
@@ -48,6 +49,7 @@ def build_carto_animated_glb(
         n_frames: Number of animation frames.
         loop_duration_s: Total animation loop time in seconds.
         target_faces: Decimate mesh to this count before creating frames.
+        vectors: If True, add animated LAT streamline arrows.
         progress: Optional callback(description, current, total) for progress.
     """
     def _report(desc: str, current: int = 0, total: int = 0) -> None:
@@ -116,6 +118,21 @@ def build_carto_animated_glb(
         colors[:, 3] = 1.0
 
         frame_colors.append(colors.astype(np.float32))
+
+    # Compute animated arrow dashes if vectors enabled
+    arrow_frame_dashes = None
+    if vectors:
+        _report("Tracing streamlines...")
+        from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
+        streamlines = trace_all_streamlines(
+            mesh_data.vertices, mesh_data.faces, lat_values,
+            mesh_data.normals, target_count=300,
+        )
+        if streamlines:
+            _report(f"Generating dash animation for {len(streamlines)} streamlines...")
+            arrow_frame_dashes = compute_animated_dashes(
+                streamlines, n_frames=n_frames,
+            )
 
     # Build glTF with N frame nodes
     gltf = pygltflib.GLTF2(
@@ -195,6 +212,19 @@ def build_carto_animated_glb(
             name=f"wavefront_{fi}", mesh=mesh_idx, scale=scale,
         ))
 
+    # Add arrow nodes if vectors enabled
+    arrow_node_indices: list[int] = []
+    if arrow_frame_dashes is not None:
+        _report("Building arrow geometry...")
+        from med2glb.glb.arrow_builder import build_animated_arrow_nodes
+        arrow_node_indices = build_animated_arrow_nodes(
+            arrow_frame_dashes,
+            mesh_data.vertices, mesh_data.normals,
+            gltf, binary_data, n_frames,
+        )
+        # Add arrow nodes to the scene
+        gltf.scenes[0].nodes.extend(arrow_node_indices)
+
     # Animation: switch visible frame via scale keyframes
     dt = loop_duration_s / n_frames
     keyframe_times = np.array([i * dt for i in range(n_frames)], dtype=np.float32)
@@ -205,6 +235,8 @@ def build_carto_animated_glb(
 
     channels = []
     samplers = []
+
+    # Wavefront frame visibility channels
     for fi in range(n_frames):
         # Scale output: [1,1,1] at this frame's keyframe, [0,0,0] at others
         scales = np.zeros((n_frames, 3), dtype=np.float32)
@@ -224,6 +256,27 @@ def build_carto_animated_glb(
         channels.append(pygltflib.AnimationChannel(
             sampler=sampler_idx,
             target=pygltflib.AnimationChannelTarget(node=fi, path="scale"),
+        ))
+
+    # Arrow frame visibility channels (synced with wavefront)
+    for fi, node_idx in enumerate(arrow_node_indices):
+        scales = np.zeros((n_frames, 3), dtype=np.float32)
+        scales[fi] = [1.0, 1.0, 1.0]
+
+        scale_acc = write_accessor(
+            gltf, binary_data, scales, None,
+            pygltflib.FLOAT, pygltflib.VEC3,
+        )
+
+        sampler_idx = len(samplers)
+        samplers.append(pygltflib.AnimationSampler(
+            input=time_acc,
+            output=scale_acc,
+            interpolation=pygltflib.ANIM_STEP,
+        ))
+        channels.append(pygltflib.AnimationChannel(
+            sampler=sampler_idx,
+            target=pygltflib.AnimationChannelTarget(node=node_idx, path="scale"),
         ))
 
     gltf.animations.append(pygltflib.Animation(

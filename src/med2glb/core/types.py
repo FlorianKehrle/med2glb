@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -146,3 +147,41 @@ class CartoStudy:
     points: dict[str, list[CartoPoint]]  # keyed by mesh/map name
     version: str  # e.g. "4.0", "5.0", "6.0"
     study_name: str = ""
+
+
+@dataclass
+class CartoConfig:
+    """Configuration for CARTO pipeline (from wizard or CLI flags)."""
+
+    input_path: Path
+    output_dir: Path | None = None
+    selected_mesh_indices: list[int] | None = None  # None = all
+    coloring: str = "lat"
+    subdivide: int = 2
+    animate: bool = True       # default: both static + animated
+    static: bool = True        # default: both
+    vectors: bool = False
+    target_faces: int = 80000
+    max_size_mb: int = 99
+    compress_strategy: str = "draco"
+    verbose: bool = False
+
+
+@dataclass
+class DicomConfig:
+    """Configuration for DICOM pipeline (from wizard or CLI flags)."""
+
+    input_path: Path
+    output: Path | None = None
+    method: str = "classical"
+    format: str = "glb"
+    animate: bool = False
+    threshold: float | None = None
+    smoothing: int = 15
+    target_faces: int = 80000
+    alpha: float = 1.0
+    series_uid: str | None = None
+    max_size_mb: int = 99
+    compress_strategy: str = "draco"
+    gallery: bool = False
+    verbose: bool = False

@@ -11,8 +11,18 @@ import pygltflib
 from med2glb.core.types import MeshData
 
 
-def build_glb(meshes: list[MeshData], output_path: Path) -> None:
-    """Build a GLB file from one or more meshes with PBR materials."""
+def build_glb(
+    meshes: list[MeshData],
+    output_path: Path,
+    extra_meshes: list[MeshData] | None = None,
+) -> None:
+    """Build a GLB file from one or more meshes with PBR materials.
+
+    Args:
+        meshes: Primary meshes to include in the GLB.
+        output_path: Where to write the .glb file.
+        extra_meshes: Additional meshes (e.g. vector arrows) added as separate nodes.
+    """
     gltf = pygltflib.GLTF2(
         scene=0,
         scenes=[pygltflib.Scene(nodes=[])],
@@ -29,6 +39,13 @@ def build_glb(meshes: list[MeshData], output_path: Path) -> None:
     for i, mesh_data in enumerate(meshes):
         node_idx = _add_mesh_to_gltf(gltf, mesh_data, all_binary_data, i)
         gltf.scenes[0].nodes.append(node_idx)
+
+    if extra_meshes:
+        for i, mesh_data in enumerate(extra_meshes):
+            node_idx = _add_mesh_to_gltf(
+                gltf, mesh_data, all_binary_data, len(meshes) + i,
+            )
+            gltf.scenes[0].nodes.append(node_idx)
 
     # Set buffer
     gltf.buffers.append(

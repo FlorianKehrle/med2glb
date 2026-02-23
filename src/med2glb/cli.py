@@ -148,6 +148,11 @@ def main(
         min=0,
         max=3,
     ),
+    vectors: bool = typer.Option(
+        False,
+        "--vectors",
+        help="Add animated LAT streamline arrows (CARTO LAT maps only).",
+    ),
     gallery: bool = typer.Option(
         False,
         "--gallery",
@@ -208,6 +213,36 @@ def main(
         _print_series_table(series_list, input_path)
         raise typer.Exit()
 
+    # --- Interactive wizard ---
+    # If no pipeline flags were explicitly set and we have a TTY, run the wizard
+    from med2glb.cli_wizard import is_interactive as _is_interactive
+    if _is_interactive() and not _has_pipeline_flags(ctx) and output is None:
+        try:
+            from med2glb.cli_wizard import analyze_input, run_carto_wizard, run_dicom_wizard
+            detected = analyze_input(input_path)
+
+            if detected.kind == "carto" and detected.carto_study is not None:
+                config = run_carto_wizard(
+                    detected.carto_study, input_path, console,
+                )
+                _run_carto_from_config(config)
+                return
+            elif detected.kind == "dicom" and detected.series_list is not None:
+                dicom_config = run_dicom_wizard(
+                    detected.series_list, input_path, console,
+                )
+                # Derive output path
+                stem = input_path.stem if input_path.is_file() else input_path.name
+                glb_dir = (input_path if input_path.is_dir() else input_path.parent) / "glb"
+                out_path = glb_dir / f"{stem}.glb"
+                _run_dicom_from_config(dicom_config, out_path)
+                return
+        except ValueError:
+            pass  # Fall through to normal pipeline
+        except KeyboardInterrupt:
+            console.print("\n[dim]Cancelled.[/dim]")
+            raise typer.Exit()
+
     # Derive output path from input name when not fully specified
     stem = input_path.stem if input_path.is_file() else input_path.name
     parent = input_path.parent if input_path.is_file() else input_path.parent
@@ -238,6 +273,7 @@ def main(
                     coloring=coloring,
                     subdivide=subdivide,
                     animate=animate,
+                    vectors=vectors,
                     max_size_mb=max_size,
                     compress_strategy=compress,
                     target_faces=faces,
@@ -302,6 +338,19 @@ def _was_option_provided(ctx: typer.Context, param_name: str) -> bool:
         return False
     import click
     return source == click.core.ParameterSource.COMMANDLINE
+
+
+def _has_pipeline_flags(ctx: typer.Context) -> bool:
+    """Return True if the user explicitly set any pipeline-specific flags.
+
+    When no pipeline flags are provided and the session is interactive,
+    the wizard runs instead.
+    """
+    pipeline_params = [
+        "method", "coloring", "animate", "threshold", "gallery",
+        "no_animate", "vectors", "multi_threshold",
+    ]
+    return any(_was_option_provided(ctx, p) for p in pipeline_params)
 
 
 def _run_pipeline(
@@ -409,6 +458,63 @@ def _run_pipeline(
         )
 
 
+def _run_carto_from_config(config: "CartoConfig") -> None:
+    """Execute the CARTO pipeline from a wizard-produced config."""
+    from med2glb.core.types import CartoConfig
+
+    meshes_to_process = config.selected_mesh_indices
+
+    # Run static output
+    if config.static:
+        _run_carto_pipeline(
+            input_path=config.input_path,
+            output=config.input_path / "glb" / "output.glb",  # placeholder, will be overwritten per mesh
+            coloring=config.coloring,
+            subdivide=config.subdivide,
+            animate=False,
+            vectors=config.vectors,
+            max_size_mb=config.max_size_mb,
+            compress_strategy=config.compress_strategy,
+            target_faces=config.target_faces,
+            verbose=config.verbose,
+        )
+
+    # Run animated output
+    if config.animate:
+        _run_carto_pipeline(
+            input_path=config.input_path,
+            output=config.input_path / "glb" / "output.glb",
+            coloring=config.coloring,
+            subdivide=config.subdivide,
+            animate=True,
+            vectors=config.vectors,
+            max_size_mb=config.max_size_mb,
+            compress_strategy=config.compress_strategy,
+            target_faces=config.target_faces,
+            verbose=config.verbose,
+        )
+
+
+def _run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
+    """Execute the DICOM pipeline from a wizard-produced config."""
+    _convert_series(
+        input_path=config.input_path,
+        output=output,
+        method_name=config.method,
+        format=config.format,
+        animate=config.animate,
+        threshold=config.threshold,
+        smoothing=config.smoothing,
+        target_faces=config.target_faces,
+        alpha=config.alpha,
+        multi_threshold=None,
+        series_uid=config.series_uid,
+        max_size_mb=config.max_size_mb,
+        compress_strategy=config.compress_strategy,
+        verbose=config.verbose,
+    )
+
+
 _CARTO_VERSION_LABELS: dict[str, str] = {
     "4.0": "CARTO 3 (~2015)",
     "5.0": "CARTO 3 v7.1",
@@ -469,6 +575,7 @@ def _run_carto_pipeline(
     coloring: str,
     subdivide: int,
     animate: bool,
+    vectors: bool,
     max_size_mb: int,
     compress_strategy: str,
     target_faces: int,
@@ -560,9 +667,10 @@ def _run_carto_pipeline(
         mesh = study.meshes[mesh_idx]
         points = study.points.get(mesh.structure_name)
 
-        # Build descriptive filename: <structure>_<coloring>[_animated].glb
+        # Build descriptive filename: <structure>_<coloring>[_animated][_vectors].glb
         anim_suffix = "_animated" if (animate and points) else ""
-        glb_name = f"{mesh.structure_name}_{coloring}{anim_suffix}.glb"
+        vec_suffix = "_vectors" if vectors else ""
+        glb_name = f"{mesh.structure_name}_{coloring}{anim_suffix}{vec_suffix}.glb"
         out_path = carto_output_dir / glb_name
 
         console.print(
@@ -575,6 +683,9 @@ def _run_carto_pipeline(
         if animate and points:
             # Steps: map vertices + subdivide LAT + map LAT + N frames + assemble
             _total_steps = 3 + _n_frames + 1
+        elif vectors and points:
+            # Steps: map vertices + vectors + build GLB
+            _total_steps = 3
         else:
             # Steps: map vertices + build GLB
             _total_steps = 2
@@ -628,13 +739,52 @@ def _run_carto_pipeline(
                 build_carto_animated_glb(
                     mesh_data, active_lat, out_path,
                     target_faces=target_faces,
+                    vectors=vectors,
                     progress=_anim_progress,
                 )
                 progress.update(task, completed=_total_steps)
             else:
                 # Static GLB
+                extra = None
+                if vectors and points:
+                    progress.update(task, description="Generating static LAT vectors...")
+                    from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
+                    from med2glb.glb.arrow_builder import build_frame_dashes, ArrowParams, _auto_scale_params
+                    from med2glb.io.carto_mapper import (
+                        map_points_to_vertices,
+                        map_points_to_vertices_idw,
+                        interpolate_sparse_values,
+                        subdivide_carto_mesh,
+                    )
+                    # Get LAT values for gradient computation
+                    vec_mesh = mesh
+                    if subdivide > 0:
+                        vec_mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
+                    if subdivide > 0:
+                        vec_lat = map_points_to_vertices_idw(vec_mesh, points, field="lat")
+                    else:
+                        vec_lat = map_points_to_vertices(vec_mesh, points, field="lat")
+                        vec_lat = interpolate_sparse_values(vec_mesh, vec_lat)
+                    active_mask = vec_mesh.group_ids != -1000000
+                    vec_lat_active = vec_lat[active_mask]
+
+                    streamlines = trace_all_streamlines(
+                        mesh_data.vertices, mesh_data.faces, vec_lat_active,
+                        mesh_data.normals, target_count=300,
+                    )
+                    if streamlines:
+                        dashes = compute_animated_dashes(streamlines, n_frames=1)
+                        if dashes and dashes[0]:
+                            bbox = mesh_data.vertices.max(axis=0) - mesh_data.vertices.min(axis=0)
+                            params = _auto_scale_params(float(np.linalg.norm(bbox)))
+                            arrow_mesh = build_frame_dashes(
+                                dashes[0], mesh_data.vertices, mesh_data.normals, params,
+                            )
+                            if arrow_mesh is not None:
+                                extra = [arrow_mesh]
+
                 progress.update(task, description="Building GLB...")
-                build_glb([mesh_data], out_path)
+                build_glb([mesh_data], out_path, extra_meshes=extra)
                 progress.update(task, completed=_total_steps)
 
             # Step 4: Compress if needed
@@ -677,7 +827,14 @@ def _run_carto_pipeline(
 
         console.print(f"  Vertices:   {len(mesh_data.vertices):,} active / {n_total_verts:,} total")
         console.print(f"  Faces:      {len(mesh_data.faces):,}")
-        console.print(f"  Animated:   {'Yes (excitation ring)' if (animate and points) else 'No'}")
+        anim_desc = "No"
+        if animate and points:
+            anim_desc = "Yes (excitation ring)"
+            if vectors:
+                anim_desc += " + LAT vectors"
+        elif vectors and points:
+            anim_desc = "No (static LAT vectors)"
+        console.print(f"  Animated:   {anim_desc}")
         console.print(f"  Output:     {out_path}")
         console.print(f"  Size:       {file_size:.1f} KB")
         console.print(f"  Time:       {elapsed:.1f}s")
