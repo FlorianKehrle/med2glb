@@ -87,6 +87,71 @@ def _carto_point_stats(points: list[CartoPoint]) -> dict[str, str]:
     return stats
 
 
+@dataclass
+class VectorQuality:
+    """Assessment of whether LAT vector data is good enough for streamlines."""
+    suitable: bool
+    reason: str  # human-readable explanation when not suitable
+    valid_points: int = 0
+    lat_range_ms: float = 0.0
+
+
+_MIN_VALID_LAT_POINTS = 50
+_MIN_LAT_RANGE_MS = 30.0
+
+
+def _assess_vector_quality(
+    study: CartoStudy,
+    selected_indices: list[int] | None,
+) -> VectorQuality:
+    """Check whether the selected meshes have enough LAT data for useful vectors.
+
+    Evaluates the *best* mesh among those selected — if any mesh is suitable
+    the overall assessment is suitable (vectors will only be generated where
+    the data supports it).
+    """
+    indices = selected_indices if selected_indices is not None else list(range(len(study.meshes)))
+
+    best_points = 0
+    best_range = 0.0
+
+    for idx in indices:
+        mesh = study.meshes[idx]
+        pts = study.points.get(mesh.structure_name, [])
+        if not pts:
+            continue
+        lats = np.array([p.lat for p in pts], dtype=np.float64)
+        valid = lats[~np.isnan(lats)]
+        n_valid = len(valid)
+        lat_range = float(np.ptp(valid)) if n_valid > 0 else 0.0
+
+        if n_valid > best_points:
+            best_points = n_valid
+        if lat_range > best_range:
+            best_range = lat_range
+
+    if best_points < _MIN_VALID_LAT_POINTS:
+        return VectorQuality(
+            suitable=False,
+            reason=f"sparse data, {best_points} valid LAT points",
+            valid_points=best_points,
+            lat_range_ms=best_range,
+        )
+    if best_range < _MIN_LAT_RANGE_MS:
+        return VectorQuality(
+            suitable=False,
+            reason=f"small LAT range, {best_range:.0f} ms",
+            valid_points=best_points,
+            lat_range_ms=best_range,
+        )
+    return VectorQuality(
+        suitable=True,
+        reason="",
+        valid_points=best_points,
+        lat_range_ms=best_range,
+    )
+
+
 def run_carto_wizard(
     study: CartoStudy,
     input_path: Path,
@@ -190,16 +255,29 @@ def run_carto_wizard(
         logger.info("Using default output mode: both (static + animated)")
 
     # --- LAT vectors ---
+    # Assess quality across selected meshes to set a sensible default
+    vec_quality = _assess_vector_quality(study, selected_indices)
+
     if preset_vectors is not None:
         vectors = preset_vectors
     elif interactive and coloring == "lat":
+        if vec_quality.suitable:
+            default_vec = "yes"
+            prompt_label = "LAT conduction vectors"
+        else:
+            default_vec = "no"
+            prompt_label = f"LAT conduction vectors [dim]({vec_quality.reason})[/dim]"
         vec_choice = Prompt.ask(
-            "LAT conduction vectors",
+            prompt_label,
             choices=["yes", "no"],
-            default="yes",
+            default=default_vec,
             console=console,
         )
         vectors = vec_choice == "yes"
+    elif not interactive and coloring == "lat":
+        vectors = vec_quality.suitable
+        if not vectors:
+            logger.info(f"Skipping LAT vectors: {vec_quality.reason}")
     else:
         vectors = False
 

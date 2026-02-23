@@ -10,6 +10,7 @@ import pytest
 from rich.console import Console
 
 from med2glb.cli_wizard import (
+    _assess_vector_quality,
     _check_ai_available,
     _parse_mesh_selection,
     run_carto_wizard,
@@ -184,3 +185,108 @@ class TestRunDicomWizard:
             )
             assert config.smoothing == expected_smooth
             assert config.target_faces == expected_faces
+
+
+class TestAssessVectorQuality:
+    def test_sparse_points_not_suitable(self, carto_study):
+        """With only 2 points, vectors should not be suitable."""
+        quality = _assess_vector_quality(carto_study, None)
+        assert quality.suitable is False
+        assert "sparse" in quality.reason
+        assert quality.valid_points == 2
+
+    def test_no_points_not_suitable(self):
+        """Mesh with no points at all."""
+        mesh = CartoMesh(
+            mesh_id=1,
+            vertices=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            normals=np.array([[0, 0, 1]] * 3, dtype=np.float64),
+            group_ids=np.zeros(3, dtype=np.int32),
+            face_group_ids=np.zeros(1, dtype=np.int32),
+            mesh_color=(1, 0, 0, 1),
+            color_names=["LAT"],
+            structure_name="Empty",
+        )
+        study = CartoStudy(meshes=[mesh], points={}, version="6.0", study_name="Test")
+        quality = _assess_vector_quality(study, None)
+        assert quality.suitable is False
+        assert quality.valid_points == 0
+
+    def test_small_lat_range_not_suitable(self):
+        """Many points but LAT range too small."""
+        vertices = np.random.rand(100, 3).astype(np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+        normals = np.tile([0, 0, 1], (100, 1)).astype(np.float64)
+        mesh = CartoMesh(
+            mesh_id=1, vertices=vertices, faces=faces, normals=normals,
+            group_ids=np.zeros(100, dtype=np.int32),
+            face_group_ids=np.zeros(1, dtype=np.int32),
+            mesh_color=(1, 0, 0, 1), color_names=["LAT"],
+            structure_name="NarrowLAT",
+        )
+        # 60 points but all LAT between 0 and 10 ms (range < 30)
+        points = [
+            CartoPoint(i, np.random.rand(3), np.zeros(3), 1.0, 5.0, float(i % 10))
+            for i in range(60)
+        ]
+        study = CartoStudy(
+            meshes=[mesh], points={"NarrowLAT": points},
+            version="6.0", study_name="Test",
+        )
+        quality = _assess_vector_quality(study, None)
+        assert quality.suitable is False
+        assert "range" in quality.reason
+
+    def test_good_data_suitable(self):
+        """Enough points with sufficient LAT range."""
+        vertices = np.random.rand(100, 3).astype(np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+        normals = np.tile([0, 0, 1], (100, 1)).astype(np.float64)
+        mesh = CartoMesh(
+            mesh_id=1, vertices=vertices, faces=faces, normals=normals,
+            group_ids=np.zeros(100, dtype=np.int32),
+            face_group_ids=np.zeros(1, dtype=np.int32),
+            mesh_color=(1, 0, 0, 1), color_names=["LAT"],
+            structure_name="GoodMap",
+        )
+        # 80 points with LAT range 0..120 ms
+        points = [
+            CartoPoint(i, np.random.rand(3), np.zeros(3), 1.0, 5.0, float(i * 1.5))
+            for i in range(80)
+        ]
+        study = CartoStudy(
+            meshes=[mesh], points={"GoodMap": points},
+            version="6.0", study_name="Test",
+        )
+        quality = _assess_vector_quality(study, None)
+        assert quality.suitable is True
+        assert quality.valid_points == 80
+        assert quality.lat_range_ms > 30
+
+    def test_selected_indices_filters_meshes(self):
+        """Only checks selected meshes, not all."""
+        vertices = np.random.rand(10, 3).astype(np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+        normals = np.tile([0, 0, 1], (10, 1)).astype(np.float64)
+        base = dict(faces=faces, normals=normals,
+                    group_ids=np.zeros(10, dtype=np.int32),
+                    face_group_ids=np.zeros(1, dtype=np.int32),
+                    mesh_color=(1, 0, 0, 1), color_names=["LAT"])
+        mesh_good = CartoMesh(mesh_id=1, vertices=vertices, structure_name="Good", **base)
+        mesh_bad = CartoMesh(mesh_id=2, vertices=vertices, structure_name="Bad", **base)
+
+        good_pts = [
+            CartoPoint(i, np.random.rand(3), np.zeros(3), 1.0, 5.0, float(i * 2.0))
+            for i in range(80)
+        ]
+        bad_pts = [CartoPoint(1, np.array([0, 0, 0.0]), np.zeros(3), 1.0, 5.0, 0.0)]
+
+        study = CartoStudy(
+            meshes=[mesh_good, mesh_bad],
+            points={"Good": good_pts, "Bad": bad_pts},
+            version="6.0", study_name="Test",
+        )
+        # Selecting only the bad mesh
+        quality = _assess_vector_quality(study, [1])
+        assert quality.suitable is False

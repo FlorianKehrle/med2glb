@@ -508,20 +508,26 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
     carto_output_dir = config.input_path / "glb"
     carto_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build list of (mesh_idx, animate_flag) jobs
-    jobs: list[tuple[int, bool]] = []
+    # Build list of (mesh_idx, animate_flag, vectors_flag) jobs.
+    # When vectors are enabled, produce BOTH with and without vectors for each mode,
+    # so the user can compare and choose.
+    jobs: list[tuple[int, bool, bool]] = []
     for mesh_idx in selected:
         if config.static:
-            jobs.append((mesh_idx, False))
+            jobs.append((mesh_idx, False, False))
+            if config.vectors:
+                jobs.append((mesh_idx, False, True))
         if config.animate:
-            jobs.append((mesh_idx, True))
+            jobs.append((mesh_idx, True, False))
+            if config.vectors:
+                jobs.append((mesh_idx, True, True))
 
-    for mesh_idx, do_animate in jobs:
+    for mesh_idx, do_animate, do_vectors in jobs:
         mesh = study.meshes[mesh_idx]
         points = study.points.get(mesh.structure_name)
 
         anim_suffix = "_animated" if (do_animate and points) else ""
-        vec_suffix = "_vectors" if config.vectors else ""
+        vec_suffix = "_vectors" if do_vectors else ""
         glb_name = f"{mesh.structure_name}_{config.coloring}{anim_suffix}{vec_suffix}.glb"
         out_path = carto_output_dir / glb_name
 
@@ -529,13 +535,13 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
             f"\n[bold]Converting: {mesh.structure_name}[/bold] "
             f"({config.coloring} coloring"
             f"{', animated' if do_animate else ', static'}"
-            f"{', vectors' if config.vectors else ''})"
+            f"{', vectors' if do_vectors else ''})"
         )
 
         _n_frames = 30
         if do_animate and points:
             _total_steps = 3 + _n_frames + 1
-        elif config.vectors and points:
+        elif do_vectors and points:
             _total_steps = 3
         else:
             _total_steps = 2
@@ -588,13 +594,13 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                 build_carto_animated_glb(
                     mesh_data, active_lat, out_path,
                     target_faces=config.target_faces,
-                    vectors=config.vectors,
+                    vectors=do_vectors,
                     progress=_anim_progress,
                 )
                 progress.update(task, completed=_total_steps)
             else:
                 extra = None
-                if config.vectors and points:
+                if do_vectors and points:
                     progress.update(task, description="Generating static LAT vectors...")
                     from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
                     from med2glb.glb.arrow_builder import build_frame_dashes, ArrowParams, _auto_scale_params
@@ -641,7 +647,6 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
         file_size = out_path.stat().st_size / 1024
         elapsed = time.time() - start_time
         n_total_verts = len(mesh.vertices)
-        n_active_verts = int(np.sum(mesh.group_ids != -1000000))
 
         clamp_info = ""
         if config.coloring == "bipolar":
@@ -674,9 +679,9 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
         anim_desc = "No"
         if do_animate and points:
             anim_desc = "Yes (excitation ring)"
-            if config.vectors:
+            if do_vectors:
                 anim_desc += " + LAT vectors"
-        elif config.vectors and points:
+        elif do_vectors and points:
             anim_desc = "No (static LAT vectors)"
         console.print(f"  Animated:   {anim_desc}")
         console.print(f"  Output:     {out_path}")
