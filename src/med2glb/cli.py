@@ -604,7 +604,10 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
             else:
                 if do_vectors and points:
                     progress.update(task, description="Generating static LAT vectors...")
-                    from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
+                    from med2glb.mesh.lat_vectors import (
+                        trace_all_streamlines, compute_animated_dashes,
+                        compute_face_gradients, compute_dash_speed_factors,
+                    )
                     from med2glb.glb.arrow_builder import build_frame_dashes, ArrowParams, _auto_scale_params
                     from med2glb.io.carto_mapper import (
                         map_points_to_vertices,
@@ -632,8 +635,17 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                         if dashes and dashes[0]:
                             bbox = mesh_data.vertices.max(axis=0) - mesh_data.vertices.min(axis=0)
                             params = _auto_scale_params(float(np.linalg.norm(bbox)))
+                            max_r = params.max_radius if params.max_radius is not None else params.head_radius
+                            face_grads, face_centers, _ = compute_face_gradients(
+                                mesh_data.vertices, mesh_data.faces, vec_lat_active,
+                            )
+                            speed_factors = compute_dash_speed_factors(
+                                dashes, face_grads, face_centers,
+                            )
+                            dash_radii = [max_r * (1.5 - s) for s in speed_factors[0]] if speed_factors and speed_factors[0] else None
                             arrow_mesh = build_frame_dashes(
                                 dashes[0], mesh_data.vertices, mesh_data.normals, params,
+                                dash_radii=dash_radii,
                             )
                             if arrow_mesh is not None:
                                 extra = [arrow_mesh]
@@ -952,7 +964,10 @@ def _run_carto_pipeline(
                 # Static GLB
                 if vectors and points:
                     progress.update(task, description="Generating static LAT vectors...")
-                    from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
+                    from med2glb.mesh.lat_vectors import (
+                        trace_all_streamlines, compute_animated_dashes,
+                        compute_face_gradients, compute_dash_speed_factors,
+                    )
                     from med2glb.glb.arrow_builder import build_frame_dashes, ArrowParams, _auto_scale_params
                     from med2glb.io.carto_mapper import (
                         map_points_to_vertices,
@@ -981,8 +996,17 @@ def _run_carto_pipeline(
                         if dashes and dashes[0]:
                             bbox = mesh_data.vertices.max(axis=0) - mesh_data.vertices.min(axis=0)
                             params = _auto_scale_params(float(np.linalg.norm(bbox)))
+                            max_r = params.max_radius if params.max_radius is not None else params.head_radius
+                            face_grads, face_centers, _ = compute_face_gradients(
+                                mesh_data.vertices, mesh_data.faces, vec_lat_active,
+                            )
+                            speed_factors = compute_dash_speed_factors(
+                                dashes, face_grads, face_centers,
+                            )
+                            dash_radii = [max_r * (1.5 - s) for s in speed_factors[0]] if speed_factors and speed_factors[0] else None
                             arrow_mesh = build_frame_dashes(
                                 dashes[0], mesh_data.vertices, mesh_data.normals, params,
+                                dash_radii=dash_radii,
                             )
                             if arrow_mesh is not None:
                                 extra = [arrow_mesh]

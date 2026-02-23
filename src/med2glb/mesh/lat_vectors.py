@@ -10,8 +10,27 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
+from scipy.spatial import KDTree
 
 logger = logging.getLogger("med2glb")
+
+
+# ---------------------------------------------------------------------------
+# Streamline path smoothing
+# ---------------------------------------------------------------------------
+
+def _smooth_streamline(path: list[np.ndarray], sigma: float = 2.0) -> list[np.ndarray]:
+    """Smooth a polyline path using Gaussian filtering on XYZ coordinates.
+
+    Sigma=2 smooths the sharp face-edge corners that occur when a streamline
+    crosses triangle boundaries, without destroying the overall path direction.
+    """
+    if len(path) < 4:
+        return path
+    pts = np.array(path)  # [N, 3]
+    smoothed = gaussian_filter1d(pts, sigma=sigma, axis=0)
+    return [smoothed[i] for i in range(len(smoothed))]
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +399,7 @@ def trace_all_streamlines(
             max_steps=max_steps, step_size=step_size,
         )
         if len(path) >= 3:  # Need at least 3 points for a meaningful streamline
+            path = _smooth_streamline(path)
             streamlines.append(path)
 
     logger.info(f"Traced {len(streamlines)} streamlines (from {len(seeds)} seeds)")
@@ -501,3 +521,40 @@ def compute_animated_dashes(
         frames.append(frame_dashes)
 
     return frames
+
+
+# ---------------------------------------------------------------------------
+# Speed-dependent dash sizing
+# ---------------------------------------------------------------------------
+
+def compute_dash_speed_factors(
+    frame_dashes: list[list[tuple[np.ndarray, np.ndarray]]],
+    face_gradients: np.ndarray,
+    face_centers: np.ndarray,
+) -> list[list[float]]:
+    """Compute per-dash speed factors from the local gradient magnitude.
+
+    For each dash, looks up the nearest face gradient magnitude and normalizes
+    to [0, 1] where 0 = slowest and 1 = fastest.
+
+    Returns:
+        Nested list parallel to *frame_dashes*: speed_factors[frame][dash].
+    """
+    grad_mag = np.linalg.norm(face_gradients, axis=1)
+    mag_max = float(grad_mag.max()) if len(grad_mag) > 0 else 1.0
+    if mag_max < 1e-12:
+        mag_max = 1.0
+
+    tree = KDTree(face_centers)
+
+    result: list[list[float]] = []
+    for dashes in frame_dashes:
+        if not dashes:
+            result.append([])
+            continue
+        midpoints = np.array([(s + e) / 2.0 for s, e in dashes])
+        _, indices = tree.query(midpoints)
+        speeds = grad_mag[indices] / mag_max
+        result.append(speeds.tolist())
+
+    return result

@@ -10,6 +10,7 @@ from med2glb.core.types import MeshData
 from med2glb.glb.arrow_builder import (
     ArrowParams,
     _auto_scale_params,
+    _teardrop_radius,
     build_animated_arrow_nodes,
     build_frame_dashes,
     generate_dash_mesh,
@@ -46,14 +47,14 @@ class TestGenerateDashMesh:
         assert len(faces) > 0
 
     def test_vertex_count_matches_segments(self):
-        params = ArrowParams(segments=8)
+        params = ArrowParams(segments=8, n_rings=6)
         start = np.array([0, 0, 0], dtype=np.float64)
         end = np.array([5, 0, 0], dtype=np.float64)
         normal = np.array([0, 0, 1], dtype=np.float64)
 
         verts, faces = generate_dash_mesh(start, end, normal, params)
-        # 3 * segments (bottom, top, cone_base) + 1 tip = 3*8 + 1 = 25
-        assert len(verts) == 3 * 8 + 1
+        # Teardrop: 2 tips + (n_rings - 2) * segments = 2 + 4*8 = 34
+        assert len(verts) == 2 + (params.n_rings - 2) * params.segments
 
     def test_zero_length_dash(self, default_params):
         start = np.array([5, 5, 5], dtype=np.float64)
@@ -72,6 +73,28 @@ class TestGenerateDashMesh:
         verts, faces = generate_dash_mesh(start, end, normal, default_params)
         assert faces.min() >= 0
         assert faces.max() < len(verts)
+
+
+class TestTeardropRadius:
+    def test_zero_at_tips(self):
+        assert _teardrop_radius(0.0, 1.0) == 0.0
+        assert _teardrop_radius(1.0, 1.0) == 0.0
+
+    def test_positive_interior(self):
+        for t in [0.1, 0.3, 0.5, 0.7, 0.9]:
+            assert _teardrop_radius(t, 1.0) > 0.0
+
+    def test_peak_near_62_percent(self):
+        # Sample at 1% intervals and find peak
+        ts = [i / 100.0 for i in range(1, 100)]
+        radii = [_teardrop_radius(t, 1.0) for t in ts]
+        peak_t = ts[radii.index(max(radii))]
+        assert 0.5 < peak_t < 0.75  # peak near 62%
+
+    def test_scales_with_max_r(self):
+        r1 = _teardrop_radius(0.5, 1.0)
+        r2 = _teardrop_radius(0.5, 2.0)
+        assert abs(r2 - 2.0 * r1) < 1e-10
 
 
 class TestAutoScaleParams:

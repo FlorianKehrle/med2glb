@@ -26,9 +26,21 @@ class ArrowParams:
     shaft_radius: float = 0.15
     head_radius: float = 0.25
     head_length: float = 0.4
-    segments: int = 6
+    segments: int = 12
+    n_rings: int = 6
+    max_radius: float | None = None
     color: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
     normal_offset: float = 0.3
+
+
+def _teardrop_radius(t: float, max_r: float) -> float:
+    """Compute radius at axial position *t* (0=tail, 1=head) for a teardrop profile.
+
+    Peak radius at ~62% from the tail, smooth zero at both tips.
+    """
+    if t <= 0.0 or t >= 1.0:
+        return 0.0
+    return max_r * t ** 0.5 * (1.0 - t) ** 0.3
 
 
 def _auto_scale_params(bbox_diagonal: float) -> ArrowParams:
@@ -38,6 +50,7 @@ def _auto_scale_params(bbox_diagonal: float) -> ArrowParams:
         shaft_radius=0.15 * scale,
         head_radius=0.25 * scale,
         head_length=0.4 * scale,
+        max_radius=0.25 * scale,
         normal_offset=0.3 * scale,
     )
 
@@ -47,11 +60,17 @@ def generate_dash_mesh(
     end: np.ndarray,
     surface_normal: np.ndarray,
     params: ArrowParams,
+    radius_override: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Generate a single dash: thin cylinder with a small cone head.
+    """Generate a single dash as a smooth teardrop revolution surface.
 
     The dash is oriented along (end - start), offset above the surface
-    along the surface normal.
+    along the surface normal.  The teardrop is wider near the head and
+    tapers to a point at both tail (t=0) and head (t=1).
+
+    Args:
+        radius_override: If set, overrides the max teardrop radius for
+            this specific dash (used for speed-dependent sizing).
 
     Returns:
         (vertices [V, 3], faces [F, 3]) as float32 and int32.
@@ -66,10 +85,8 @@ def generate_dash_mesh(
     # Offset start and end above the surface
     offset = surface_normal * params.normal_offset
     start_off = start + offset
-    end_off = end + offset
 
     # Build a local coordinate frame
-    # Find a vector not parallel to axis
     if abs(np.dot(axis, np.array([0, 1, 0]))) < 0.9:
         up = np.array([0, 1, 0], dtype=np.float64)
     else:
@@ -80,54 +97,59 @@ def generate_dash_mesh(
     up /= np.linalg.norm(up) + 1e-12
 
     seg = params.segments
+    n_rings = params.n_rings
+    max_r = radius_override if radius_override is not None else (
+        params.max_radius if params.max_radius is not None else params.head_radius
+    )
     angles = np.linspace(0, 2 * np.pi, seg, endpoint=False)
-
-    # Circle points (unit)
     circle = np.column_stack([np.cos(angles), np.sin(angles)])  # [seg, 2]
 
-    # --- Cylinder (shaft) ---
-    shaft_end = start_off + axis * max(length - params.head_length, length * 0.7)
+    # Vertex layout: tail_tip, ring_1 .. ring_(n_rings-2), head_tip
+    # Total: 2 + (n_rings - 2) * seg
+    verts_list: list[np.ndarray] = []
 
-    # Bottom ring
-    shaft_bottom = start_off + params.shaft_radius * (
-        circle[:, 0:1] * right + circle[:, 1:2] * up
-    )
-    # Top ring
-    shaft_top = shaft_end + params.shaft_radius * (
-        circle[:, 0:1] * right + circle[:, 1:2] * up
-    )
+    # Tail tip (t=0)
+    tail_tip = start_off.copy()
+    verts_list.append(tail_tip.reshape(1, 3))
 
-    # --- Cone (head) ---
-    cone_base = shaft_end + params.head_radius * (
-        circle[:, 0:1] * right + circle[:, 1:2] * up
-    )
-    cone_tip = end_off  # single point
+    # Internal rings
+    t_values = np.linspace(0, 1, n_rings)  # includes endpoints
+    for ri in range(1, n_rings - 1):
+        t = t_values[ri]
+        r = _teardrop_radius(t, max_r)
+        center = start_off + axis * (t * length)
+        ring = center + r * (circle[:, 0:1] * right + circle[:, 1:2] * up)
+        verts_list.append(ring)
 
-    # Assemble vertices
-    # Layout: shaft_bottom[0..seg-1], shaft_top[seg..2seg-1],
-    #         cone_base[2seg..3seg-1], cone_tip[3seg]
-    verts = np.vstack([
-        shaft_bottom,  # 0 .. seg-1
-        shaft_top,     # seg .. 2seg-1
-        cone_base,     # 2seg .. 3seg-1
-        cone_tip.reshape(1, 3),  # 3seg
-    ]).astype(np.float32)
+    # Head tip (t=1)
+    head_tip = start_off + axis * length
+    verts_list.append(head_tip.reshape(1, 3))
 
-    faces_list = []
+    verts = np.vstack(verts_list).astype(np.float32)
 
-    # Shaft quads (as 2 triangles each)
+    faces_list: list[list[int]] = []
+
+    # Fan from tail tip (index 0) to first ring (indices 1 .. seg)
     for i in range(seg):
         j = (i + 1) % seg
-        # Bottom ring: 0+i, 0+j
-        # Top ring: seg+i, seg+j
-        faces_list.append([i, j, seg + j])
-        faces_list.append([i, seg + j, seg + i])
+        faces_list.append([0, 1 + j, 1 + i])
 
-    # Cone triangles
-    tip_idx = 3 * seg
+    # Triangle strips between consecutive internal rings
+    n_internal = n_rings - 2
+    for ri in range(n_internal - 1):
+        base_a = 1 + ri * seg
+        base_b = 1 + (ri + 1) * seg
+        for i in range(seg):
+            j = (i + 1) % seg
+            faces_list.append([base_a + i, base_a + j, base_b + j])
+            faces_list.append([base_a + i, base_b + j, base_b + i])
+
+    # Fan from last ring to head tip
+    head_tip_idx = len(verts) - 1
+    last_ring_base = 1 + (n_internal - 1) * seg
     for i in range(seg):
         j = (i + 1) % seg
-        faces_list.append([2 * seg + i, 2 * seg + j, tip_idx])
+        faces_list.append([last_ring_base + i, last_ring_base + j, head_tip_idx])
 
     faces = np.array(faces_list, dtype=np.int32)
     return verts, faces
@@ -138,10 +160,15 @@ def build_frame_dashes(
     mesh_vertices: np.ndarray,
     mesh_normals: np.ndarray,
     params: ArrowParams,
+    dash_radii: list[float] | None = None,
 ) -> MeshData | None:
     """Generate and merge all dash meshes for one animation frame.
 
     Uses a KDTree to look up surface normals at each dash position.
+
+    Args:
+        dash_radii: Per-dash max radius override. If provided, must be the
+            same length as *dashes*. Used for speed-dependent sizing.
 
     Returns:
         Single MeshData with all dashes merged, or None if no dashes.
@@ -154,13 +181,14 @@ def build_frame_dashes(
     all_faces: list[np.ndarray] = []
     vert_offset = 0
 
-    for start, end in dashes:
+    for di, (start, end) in enumerate(dashes):
         mid = (start + end) / 2.0
         _, idx = tree.query(mid)
         normal = mesh_normals[idx]
         normal = normal / (np.linalg.norm(normal) + 1e-12)
 
-        verts, faces = generate_dash_mesh(start, end, normal, params)
+        r_override = dash_radii[di] if dash_radii is not None else None
+        verts, faces = generate_dash_mesh(start, end, normal, params, radius_override=r_override)
         if len(verts) == 0:
             continue
 
@@ -198,12 +226,18 @@ def build_animated_arrow_nodes(
     binary_data: bytearray,
     n_frames: int,
     params: ArrowParams | None = None,
+    speed_factors: list[list[float]] | None = None,
 ) -> list[int]:
     """Build per-frame arrow nodes in the glTF.
 
     Frame 0 visible (scale 1), others hidden (scale 0) — same pattern as
     wavefront animation. The caller is responsible for adding animation
     channels to synchronize visibility.
+
+    Args:
+        speed_factors: Per-frame, per-dash speed values in [0, 1].
+            0 = slow (thick), 1 = fast (thin). If provided, must have
+            the same structure as *all_frame_dashes*.
 
     Returns:
         List of node indices (one per frame).
@@ -212,6 +246,8 @@ def build_animated_arrow_nodes(
         bbox = mesh_vertices.max(axis=0) - mesh_vertices.min(axis=0)
         diag = float(np.linalg.norm(bbox))
         params = _auto_scale_params(diag)
+
+    max_r = params.max_radius if params.max_radius is not None else params.head_radius
 
     node_indices: list[int] = []
 
@@ -229,7 +265,13 @@ def build_animated_arrow_nodes(
 
     for fi in range(n_frames):
         dashes = all_frame_dashes[fi] if fi < len(all_frame_dashes) else []
-        mesh_data = build_frame_dashes(dashes, mesh_vertices, mesh_normals, params)
+        # Compute per-dash radii from speed factors
+        dash_radii: list[float] | None = None
+        if speed_factors is not None and fi < len(speed_factors):
+            sf = speed_factors[fi]
+            # speed=1 (fast) → 0.5*max_r (thin), speed=0 (slow) → 1.5*max_r (thick)
+            dash_radii = [max_r * (1.5 - s) for s in sf]
+        mesh_data = build_frame_dashes(dashes, mesh_vertices, mesh_normals, params, dash_radii=dash_radii)
 
         if mesh_data is None or len(mesh_data.vertices) == 0:
             # Empty frame — add a minimal placeholder node

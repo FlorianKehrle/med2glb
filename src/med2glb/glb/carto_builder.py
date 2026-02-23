@@ -121,9 +121,13 @@ def build_carto_animated_glb(
 
     # Compute animated arrow dashes if vectors enabled
     arrow_frame_dashes = None
+    arrow_speed_factors = None
     if vectors:
         _report("Tracing streamlines...")
-        from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
+        from med2glb.mesh.lat_vectors import (
+            trace_all_streamlines, compute_animated_dashes,
+            compute_face_gradients, compute_dash_speed_factors,
+        )
         streamlines = trace_all_streamlines(
             mesh_data.vertices, mesh_data.faces, lat_values,
             mesh_data.normals, target_count=300,
@@ -132,6 +136,13 @@ def build_carto_animated_glb(
             _report(f"Generating dash animation for {len(streamlines)} streamlines...")
             arrow_frame_dashes = compute_animated_dashes(
                 streamlines, n_frames=n_frames,
+            )
+            # Speed-dependent sizing
+            face_grads, face_centers, _ = compute_face_gradients(
+                mesh_data.vertices, mesh_data.faces, lat_values,
+            )
+            arrow_speed_factors = compute_dash_speed_factors(
+                arrow_frame_dashes, face_grads, face_centers,
             )
 
     # Build glTF with N frame nodes
@@ -221,6 +232,7 @@ def build_carto_animated_glb(
             arrow_frame_dashes,
             mesh_data.vertices, mesh_data.normals,
             gltf, binary_data, n_frames,
+            speed_factors=arrow_speed_factors,
         )
         # Add arrow nodes to the scene
         gltf.scenes[0].nodes.extend(arrow_node_indices)

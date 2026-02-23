@@ -6,8 +6,10 @@ import numpy as np
 import pytest
 
 from med2glb.mesh.lat_vectors import (
+    _smooth_streamline,
     build_face_adjacency,
     compute_animated_dashes,
+    compute_dash_speed_factors,
     compute_face_gradients,
     compute_vertex_gradients,
     generate_streamline_seeds,
@@ -240,3 +242,74 @@ class TestComputeAnimatedDashes:
             # Not identical (they've moved)
             if len(pos_0) == len(pos_1):
                 assert not np.allclose(pos_0, pos_1, atol=1e-6)
+
+
+class TestSmoothStreamline:
+    def test_short_path_unchanged(self):
+        """Paths with < 4 points should be returned as-is."""
+        path = [np.array([0, 0, 0.0]), np.array([1, 0, 0.0]), np.array([2, 0, 0.0])]
+        result = _smooth_streamline(path)
+        assert len(result) == 3
+        for a, b in zip(path, result):
+            assert np.allclose(a, b)
+
+    def test_smoothing_reduces_sharp_corners(self):
+        """A zigzag path should become smoother after filtering."""
+        path = [np.array([float(i), float(i % 2) * 2.0, 0.0]) for i in range(20)]
+        smoothed = _smooth_streamline(path, sigma=2.0)
+        assert len(smoothed) == len(path)
+        # Measure total angular variation: smoothed should have less
+        def _total_angle(pts):
+            total = 0.0
+            for i in range(1, len(pts) - 1):
+                d1 = pts[i] - pts[i - 1]
+                d2 = pts[i + 1] - pts[i]
+                n1 = np.linalg.norm(d1)
+                n2 = np.linalg.norm(d2)
+                if n1 > 1e-10 and n2 > 1e-10:
+                    cos_a = np.clip(np.dot(d1, d2) / (n1 * n2), -1, 1)
+                    total += np.arccos(cos_a)
+            return total
+        orig_pts = [np.array(p) for p in path]
+        assert _total_angle(smoothed) < _total_angle(orig_pts)
+
+    def test_preserves_general_direction(self):
+        """Smoothing should not reverse the path direction."""
+        path = [np.array([float(i), 0.5 * np.sin(i), 0.0]) for i in range(30)]
+        smoothed = _smooth_streamline(path, sigma=2.0)
+        # Start-to-end direction should be similar
+        orig_dir = path[-1] - path[0]
+        smooth_dir = smoothed[-1] - smoothed[0]
+        assert np.dot(orig_dir, smooth_dir) > 0  # same general direction
+
+
+class TestComputeDashSpeedFactors:
+    def test_output_structure(self, larger_mesh):
+        vertices, faces, normals, lat = larger_mesh
+        streamlines = trace_all_streamlines(
+            vertices, faces, lat, normals, target_count=5,
+        )
+        frames = compute_animated_dashes(streamlines, n_frames=5)
+        grads, centers, _ = compute_face_gradients(vertices, faces, lat)
+        speed_factors = compute_dash_speed_factors(frames, grads, centers)
+        assert len(speed_factors) == len(frames)
+        for sf, dashes in zip(speed_factors, frames):
+            assert len(sf) == len(dashes)
+
+    def test_values_in_unit_range(self, larger_mesh):
+        vertices, faces, normals, lat = larger_mesh
+        streamlines = trace_all_streamlines(
+            vertices, faces, lat, normals, target_count=5,
+        )
+        frames = compute_animated_dashes(streamlines, n_frames=5)
+        grads, centers, _ = compute_face_gradients(vertices, faces, lat)
+        speed_factors = compute_dash_speed_factors(frames, grads, centers)
+        for sf in speed_factors:
+            for val in sf:
+                assert 0.0 <= val <= 1.0 + 1e-10
+
+    def test_empty_frames(self):
+        grads = np.array([[1, 0, 0]], dtype=np.float64)
+        centers = np.array([[0, 0, 0]], dtype=np.float64)
+        speed_factors = compute_dash_speed_factors([[], []], grads, centers)
+        assert speed_factors == [[], []]
