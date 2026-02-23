@@ -561,6 +561,9 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                 description=f"Mapped {len(mesh_data.vertices):,} verts, "
                 f"{len(mesh_data.faces):,} faces")
 
+            active_lat = None
+            extra = None
+
             if do_animate and points:
                 from med2glb.glb.carto_builder import build_carto_animated_glb
                 from med2glb.io.carto_mapper import (
@@ -599,7 +602,6 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                 )
                 progress.update(task, completed=_total_steps)
             else:
-                extra = None
                 if do_vectors and points:
                     progress.update(task, description="Generating static LAT vectors...")
                     from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
@@ -640,8 +642,14 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                 build_glb([mesh_data], out_path, extra_meshes=extra)
                 progress.update(task, completed=_total_steps)
 
+            # Produce a _compressed variant if the file exceeds the size limit
             if config.max_size_mb > 0:
-                _enforce_size_limit(out_path, config.max_size_mb, config.compress_strategy, progress)
+                _build_compressed_carto_variant(
+                    out_path, config.max_size_mb, mesh_data,
+                    do_animate and bool(points), _n_frames, do_vectors,
+                    active_lat if (do_animate and points) else None,
+                    extra, progress,
+                )
 
         # Print summary
         file_size = out_path.stat().st_size / 1024
@@ -897,6 +905,9 @@ def _run_carto_pipeline(
                 description=f"Mapped {len(mesh_data.vertices):,} verts, "
                 f"{len(mesh_data.faces):,} faces")
 
+            active_lat = None
+            extra = None
+
             if animate and points:
                 from med2glb.glb.carto_builder import build_carto_animated_glb
                 from med2glb.io.carto_mapper import (
@@ -939,7 +950,6 @@ def _run_carto_pipeline(
                 progress.update(task, completed=_total_steps)
             else:
                 # Static GLB
-                extra = None
                 if vectors and points:
                     progress.update(task, description="Generating static LAT vectors...")
                     from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
@@ -981,9 +991,14 @@ def _run_carto_pipeline(
                 build_glb([mesh_data], out_path, extra_meshes=extra)
                 progress.update(task, completed=_total_steps)
 
-            # Step 4: Compress if needed
+            # Produce a _compressed variant if the file exceeds the size limit
             if max_size_mb > 0:
-                _enforce_size_limit(out_path, max_size_mb, compress_strategy, progress)
+                _build_compressed_carto_variant(
+                    out_path, max_size_mb, mesh_data,
+                    animate and bool(points), _n_frames, vectors,
+                    active_lat if (animate and points) else None,
+                    extra, progress,
+                )
 
         # Print summary
         file_size = out_path.stat().st_size / 1024
@@ -1315,6 +1330,108 @@ def _convert_series(
         err_console.print(f"[yellow]Warning: {w}[/yellow]")
 
 
+def _estimate_carto_faces_for_limit(
+    max_bytes: int,
+    n_frames: int = 1,
+    animated: bool = False,
+) -> int:
+    """Estimate the maximum face count for a CARTO GLB to stay under max_bytes.
+
+    CARTO GLBs store vertex positions (12B), normals (12B), colors (16B) per
+    vertex, plus 12B per face for indices.  Animated GLBs duplicate colors for
+    each frame.  A ~10% overhead accounts for glTF JSON, buffer alignment, and
+    animation channels.
+    """
+    overhead = 1.10  # 10% for JSON + headers + animation data
+    # verts ≈ faces × 0.5 (shared vertices in a triangle mesh)
+    vert_ratio = 0.5
+    if animated:
+        # Per-vertex: pos(12) + norm(12) + color(16) × n_frames
+        bytes_per_vert = 12 + 12 + 16 * n_frames
+    else:
+        bytes_per_vert = 12 + 12 + 16  # pos + norm + color
+    bytes_per_face = 12  # 3 × uint32
+    bytes_per_face_total = bytes_per_face + bytes_per_vert * vert_ratio
+    usable = max_bytes / overhead
+    return max(1000, int(usable / bytes_per_face_total))
+
+
+def _decimate_with_colors(mesh_data: "MeshData", target_faces: int) -> "MeshData":
+    """Decimate a MeshData while preserving vertex colors via KDTree resampling."""
+    from med2glb.mesh.processing import decimate, compute_normals
+    from scipy.spatial import KDTree
+
+    orig_verts = mesh_data.vertices.copy()
+    orig_colors = mesh_data.vertex_colors
+    result = decimate(mesh_data, target_faces=target_faces)
+    result = compute_normals(result)
+    if orig_colors is not None:
+        tree = KDTree(orig_verts)
+        _, idx = tree.query(result.vertices)
+        result.vertex_colors = orig_colors[idx]
+    return result
+
+
+def _build_compressed_carto_variant(
+    original_path: Path,
+    max_size_mb: int,
+    mesh_data: "MeshData",
+    is_animated: bool,
+    n_frames: int,
+    vectors: bool,
+    active_lat: "np.ndarray | None",
+    extra_meshes: "list[MeshData] | None",
+    progress: Progress,
+) -> None:
+    """Build a _compressed variant of a CARTO GLB if it exceeds the size limit.
+
+    The original full-quality file is kept untouched.  A second file with
+    ``_compressed`` in the name is created by rebuilding the GLB with a reduced
+    face count that should fit within *max_size_mb*.
+    """
+    max_bytes = max_size_mb * 1024 * 1024
+    if not original_path.exists() or original_path.stat().st_size <= max_bytes:
+        return
+
+    original_kb = original_path.stat().st_size / 1024
+    target_faces = _estimate_carto_faces_for_limit(
+        max_bytes, n_frames=n_frames if is_animated else 1, animated=is_animated,
+    )
+
+    # Don't bother if the target is already close to the current face count
+    if target_faces >= len(mesh_data.faces):
+        return
+
+    compressed_path = original_path.with_name(
+        original_path.stem + "_compressed" + original_path.suffix
+    )
+
+    task = progress.add_task(
+        f"Building compressed variant ({original_kb:.0f} KB > {max_size_mb} MB)...",
+        total=None,
+    )
+
+    decimated = _decimate_with_colors(mesh_data, target_faces)
+
+    if is_animated and active_lat is not None:
+        from med2glb.glb.carto_builder import build_carto_animated_glb
+        build_carto_animated_glb(
+            decimated, active_lat, compressed_path,
+            target_faces=target_faces,
+            vectors=vectors,
+        )
+    else:
+        from med2glb.glb.builder import build_glb
+        build_glb([decimated], compressed_path, extra_meshes=extra_meshes)
+
+    new_kb = compressed_path.stat().st_size / 1024
+    progress.update(
+        task,
+        description=f"Compressed variant: {new_kb:.0f} KB ({compressed_path.name})",
+    )
+    progress.remove_task(task)
+
+
 def _enforce_size_limit(
     path: Path,
     max_size_mb: int,
@@ -1323,11 +1440,10 @@ def _enforce_size_limit(
 ) -> None:
     """Compress a GLB file if it exceeds the size limit.
 
-    Keeps the original file and writes the compressed version with a
-    ``_compressed`` suffix so the user can compare quality.
+    Tries texture-based compression (for DICOM GLBs with textures).
+    For CARTO GLBs (vertex-color only), use _build_compressed_carto_variant
+    instead — this function only handles texture-based strategies.
     """
-    import shutil
-
     max_bytes = max_size_mb * 1024 * 1024
     if not path.exists() or path.stat().st_size <= max_bytes:
         return
@@ -1340,12 +1456,13 @@ def _enforce_size_limit(
         total=None,
     )
 
-    compressed_path = path.with_stem(path.stem + "_compressed")
-    shutil.copy2(str(path), str(compressed_path))
-    constrain_glb_size(compressed_path, max_bytes, strategy=strategy)
+    applied = constrain_glb_size(path, max_bytes, strategy=strategy)
 
-    new_kb = compressed_path.stat().st_size / 1024
-    progress.update(task, description=f"Compressed: {original_kb:.0f} KB → {new_kb:.0f} KB ({compressed_path.name})")
+    new_kb = path.stat().st_size / 1024
+    if applied and new_kb < original_kb:
+        progress.update(task, description=f"Compressed: {original_kb:.0f} KB → {new_kb:.0f} KB")
+    else:
+        progress.update(task, description=f"Size {original_kb:.0f} KB (no further compression possible)")
     progress.remove_task(task)
 
 
