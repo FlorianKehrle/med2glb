@@ -257,6 +257,7 @@ def write_accessor(
     comp_type: int,
     acc_type: str,
     with_minmax: bool = False,
+    normalized: bool = False,
 ) -> int:
     """Write array data as a bufferView + accessor. Returns accessor index."""
     raw = data_array.tobytes()
@@ -275,6 +276,8 @@ def write_accessor(
         count=len(data_array),
         type=acc_type,
     )
+    if normalized:
+        kwargs["normalized"] = True
     if with_minmax:
         mx = data_array.max(axis=0).tolist()
         mn = data_array.min(axis=0).tolist()

@@ -46,12 +46,13 @@ def _teardrop_radius(t: float, max_r: float) -> float:
 def _auto_scale_params(bbox_diagonal: float) -> ArrowParams:
     """Scale arrow geometry based on mesh bounding box."""
     scale = bbox_diagonal / 100.0
+    max_r = 0.12 * scale
     return ArrowParams(
-        shaft_radius=0.15 * scale,
-        head_radius=0.25 * scale,
-        head_length=0.4 * scale,
-        max_radius=0.25 * scale,
-        normal_offset=0.3 * scale,
+        shaft_radius=0.08 * scale,
+        head_radius=max_r,
+        head_length=0.3 * scale,
+        max_radius=max_r,
+        normal_offset=max_r * 1.5,
     )
 
 
@@ -273,8 +274,8 @@ def build_animated_arrow_nodes(
             keep = [s >= 0.15 for s in sf]
             dashes = [d for d, k in zip(dashes, keep) if k]
             sf = [s for s, k in zip(sf, keep) if k]
-            # speed=1 (fast) → 0.7*max_r (thin), speed=0 (slow) → 1.3*max_r (thick)
-            dash_radii = [max_r * (1.3 - 0.6 * s) for s in sf]
+            # speed=1 (fast) → 0.8*max_r (thin), speed=0 (slow) → 1.1*max_r (thick)
+            dash_radii = [max_r * (1.1 - 0.3 * s) for s in sf]
         mesh_data = build_frame_dashes(dashes, mesh_vertices, mesh_normals, params, dash_radii=dash_radii)
 
         if mesh_data is None or len(mesh_data.vertices) == 0:

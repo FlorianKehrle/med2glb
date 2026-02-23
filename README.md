@@ -145,6 +145,11 @@ When a CARTO export contains multiple meshes (e.g. LA, RA), an interactive selec
 
 When enabled, animated streamline arrows are overlaid on the mesh showing the direction of electrical conduction derived from the LAT gradient field. The arrows flow along curved paths following the gradient, with dashes that advance each frame in sync with the excitation ring animation. In static mode, a single frame of arrows is rendered as an extra mesh node.
 
+In the interactive wizard, the vectors prompt offers three choices:
+- **yes** — produce both with-vectors and without-vectors variants (for comparison)
+- **no** — no vector output
+- **only** — produce only the animated+vectors variant (no static, no non-vector files)
+
 ## Interactive Wizard
 
 When run without any pipeline flags (no `--method`, `--coloring`, `--animate`, etc.), med2glb analyzes the input and launches an interactive wizard:

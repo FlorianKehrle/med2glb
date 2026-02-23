@@ -160,7 +160,7 @@ class CartoConfig:
     subdivide: int = 2
     animate: bool = True       # default: both static + animated
     static: bool = True        # default: both
-    vectors: bool = False
+    vectors: str = "no"  # "no", "yes" (both with/without), "only" (vectors only)
     target_faces: int = 80000
     max_size_mb: int = 99
     compress_strategy: str = "draco"

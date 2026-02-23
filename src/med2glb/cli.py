@@ -273,7 +273,7 @@ def main(
                     coloring=coloring,
                     subdivide=subdivide,
                     animate=animate,
-                    vectors=vectors,
+                    vectors="yes" if vectors else "no",
                     max_size_mb=max_size,
                     compress_strategy=compress,
                     target_faces=faces,
@@ -509,18 +509,26 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
     carto_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build list of (mesh_idx, animate_flag, vectors_flag) jobs.
-    # When vectors are enabled, produce BOTH with and without vectors for each mode,
-    # so the user can compare and choose.
+    # vectors="yes": produce BOTH with and without vectors (user can compare).
+    # vectors="only": produce ONLY the animated+vectors variant.
+    # vectors="no": no vector variants at all.
+    has_vectors = config.vectors in ("yes", "only")
+    vectors_only = config.vectors == "only"
     jobs: list[tuple[int, bool, bool]] = []
-    for mesh_idx in selected:
-        if config.static:
-            jobs.append((mesh_idx, False, False))
-            if config.vectors:
-                jobs.append((mesh_idx, False, True))
-        if config.animate:
-            jobs.append((mesh_idx, True, False))
-            if config.vectors:
-                jobs.append((mesh_idx, True, True))
+    if vectors_only:
+        # Only animated+vectors — nothing else
+        for mesh_idx in selected:
+            jobs.append((mesh_idx, True, True))
+    else:
+        for mesh_idx in selected:
+            if config.static:
+                jobs.append((mesh_idx, False, False))
+                if has_vectors:
+                    jobs.append((mesh_idx, False, True))
+            if config.animate:
+                jobs.append((mesh_idx, True, False))
+                if has_vectors:
+                    jobs.append((mesh_idx, True, True))
 
     for mesh_idx, do_animate, do_vectors in jobs:
         mesh = study.meshes[mesh_idx]
@@ -648,7 +656,7 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                                 keep = [s >= 0.15 for s in sf]
                                 frame_dashes = [d for d, k in zip(dashes[0], keep) if k]
                                 sf = [s for s, k in zip(sf, keep) if k]
-                                dash_radii = [max_r * (1.3 - 0.6 * s) for s in sf]
+                                dash_radii = [max_r * (1.1 - 0.3 * s) for s in sf]
                             else:
                                 frame_dashes = dashes[0]
                                 dash_radii = None
@@ -798,7 +806,7 @@ def _run_carto_pipeline(
     coloring: str,
     subdivide: int,
     animate: bool,
-    vectors: bool,
+    vectors: str,
     max_size_mb: int,
     compress_strategy: str,
     target_faces: int,
@@ -892,7 +900,8 @@ def _run_carto_pipeline(
 
         # Build descriptive filename: <structure>_<coloring>[_animated][_vectors].glb
         anim_suffix = "_animated" if (animate and points) else ""
-        vec_suffix = "_vectors" if vectors else ""
+        _has_vectors = vectors in ("yes", "only")
+        vec_suffix = "_vectors" if _has_vectors else ""
         glb_name = f"{mesh.structure_name}_{coloring}{anim_suffix}{vec_suffix}.glb"
         out_path = carto_output_dir / glb_name
 
@@ -906,7 +915,7 @@ def _run_carto_pipeline(
         if animate and points:
             # Steps: map vertices + subdivide LAT + map LAT + N frames + assemble
             _total_steps = 3 + _n_frames + 1
-        elif vectors and points:
+        elif _has_vectors and points:
             # Steps: map vertices + vectors + build GLB
             _total_steps = 3
         else:
@@ -965,13 +974,13 @@ def _run_carto_pipeline(
                 build_carto_animated_glb(
                     mesh_data, active_lat, out_path,
                     target_faces=target_faces,
-                    vectors=vectors,
+                    vectors=_has_vectors,
                     progress=_anim_progress,
                 )
                 progress.update(task, completed=_total_steps)
             else:
                 # Static GLB
-                if vectors and points:
+                if _has_vectors and points:
                     progress.update(task, description="Generating static LAT vectors...")
                     from med2glb.mesh.lat_vectors import (
                         trace_all_streamlines, compute_animated_dashes,
@@ -1018,7 +1027,7 @@ def _run_carto_pipeline(
                                 keep = [s >= 0.15 for s in sf]
                                 frame_dashes = [d for d, k in zip(dashes[0], keep) if k]
                                 sf = [s for s, k in zip(sf, keep) if k]
-                                dash_radii = [max_r * (1.3 - 0.6 * s) for s in sf]
+                                dash_radii = [max_r * (1.1 - 0.3 * s) for s in sf]
                             else:
                                 frame_dashes = dashes[0]
                                 dash_radii = None
@@ -1037,7 +1046,7 @@ def _run_carto_pipeline(
             if max_size_mb > 0:
                 _build_compressed_carto_variant(
                     out_path, max_size_mb, mesh_data,
-                    animate and bool(points), _n_frames, vectors,
+                    animate and bool(points), _n_frames, _has_vectors,
                     active_lat if (animate and points) else None,
                     extra, progress,
                 )
@@ -1081,9 +1090,9 @@ def _run_carto_pipeline(
         anim_desc = "No"
         if animate and points:
             anim_desc = "Yes (excitation ring)"
-            if vectors:
+            if _has_vectors:
                 anim_desc += " + LAT vectors"
-        elif vectors and points:
+        elif _has_vectors and points:
             anim_desc = "No (static LAT vectors)"
         console.print(f"  Animated:   {anim_desc}")
         console.print(f"  Output:     {out_path}")
@@ -1457,8 +1466,13 @@ def _build_compressed_carto_variant(
 
     if is_animated and active_lat is not None:
         from med2glb.glb.carto_builder import build_carto_animated_glb
+        from scipy.spatial import KDTree
+        # Resample LAT values to decimated vertex positions
+        tree = KDTree(mesh_data.vertices)
+        _, idx = tree.query(decimated.vertices)
+        decimated_lat = active_lat[idx]
         build_carto_animated_glb(
-            decimated, active_lat, compressed_path,
+            decimated, decimated_lat, compressed_path,
             target_faces=target_faces,
             vectors=vectors,
         )

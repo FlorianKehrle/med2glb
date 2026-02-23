@@ -428,7 +428,7 @@ def _interpolate_along(
     total = arc_lengths[-1]
     if total < 1e-10:
         return None
-    s = s % total  # wrap around
+    s = max(0.0, min(s, total))  # clamp — never wrap back to start
     idx = np.searchsorted(arc_lengths, s, side="right") - 1
     idx = max(0, min(idx, len(points) - 2))
     seg_start = arc_lengths[idx]

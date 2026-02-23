@@ -160,7 +160,7 @@ def run_carto_wizard(
     preset_coloring: str | None = None,
     preset_animate: bool | None = None,
     preset_static: bool | None = None,
-    preset_vectors: bool | None = None,
+    preset_vectors: str | None = None,
     preset_subdivide: int | None = None,
     preset_meshes: str | None = None,
 ) -> CartoConfig:
@@ -269,17 +269,17 @@ def run_carto_wizard(
             prompt_label = f"LAT conduction vectors [dim]({vec_quality.reason})[/dim]"
         vec_choice = Prompt.ask(
             prompt_label,
-            choices=["yes", "no"],
+            choices=["yes", "no", "only"],
             default=default_vec,
             console=console,
         )
-        vectors = vec_choice == "yes"
+        vectors = vec_choice
     elif not interactive and coloring == "lat":
-        vectors = vec_quality.suitable
-        if not vectors:
+        vectors = "yes" if vec_quality.suitable else "no"
+        if vectors == "no":
             logger.info(f"Skipping LAT vectors: {vec_quality.reason}")
     else:
-        vectors = False
+        vectors = "no"
 
     # --- Subdivision ---
     if preset_subdivide is not None:
@@ -303,7 +303,7 @@ def run_carto_wizard(
     mode_str = ("static + animated" if static and animate
                 else "animated" if animate else "static")
     console.print(f"  Output:     {mode_str}")
-    console.print(f"  Vectors:    {'yes' if vectors else 'no'}")
+    console.print(f"  Vectors:    {vectors}")
     console.print(f"  Subdivide:  {subdivide}")
 
     return CartoConfig(
