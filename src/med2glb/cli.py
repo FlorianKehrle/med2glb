@@ -642,9 +642,18 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                             speed_factors = compute_dash_speed_factors(
                                 dashes, face_grads, face_centers,
                             )
-                            dash_radii = [max_r * (1.3 - 0.6 * s) for s in speed_factors[0]] if speed_factors and speed_factors[0] else None
+                            sf = speed_factors[0] if speed_factors and speed_factors[0] else None
+                            if sf is not None:
+                                # Cull low-gradient dashes and compute per-dash radii
+                                keep = [s >= 0.15 for s in sf]
+                                frame_dashes = [d for d, k in zip(dashes[0], keep) if k]
+                                sf = [s for s, k in zip(sf, keep) if k]
+                                dash_radii = [max_r * (1.3 - 0.6 * s) for s in sf]
+                            else:
+                                frame_dashes = dashes[0]
+                                dash_radii = None
                             arrow_mesh = build_frame_dashes(
-                                dashes[0], mesh_data.vertices, mesh_data.normals, params,
+                                frame_dashes, mesh_data.vertices, mesh_data.normals, params,
                                 dash_radii=dash_radii,
                             )
                             if arrow_mesh is not None:
@@ -1003,9 +1012,18 @@ def _run_carto_pipeline(
                             speed_factors = compute_dash_speed_factors(
                                 dashes, face_grads, face_centers,
                             )
-                            dash_radii = [max_r * (1.3 - 0.6 * s) for s in speed_factors[0]] if speed_factors and speed_factors[0] else None
+                            sf = speed_factors[0] if speed_factors and speed_factors[0] else None
+                            if sf is not None:
+                                # Cull low-gradient dashes and compute per-dash radii
+                                keep = [s >= 0.15 for s in sf]
+                                frame_dashes = [d for d, k in zip(dashes[0], keep) if k]
+                                sf = [s for s, k in zip(sf, keep) if k]
+                                dash_radii = [max_r * (1.3 - 0.6 * s) for s in sf]
+                            else:
+                                frame_dashes = dashes[0]
+                                dash_radii = None
                             arrow_mesh = build_frame_dashes(
-                                dashes[0], mesh_data.vertices, mesh_data.normals, params,
+                                frame_dashes, mesh_data.vertices, mesh_data.normals, params,
                                 dash_radii=dash_radii,
                             )
                             if arrow_mesh is not None:

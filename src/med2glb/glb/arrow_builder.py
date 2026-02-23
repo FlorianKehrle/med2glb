@@ -265,10 +265,14 @@ def build_animated_arrow_nodes(
 
     for fi in range(n_frames):
         dashes = all_frame_dashes[fi] if fi < len(all_frame_dashes) else []
-        # Compute per-dash radii from speed factors
+        # Compute per-dash radii from speed factors and cull low-gradient dashes
         dash_radii: list[float] | None = None
         if speed_factors is not None and fi < len(speed_factors):
             sf = speed_factors[fi]
+            # Drop dashes in near-zero gradient areas (direction is noise)
+            keep = [s >= 0.15 for s in sf]
+            dashes = [d for d, k in zip(dashes, keep) if k]
+            sf = [s for s, k in zip(sf, keep) if k]
             # speed=1 (fast) → 0.7*max_r (thin), speed=0 (slow) → 1.3*max_r (thick)
             dash_radii = [max_r * (1.3 - 0.6 * s) for s in sf]
         mesh_data = build_frame_dashes(dashes, mesh_vertices, mesh_normals, params, dash_radii=dash_radii)
