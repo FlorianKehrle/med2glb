@@ -534,16 +534,25 @@ def compute_dash_speed_factors(
 ) -> list[list[float]]:
     """Compute per-dash speed factors from the local gradient magnitude.
 
-    For each dash, looks up the nearest face gradient magnitude and normalizes
-    to [0, 1] where 0 = slowest and 1 = fastest.
+    Uses robust percentile-based normalization (5th–95th) so that outlier
+    faces with extreme gradients don't skew the entire distribution.
+    Values are clamped to [0, 1] where 0 = slowest and 1 = fastest.
 
     Returns:
         Nested list parallel to *frame_dashes*: speed_factors[frame][dash].
     """
     grad_mag = np.linalg.norm(face_gradients, axis=1)
-    mag_max = float(grad_mag.max()) if len(grad_mag) > 0 else 1.0
-    if mag_max < 1e-12:
-        mag_max = 1.0
+
+    # Filter to non-zero magnitudes for percentile computation
+    nonzero = grad_mag[grad_mag > 1e-12]
+    if len(nonzero) == 0:
+        return [[] for _ in frame_dashes]
+
+    p5 = float(np.percentile(nonzero, 5))
+    p95 = float(np.percentile(nonzero, 95))
+    prange = p95 - p5
+    if prange < 1e-12:
+        prange = 1.0
 
     tree = KDTree(face_centers)
 
@@ -554,7 +563,7 @@ def compute_dash_speed_factors(
             continue
         midpoints = np.array([(s + e) / 2.0 for s, e in dashes])
         _, indices = tree.query(midpoints)
-        speeds = grad_mag[indices] / mag_max
+        speeds = np.clip((grad_mag[indices] - p5) / prange, 0.0, 1.0)
         result.append(speeds.tolist())
 
     return result

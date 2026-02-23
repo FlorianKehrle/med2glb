@@ -269,8 +269,8 @@ def build_animated_arrow_nodes(
         dash_radii: list[float] | None = None
         if speed_factors is not None and fi < len(speed_factors):
             sf = speed_factors[fi]
-            # speed=1 (fast) → 0.5*max_r (thin), speed=0 (slow) → 1.5*max_r (thick)
-            dash_radii = [max_r * (1.5 - s) for s in sf]
+            # speed=1 (fast) → 0.7*max_r (thin), speed=0 (slow) → 1.3*max_r (thick)
+            dash_radii = [max_r * (1.3 - 0.6 * s) for s in sf]
         mesh_data = build_frame_dashes(dashes, mesh_vertices, mesh_normals, params, dash_radii=dash_radii)
 
         if mesh_data is None or len(mesh_data.vertices) == 0:
