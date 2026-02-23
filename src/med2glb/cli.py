@@ -459,40 +459,229 @@ def _run_pipeline(
 
 
 def _run_carto_from_config(config: "CartoConfig") -> None:
-    """Execute the CARTO pipeline from a wizard-produced config."""
-    from med2glb.core.types import CartoConfig
+    """Execute the CARTO pipeline from a wizard-produced config.
 
-    meshes_to_process = config.selected_mesh_indices
+    Loads the CARTO study once and produces all requested outputs (static
+    and/or animated) for each selected mesh without re-prompting.
+    """
+    from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
+    from med2glb.io.carto_reader import load_carto_study, _find_export_dir
+    from med2glb.glb.builder import build_glb
 
-    # Run static output
-    if config.static:
-        _run_carto_pipeline(
-            input_path=config.input_path,
-            output=config.input_path / "glb" / "output.glb",  # placeholder, will be overwritten per mesh
-            coloring=config.coloring,
-            subdivide=config.subdivide,
-            animate=False,
-            vectors=config.vectors,
-            max_size_mb=config.max_size_mb,
-            compress_strategy=config.compress_strategy,
-            target_faces=config.target_faces,
-            verbose=config.verbose,
+    start_time = time.time()
+
+    # Pre-count mesh files for progress
+    _export_dir = _find_export_dir(config.input_path)
+    _n_mesh_files = len(list(_export_dir.glob("*.mesh")))
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=20),
+        MofNCompleteColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Loading CARTO data...", total=_n_mesh_files)
+
+        def _load_progress(desc: str, current: int, total: int) -> None:
+            progress.update(task, description=desc, completed=current, total=total)
+
+        study = load_carto_study(config.input_path, progress=_load_progress)
+        progress.update(
+            task,
+            description=f"Loaded {_carto_version_label(study.version)}: "
+            f"{len(study.meshes)} mesh(es), "
+            f"{sum(len(p) for p in study.points.values())} points",
+            completed=_n_mesh_files,
+        )
+        progress.remove_task(task)
+
+    if not study.meshes:
+        err_console.print("[red]No meshes found in CARTO export.[/red]")
+        raise typer.Exit(code=1)
+
+    # Use wizard's mesh selection directly — no re-prompting
+    selected = config.selected_mesh_indices
+    if selected is None:
+        selected = list(range(len(study.meshes)))
+
+    carto_output_dir = config.input_path / "glb"
+    carto_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build list of (mesh_idx, animate_flag) jobs
+    jobs: list[tuple[int, bool]] = []
+    for mesh_idx in selected:
+        if config.static:
+            jobs.append((mesh_idx, False))
+        if config.animate:
+            jobs.append((mesh_idx, True))
+
+    for mesh_idx, do_animate in jobs:
+        mesh = study.meshes[mesh_idx]
+        points = study.points.get(mesh.structure_name)
+
+        anim_suffix = "_animated" if (do_animate and points) else ""
+        vec_suffix = "_vectors" if config.vectors else ""
+        glb_name = f"{mesh.structure_name}_{config.coloring}{anim_suffix}{vec_suffix}.glb"
+        out_path = carto_output_dir / glb_name
+
+        console.print(
+            f"\n[bold]Converting: {mesh.structure_name}[/bold] "
+            f"({config.coloring} coloring"
+            f"{', animated' if do_animate else ', static'}"
+            f"{', vectors' if config.vectors else ''})"
         )
 
-    # Run animated output
-    if config.animate:
-        _run_carto_pipeline(
-            input_path=config.input_path,
-            output=config.input_path / "glb" / "output.glb",
-            coloring=config.coloring,
-            subdivide=config.subdivide,
-            animate=True,
-            vectors=config.vectors,
-            max_size_mb=config.max_size_mb,
-            compress_strategy=config.compress_strategy,
-            target_faces=config.target_faces,
-            verbose=config.verbose,
-        )
+        _n_frames = 30
+        if do_animate and points:
+            _total_steps = 3 + _n_frames + 1
+        elif config.vectors and points:
+            _total_steps = 3
+        else:
+            _total_steps = 2
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=20),
+            MofNCompleteColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Subdividing & mapping vertices...", total=_total_steps)
+            mesh_data = carto_mesh_to_mesh_data(
+                mesh, points, coloring=config.coloring, subdivide=config.subdivide,
+            )
+            progress.update(task, advance=1,
+                description=f"Mapped {len(mesh_data.vertices):,} verts, "
+                f"{len(mesh_data.faces):,} faces")
+
+            if do_animate and points:
+                from med2glb.glb.carto_builder import build_carto_animated_glb
+                from med2glb.io.carto_mapper import (
+                    map_points_to_vertices,
+                    map_points_to_vertices_idw,
+                    interpolate_sparse_values,
+                    subdivide_carto_mesh,
+                )
+
+                anim_mesh = mesh
+                if config.subdivide > 0:
+                    progress.update(task, description="Subdividing mesh for LAT extraction...")
+                    anim_mesh = subdivide_carto_mesh(mesh, iterations=config.subdivide)
+                progress.update(task, advance=1)
+
+                progress.update(task, description="Mapping LAT values...")
+                if config.subdivide > 0:
+                    lat_values = map_points_to_vertices_idw(anim_mesh, points, field="lat")
+                else:
+                    lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
+                    lat_values = interpolate_sparse_values(anim_mesh, lat_values)
+                active_mask = anim_mesh.group_ids != -1000000
+                active_lat = lat_values[active_mask]
+                progress.update(task, advance=1)
+
+                def _anim_progress(desc: str, current: int, _total: int) -> None:
+                    progress.update(task, description=desc,
+                                    completed=3 + current + 1)
+
+                progress.update(task, description="Building excitation ring animation...")
+                build_carto_animated_glb(
+                    mesh_data, active_lat, out_path,
+                    target_faces=config.target_faces,
+                    vectors=config.vectors,
+                    progress=_anim_progress,
+                )
+                progress.update(task, completed=_total_steps)
+            else:
+                extra = None
+                if config.vectors and points:
+                    progress.update(task, description="Generating static LAT vectors...")
+                    from med2glb.mesh.lat_vectors import trace_all_streamlines, compute_animated_dashes
+                    from med2glb.glb.arrow_builder import build_frame_dashes, ArrowParams, _auto_scale_params
+                    from med2glb.io.carto_mapper import (
+                        map_points_to_vertices,
+                        map_points_to_vertices_idw,
+                        interpolate_sparse_values,
+                        subdivide_carto_mesh,
+                    )
+                    vec_mesh = mesh
+                    if config.subdivide > 0:
+                        vec_mesh = subdivide_carto_mesh(mesh, iterations=config.subdivide)
+                    if config.subdivide > 0:
+                        vec_lat = map_points_to_vertices_idw(vec_mesh, points, field="lat")
+                    else:
+                        vec_lat = map_points_to_vertices(vec_mesh, points, field="lat")
+                        vec_lat = interpolate_sparse_values(vec_mesh, vec_lat)
+                    active_mask = vec_mesh.group_ids != -1000000
+                    vec_lat_active = vec_lat[active_mask]
+
+                    streamlines = trace_all_streamlines(
+                        mesh_data.vertices, mesh_data.faces, vec_lat_active,
+                        mesh_data.normals, target_count=300,
+                    )
+                    if streamlines:
+                        dashes = compute_animated_dashes(streamlines, n_frames=1)
+                        if dashes and dashes[0]:
+                            bbox = mesh_data.vertices.max(axis=0) - mesh_data.vertices.min(axis=0)
+                            params = _auto_scale_params(float(np.linalg.norm(bbox)))
+                            arrow_mesh = build_frame_dashes(
+                                dashes[0], mesh_data.vertices, mesh_data.normals, params,
+                            )
+                            if arrow_mesh is not None:
+                                extra = [arrow_mesh]
+
+                progress.update(task, description="Building GLB...")
+                build_glb([mesh_data], out_path, extra_meshes=extra)
+                progress.update(task, completed=_total_steps)
+
+            if config.max_size_mb > 0:
+                _enforce_size_limit(out_path, config.max_size_mb, config.compress_strategy, progress)
+
+        # Print summary
+        file_size = out_path.stat().st_size / 1024
+        elapsed = time.time() - start_time
+        n_total_verts = len(mesh.vertices)
+        n_active_verts = int(np.sum(mesh.group_ids != -1000000))
+
+        clamp_info = ""
+        if config.coloring == "bipolar":
+            clamp_info = "0.05 – 1.5 mV"
+        elif config.coloring == "unipolar":
+            clamp_info = "3.0 – 10.0 mV"
+        elif config.coloring == "lat" and points:
+            valid_lats = [p.lat for p in points if not math.isnan(p.lat)]
+            if valid_lats:
+                clamp_info = f"{min(valid_lats):.0f} – {max(valid_lats):.0f} ms (auto)"
+
+        console.print(f"\n[green]CARTO conversion complete![/green]")
+        console.print(f"  System:     {_carto_version_label(study.version)}")
+        if study.study_name:
+            console.print(f"  Study:      {study.study_name}")
+        console.print(f"  Map:        {mesh.structure_name}")
+        console.print(f"  Coloring:   {config.coloring}")
+        if config.subdivide > 0:
+            console.print(f"  Subdivide:  level {config.subdivide} (~{4**config.subdivide}x face increase)")
+        if clamp_info:
+            console.print(f"  Color range: {clamp_info}")
+
+        mesh_points = points or []
+        point_stats = _carto_point_stats(mesh_points)
+        for label, value in point_stats.items():
+            console.print(f"  {label + ':':14s}{value}")
+
+        console.print(f"  Vertices:   {len(mesh_data.vertices):,} active / {n_total_verts:,} total")
+        console.print(f"  Faces:      {len(mesh_data.faces):,}")
+        anim_desc = "No"
+        if do_animate and points:
+            anim_desc = "Yes (excitation ring)"
+            if config.vectors:
+                anim_desc += " + LAT vectors"
+        elif config.vectors and points:
+            anim_desc = "No (static LAT vectors)"
+        console.print(f"  Animated:   {anim_desc}")
+        console.print(f"  Output:     {out_path}")
+        console.print(f"  Size:       {file_size:.1f} KB")
+        console.print(f"  Time:       {elapsed:.1f}s")
 
 
 def _run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
