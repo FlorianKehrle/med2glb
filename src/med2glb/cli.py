@@ -216,7 +216,7 @@ def main(
     # --- Interactive wizard ---
     # If no pipeline flags were explicitly set and we have a TTY, run the wizard
     from med2glb.cli_wizard import is_interactive as _is_interactive
-    if _is_interactive() and not _has_pipeline_flags(ctx) and output is None:
+    if _is_interactive() and not _has_pipeline_flags(ctx):
         try:
             from med2glb.cli_wizard import analyze_input, run_carto_wizard, run_dicom_wizard
             detected = analyze_input(input_path)
@@ -225,15 +225,21 @@ def main(
                 config = run_carto_wizard(
                     detected.carto_study, input_path, console,
                 )
+                if output is not None:
+                    base = output if output.suffix == "" else output.parent
+                    config.output_dir = base / "glb"
                 _run_carto_from_config(config)
                 return
             elif detected.kind == "dicom" and detected.series_list is not None:
                 dicom_config = run_dicom_wizard(
                     detected.series_list, input_path, console,
                 )
-                # Derive output path
                 stem = input_path.stem if input_path.is_file() else input_path.name
-                glb_dir = (input_path if input_path.is_dir() else input_path.parent) / "glb"
+                if output is not None:
+                    base = output if output.suffix == "" else output.parent
+                    glb_dir = base / "glb"
+                else:
+                    glb_dir = (input_path if input_path.is_dir() else input_path.parent) / "glb"
                 out_path = glb_dir / f"{stem}.glb"
                 _run_dicom_from_config(dicom_config, out_path)
                 return
@@ -505,7 +511,7 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
     if selected is None:
         selected = list(range(len(study.meshes)))
 
-    carto_output_dir = config.input_path / "glb"
+    carto_output_dir = config.output_dir if config.output_dir is not None else config.input_path / "glb"
     carto_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build list of (mesh_idx, animate_flag, vectors_flag) jobs.

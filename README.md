@@ -313,7 +313,7 @@ Options:
   --version               Show version and exit
 ```
 
-Passing any pipeline flag (`--method`, `--coloring`, `--animate`, `--vectors`, etc.) or `-o` bypasses the interactive wizard and runs with the specified settings directly.
+Passing any pipeline flag (`--method`, `--coloring`, `--animate`, `--vectors`, etc.) bypasses the interactive wizard and runs with the specified settings directly. The `-o` flag can be combined with the wizard to control the output location.
 
 ## Output Formats
 
