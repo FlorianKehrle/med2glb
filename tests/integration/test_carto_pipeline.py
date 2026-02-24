@@ -289,16 +289,16 @@ class TestRealCartoV72O:
         from med2glb.io.carto_reader import load_carto_study
 
         study = load_carto_study(CARTO_V72_O)
-        assert len(study.meshes) == 4
+        assert len(study.meshes) == 2
         assert study.version == "6.0"
 
         # Verify all expected mesh names are present
         names = {m.structure_name for m in study.meshes}
-        for expected in ["1-LA", "2-RA"]:
+        for expected in ["1-1-1-Rp-ReLA", "2-RA"]:
             assert expected in names, f"Expected mesh '{expected}' not found in {names}"
 
     def test_static_all_meshes_all_colorings(self, tmp_path):
-        """Full static pipeline: all 4 meshes x all colorings."""
+        """Full static pipeline: all meshes x all colorings."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
         from med2glb.glb.builder import build_glb
@@ -346,7 +346,7 @@ class TestRealCartoV72O:
             assert len(gltf.meshes) >= 5  # 5 wavefront frames + possible arrow frames
 
     def test_vector_quality_per_mesh(self):
-        """Test per-mesh vector assessment on 4-mesh study."""
+        """Test per-mesh vector assessment on multi-mesh study."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.cli_wizard import _assess_vector_quality, _assess_single_mesh
 

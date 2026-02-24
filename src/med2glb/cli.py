@@ -228,6 +228,25 @@ def main(
             detected = analyze_input(input_path)
 
             if detected.kind == "carto" and detected.carto_study is not None:
+                # Check for multiple CARTO exports (auto-batch)
+                from med2glb.io.carto_reader import find_carto_subdirectories, load_carto_study
+                subdirs = find_carto_subdirectories(input_path)
+                if len(subdirs) > 1:
+                    # Multiple exports found — auto-switch to batch wizard
+                    from med2glb.cli_wizard import run_batch_carto_wizard
+                    studies = []
+                    for d in subdirs:
+                        try:
+                            studies.append((d, load_carto_study(d)))
+                        except Exception as e:
+                            console.print(f"[yellow]Skipping {d.name}: {e}[/yellow]")
+                    if studies:
+                        configs = run_batch_carto_wizard(studies, console)
+                        for i, cfg in enumerate(configs, 1):
+                            console.print(f"\n[bold]=== Dataset {i}/{len(configs)}: {cfg.input_path.name} ===[/bold]")
+                            _run_carto_from_config(cfg)
+                        return
+                # Single CARTO export — normal wizard
                 config = run_carto_wizard(
                     detected.carto_study, input_path, console,
                 )
@@ -331,6 +350,27 @@ def main(
         if input_path.is_dir():
             from med2glb.io.carto_reader import detect_carto_directory
             if detect_carto_directory(input_path):
+                # Check for multiple exports (auto-batch)
+                from med2glb.io.carto_reader import find_carto_subdirectories
+                subdirs = find_carto_subdirectories(input_path)
+                if len(subdirs) > 1:
+                    console.print(f"[bold]Auto-batch: {len(subdirs)} CARTO export(s) found[/bold]")
+                    for i, subdir in enumerate(subdirs, 1):
+                        console.print(f"\n[bold]=== Dataset {i}/{len(subdirs)}: {subdir.name} ===[/bold]")
+                        sub_output = subdir / "glb" / "output.glb"
+                        _run_carto_pipeline(
+                            input_path=subdir,
+                            output=sub_output,
+                            coloring=coloring,
+                            subdivide=subdivide,
+                            animate=animate,
+                            vectors="yes" if vectors else "no",
+                            max_size_mb=max_size,
+                            compress_strategy=compress,
+                            target_faces=faces,
+                            verbose=verbose,
+                        )
+                    return
                 _run_carto_pipeline(
                     input_path=input_path,
                     output=output,
