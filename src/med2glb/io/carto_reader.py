@@ -28,19 +28,18 @@ def detect_carto_directory(path: Path) -> bool:
     if not path.is_dir():
         return False
     # Look for .mesh files in the directory tree (max 2 levels deep)
-    for depth_pattern in [path / "*.mesh", path / "*" / "*.mesh",
-                          path / "*" / "*" / "*.mesh"]:
-        if list(depth_pattern.parent.glob(depth_pattern.name)):
+    for pattern in ["*.mesh", "*/*.mesh", "*/*/*.mesh"]:
+        if any(path.glob(pattern)):
             return True
     return False
 
 
 def find_carto_subdirectories(path: Path) -> list[Path]:
-    """Find all subdirectories that each contain a self-contained CARTO export.
+    """Find all directories under *path* that directly contain .mesh files.
 
-    Walks one level of subdirectories and returns those where
-    ``detect_carto_directory()`` is True.  If the root path itself is a
-    single CARTO export (has .mesh files directly), returns ``[path]``.
+    Walks up to two levels of subdirectories.  Each returned path is a
+    self-contained CARTO export directory (has ``.mesh`` files in it).
+    If the root path itself contains ``.mesh`` files, returns ``[path]``.
     """
     # Root itself is a CARTO export
     if list(path.glob("*.mesh")):
@@ -48,8 +47,15 @@ def find_carto_subdirectories(path: Path) -> list[Path]:
 
     results: list[Path] = []
     for sub in sorted(path.iterdir()):
-        if sub.is_dir() and detect_carto_directory(sub):
+        if not sub.is_dir():
+            continue
+        if list(sub.glob("*.mesh")):
             results.append(sub)
+        else:
+            # Check one more level (e.g. Study 1/Export_Study/)
+            for sub2 in sorted(sub.iterdir()):
+                if sub2.is_dir() and list(sub2.glob("*.mesh")):
+                    results.append(sub2)
     return results
 
 

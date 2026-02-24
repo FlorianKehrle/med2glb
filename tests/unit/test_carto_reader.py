@@ -34,6 +34,20 @@ class TestDetectCartoDirectory:
         f.write_text("hello")
         assert detect_carto_directory(f) is False
 
+    def test_detects_nested_one_level(self, tmp_path):
+        """Detect .mesh files one subdirectory level deep."""
+        sub = tmp_path / "Export"
+        sub.mkdir()
+        (sub / "1-Map.mesh").write_text("[GeneralAttributes]\nMeshID = 1\n")
+        assert detect_carto_directory(tmp_path) is True
+
+    def test_detects_nested_two_levels(self, tmp_path):
+        """Detect .mesh files two subdirectory levels deep (e.g. Study/Export/)."""
+        sub = tmp_path / "Study 1" / "Export_Study"
+        sub.mkdir(parents=True)
+        (sub / "1-Map.mesh").write_text("[GeneralAttributes]\nMeshID = 1\n")
+        assert detect_carto_directory(tmp_path) is True
+
     @pytest.mark.skipif(not CARTO_OLD.exists(), reason="CARTO old data not available")
     def test_detects_old_version(self):
         assert detect_carto_directory(CARTO_OLD) is True
@@ -223,3 +237,44 @@ ColorsNames = LAT
         result = find_carto_subdirectories(parent)
         assert len(result) == 1
         assert result[0].name == "carto_study"
+
+    def test_nested_two_levels(self, tmp_path):
+        """Find exports nested two levels deep (e.g. Study 1/Export_Study/)."""
+        parent = tmp_path / "version"
+        parent.mkdir()
+
+        # Study 1 with one export
+        export_a = parent / "Study 1" / "Export_A"
+        export_a.mkdir(parents=True)
+        self._write_carto_files(export_a)
+
+        # Study 2 with another export
+        export_b = parent / "Study 2" / "Export_B"
+        export_b.mkdir(parents=True)
+        self._write_carto_files(export_b)
+
+        result = find_carto_subdirectories(parent)
+        assert len(result) == 2
+        assert result[0].name == "Export_A"
+        assert result[1].name == "Export_B"
+
+    def test_mixed_depths(self, tmp_path):
+        """Find exports at different nesting depths."""
+        parent = tmp_path / "mixed"
+        parent.mkdir()
+
+        # One export directly in a subdir
+        direct = parent / "direct_export"
+        direct.mkdir()
+        self._write_carto_files(direct)
+
+        # Another nested one level deeper
+        nested = parent / "Study" / "Export"
+        nested.mkdir(parents=True)
+        self._write_carto_files(nested)
+
+        result = find_carto_subdirectories(parent)
+        assert len(result) == 2
+        names = {r.name for r in result}
+        assert "direct_export" in names
+        assert "Export" in names
