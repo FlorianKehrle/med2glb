@@ -178,6 +178,78 @@ def build_inactive_mask(mesh: CartoMesh) -> np.ndarray:
     return mesh.group_ids == _INACTIVE_GROUP_ID
 
 
+def _smooth_singularities(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    label: str = "",
+    threshold_factor: float = 10.0,
+    max_iterations: int = 50,
+) -> np.ndarray:
+    """Iteratively smooth geometric singularities (spike vertices).
+
+    Detects vertices whose Laplacian displacement (distance from the
+    average of their neighbors) exceeds *threshold_factor* times the
+    median displacement, and snaps them to the neighbor average.
+    Repeats until no outliers remain or *max_iterations* is reached.
+
+    Args:
+        vertices: Vertex positions [N, 3] (modified in-place and returned).
+        faces: Triangle indices [M, 3].
+        label: Mesh name for log messages.
+        threshold_factor: Displacement threshold as multiple of median.
+        max_iterations: Safety limit on smoothing passes.
+
+    Returns:
+        The (possibly modified) vertices array.
+    """
+    import trimesh
+
+    vertices = np.array(vertices, dtype=np.float64)
+    tm_tmp = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    edges = np.asarray(tm_tmp.edges_unique)
+    if len(edges) == 0:
+        return vertices
+    e0, e1 = edges[:, 0], edges[:, 1]
+    n_verts = len(vertices)
+
+    neighbor_count = np.zeros(n_verts, dtype=int)
+    np.add.at(neighbor_count, e0, 1)
+    np.add.at(neighbor_count, e1, 1)
+    has_neighbors = neighbor_count > 0
+
+    total_snapped = 0
+    n_iter = 0
+    for n_iter in range(max_iterations):
+        neighbor_sum = np.zeros_like(vertices)
+        np.add.at(neighbor_sum, e0, vertices[e1])
+        np.add.at(neighbor_sum, e1, vertices[e0])
+
+        avg_pos = np.zeros_like(vertices)
+        avg_pos[has_neighbors] = (
+            neighbor_sum[has_neighbors]
+            / neighbor_count[has_neighbors, np.newaxis]
+        )
+        disp = np.linalg.norm(vertices - avg_pos, axis=1)
+        disp[~has_neighbors] = 0.0
+        med_disp = max(float(np.median(disp[has_neighbors])), 1e-10)
+
+        spike_verts = has_neighbors & (disp > threshold_factor * med_disp)
+        n_spikes = int(np.sum(spike_verts))
+        if n_spikes == 0:
+            break
+
+        total_snapped += n_spikes
+        vertices[spike_verts] = avg_pos[spike_verts]
+
+    if total_snapped > 0:
+        logger.debug(
+            "Smoothed singularities for '%s': %d vertex corrections "
+            "over %d passes",
+            label, total_snapped, n_iter + 1,
+        )
+    return vertices
+
+
 def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
     """Loop-subdivide a CARTO mesh for finer spatial resolution.
 
@@ -205,23 +277,37 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
 
     # --- Strip inactive faces before subdivision ---
     # Faces with group_id == -1000000 are fully inactive and may bridge
-    # distant regions.  Loop subdivision on these creates spike
-    # artifacts because it smooths vertices across inactive geometry.
-    # Other negative groups (-5, -4, etc.) are transparent fill faces
-    # that maintain mesh topology and must be kept for clean subdivision.
+    # distant regions.  Keep all other faces (including transparent fill
+    # groups) so the mesh stays closed during subdivision — open boundaries
+    # cause Loop subdivision to pull vertices inward, creating ragged edges.
     active_face_mask = mesh.face_group_ids != _INACTIVE_GROUP_ID
     clean_faces = mesh.faces[active_face_mask]
     clean_face_gids = mesh.face_group_ids[active_face_mask]
+
+    # Identify visible vertex groups: those used by the dominant face group.
+    # Fill-only vertex groups will be marked inactive after subdivision so
+    # the overlapping fill geometry doesn't produce z-fighting artifacts.
+    unique_fgids, fgid_counts = np.unique(clean_face_gids, return_counts=True)
+    dominant_fgid = unique_fgids[np.argmax(fgid_counts)]
+    dominant_face_verts = np.unique(clean_faces[clean_face_gids == dominant_fgid].ravel())
+    visible_vert_groups = set(mesh.group_ids[dominant_face_verts].tolist())
 
     # Compact vertices: keep only those referenced by active faces
     used_verts = np.unique(clean_faces.ravel())
     old_to_new = np.full(len(mesh.vertices), -1, dtype=np.int32)
     old_to_new[used_verts] = np.arange(len(used_verts), dtype=np.int32)
 
-    clean_vertices = mesh.vertices[used_verts]
+    clean_vertices = mesh.vertices[used_verts].copy()
     clean_normals = mesh.normals[used_verts]
     clean_group_ids = mesh.group_ids[used_verts]
     clean_faces = old_to_new[clean_faces]
+
+    # --- Pre-subdivision singularity smoothing ---
+    # Fix outlier vertices BEFORE subdivision so Loop smoothing doesn't
+    # amplify them (~16x vertex increase at level 2).
+    clean_vertices = _smooth_singularities(
+        clean_vertices, clean_faces, mesh.structure_name,
+    )
 
     try:
         new_vertices, new_faces = subdivide_loop(
@@ -241,6 +327,18 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
     tree = KDTree(clean_vertices)
     _, nn_idx = tree.query(new_vertices)
     new_group_ids = clean_group_ids[nn_idx]
+
+    # Mark fill-only vertices as inactive so carto_mesh_to_mesh_data
+    # strips them.  Fill faces overlap the visible surface and cause
+    # z-fighting / pinch artifacts if rendered.
+    fill_mask = np.array([gid not in visible_vert_groups for gid in new_group_ids])
+    n_fill = int(np.sum(fill_mask))
+    if n_fill > 0:
+        new_group_ids[fill_mask] = _INACTIVE_GROUP_ID
+        logger.debug(
+            "Marked %d fill-only vertices as inactive for '%s'",
+            n_fill, mesh.structure_name,
+        )
 
     # Derive face_group_ids from vertex 0 of each face
     new_face_group_ids = new_group_ids[new_faces[:, 0]]
@@ -289,14 +387,29 @@ def carto_mesh_to_mesh_data(
         mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
         actually_subdivided = mesh is not original_mesh
 
-    # Build mask of active vertices and faces
-    active_verts = mesh.group_ids != _INACTIVE_GROUP_ID
-    active_faces_mask = mesh.face_group_ids != _INACTIVE_GROUP_ID
+    # Build mask of active vertices and faces.
+    # The dominant face group (most faces, excluding -1000000) is the
+    # visible surface.  Transparent fill faces from other groups overlap
+    # the visible surface and cause z-fighting artifacts — strip them.
+    non_inactive_mask = mesh.face_group_ids != _INACTIVE_GROUP_ID
+    non_inactive_gids = mesh.face_group_ids[non_inactive_mask]
+    if len(non_inactive_gids) > 0:
+        unique_gids, counts = np.unique(non_inactive_gids, return_counts=True)
+        dominant_gid = unique_gids[np.argmax(counts)]
+        dominant_verts = np.unique(
+            mesh.faces[mesh.face_group_ids == dominant_gid].ravel()
+        )
+        visible_vert_groups = set(mesh.group_ids[dominant_verts].tolist())
+    else:
+        visible_vert_groups = set(mesh.group_ids.tolist())
 
-    # Also filter faces that reference inactive vertices
+    # Active vertices: belong to visible vertex groups
+    active_verts = np.isin(mesh.group_ids, list(visible_vert_groups))
+
+    # Active faces: not inactive AND all 3 vertices are active
+    active_faces_mask = non_inactive_mask.copy()
     for col in range(3):
-        face_vert_active = active_verts[mesh.faces[:, col]]
-        active_faces_mask = active_faces_mask & face_vert_active
+        active_faces_mask &= active_verts[mesh.faces[:, col]]
 
     # Remap vertices: only keep active ones
     old_to_new = np.full(len(mesh.vertices), -1, dtype=np.int32)
@@ -312,23 +425,11 @@ def carto_mesh_to_mesh_data(
     valid_faces = np.all(faces >= 0, axis=1)
     faces = faces[valid_faces]
 
-    # Remove spike faces — triangles with any edge > 10x the median edge
-    # length.  These are artifacts from Loop subdivision at mesh boundaries
-    # (e.g. where transparent fill groups meet the real surface).
+    # Post-subdivision singularity smoothing (catches residual artifacts)
     if len(faces) > 0:
-        v0 = vertices[faces[:, 0]]
-        v1 = vertices[faces[:, 1]]
-        v2 = vertices[faces[:, 2]]
-        e01 = np.linalg.norm(v1 - v0, axis=1)
-        e12 = np.linalg.norm(v2 - v1, axis=1)
-        e20 = np.linalg.norm(v0 - v2, axis=1)
-        med_edge = np.median(np.concatenate([e01, e12, e20]))
-        spike_threshold = 10.0 * med_edge
-        keep = (e01 <= spike_threshold) & (e12 <= spike_threshold) & (e20 <= spike_threshold)
-        n_removed = int(np.sum(~keep))
-        if n_removed > 0:
-            logger.debug("Removed %d spike faces from '%s'", n_removed, mesh.structure_name)
-            faces = faces[keep]
+        vertices = _smooth_singularities(
+            vertices, faces, mesh.structure_name,
+        ).astype(np.float32)
 
     # Compute vertex colors
     vertex_colors = None
