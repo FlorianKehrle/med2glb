@@ -20,6 +20,7 @@ from rich.table import Table
 
 from med2glb.core.types import (
     CartoConfig,
+    CartoMesh,
     CartoPoint,
     CartoStudy,
     DicomConfig,
@@ -95,11 +96,22 @@ class VectorQuality:
     valid_points: int = 0
     lat_range_ms: float = 0.0
     lat_iqr_ms: float = 0.0
+    point_density: float = 0.0  # points per mm²
 
 
 _MIN_VALID_LAT_POINTS = 50
 _MIN_LAT_RANGE_MS = 30.0
 _MIN_LAT_IQR_MS = 50.0
+_MIN_POINT_DENSITY = 0.3  # pts/mm² — need dense sampling for meaningful gradients
+
+
+def _mesh_surface_area(mesh: CartoMesh) -> float:
+    """Compute total surface area of a CARTO mesh in mm²."""
+    v0 = mesh.vertices[mesh.faces[:, 0]]
+    v1 = mesh.vertices[mesh.faces[:, 1]]
+    v2 = mesh.vertices[mesh.faces[:, 2]]
+    cross = np.cross(v1 - v0, v2 - v0)
+    return float(0.5 * np.sum(np.linalg.norm(cross, axis=1)))
 
 
 def _assess_vector_quality(
@@ -112,18 +124,22 @@ def _assess_vector_quality(
     the overall assessment is suitable (vectors will only be generated where
     the data supports it).
 
-    Checks three criteria:
+    Checks four criteria:
     - Enough valid LAT points (≥50)
     - Sufficient total LAT range (≥30 ms)
     - Sufficient LAT spread / IQR (≥50 ms) — a wide range with most values
       clustered together produces a nearly uniform surface with no visible
       gradient, making vectors useless.
+    - Sufficient point density (≥0.3 pts/mm²) — sparse sampling produces
+      over-smoothed gradients after IDW interpolation, resulting in tiny
+      circling streamlines instead of coherent flow arrows.
     """
     indices = selected_indices if selected_indices is not None else list(range(len(study.meshes)))
 
     best_points = 0
     best_range = 0.0
     best_iqr = 0.0
+    best_density = 0.0
 
     for idx in indices:
         mesh = study.meshes[idx]
@@ -136,12 +152,17 @@ def _assess_vector_quality(
         lat_range = float(np.ptp(valid)) if n_valid > 0 else 0.0
         lat_iqr = float(np.percentile(valid, 75) - np.percentile(valid, 25)) if n_valid > 0 else 0.0
 
+        area = _mesh_surface_area(mesh)
+        density = n_valid / area if area > 1e-6 else 0.0
+
         if n_valid > best_points:
             best_points = n_valid
         if lat_range > best_range:
             best_range = lat_range
         if lat_iqr > best_iqr:
             best_iqr = lat_iqr
+        if density > best_density:
+            best_density = density
 
     if best_points < _MIN_VALID_LAT_POINTS:
         return VectorQuality(
@@ -150,6 +171,7 @@ def _assess_vector_quality(
             valid_points=best_points,
             lat_range_ms=best_range,
             lat_iqr_ms=best_iqr,
+            point_density=best_density,
         )
     if best_range < _MIN_LAT_RANGE_MS:
         return VectorQuality(
@@ -158,6 +180,7 @@ def _assess_vector_quality(
             valid_points=best_points,
             lat_range_ms=best_range,
             lat_iqr_ms=best_iqr,
+            point_density=best_density,
         )
     if best_iqr < _MIN_LAT_IQR_MS:
         return VectorQuality(
@@ -166,6 +189,16 @@ def _assess_vector_quality(
             valid_points=best_points,
             lat_range_ms=best_range,
             lat_iqr_ms=best_iqr,
+            point_density=best_density,
+        )
+    if best_density < _MIN_POINT_DENSITY:
+        return VectorQuality(
+            suitable=False,
+            reason=f"low point density ({best_density:.2f} pts/mm²), gradients too smooth",
+            valid_points=best_points,
+            lat_range_ms=best_range,
+            lat_iqr_ms=best_iqr,
+            point_density=best_density,
         )
     return VectorQuality(
         suitable=True,
@@ -173,6 +206,7 @@ def _assess_vector_quality(
         valid_points=best_points,
         lat_range_ms=best_range,
         lat_iqr_ms=best_iqr,
+        point_density=best_density,
     )
 
 
