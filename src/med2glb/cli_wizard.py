@@ -94,10 +94,12 @@ class VectorQuality:
     reason: str  # human-readable explanation when not suitable
     valid_points: int = 0
     lat_range_ms: float = 0.0
+    lat_iqr_ms: float = 0.0
 
 
 _MIN_VALID_LAT_POINTS = 50
 _MIN_LAT_RANGE_MS = 30.0
+_MIN_LAT_IQR_MS = 50.0
 
 
 def _assess_vector_quality(
@@ -109,11 +111,19 @@ def _assess_vector_quality(
     Evaluates the *best* mesh among those selected — if any mesh is suitable
     the overall assessment is suitable (vectors will only be generated where
     the data supports it).
+
+    Checks three criteria:
+    - Enough valid LAT points (≥50)
+    - Sufficient total LAT range (≥30 ms)
+    - Sufficient LAT spread / IQR (≥50 ms) — a wide range with most values
+      clustered together produces a nearly uniform surface with no visible
+      gradient, making vectors useless.
     """
     indices = selected_indices if selected_indices is not None else list(range(len(study.meshes)))
 
     best_points = 0
     best_range = 0.0
+    best_iqr = 0.0
 
     for idx in indices:
         mesh = study.meshes[idx]
@@ -124,11 +134,14 @@ def _assess_vector_quality(
         valid = lats[~np.isnan(lats)]
         n_valid = len(valid)
         lat_range = float(np.ptp(valid)) if n_valid > 0 else 0.0
+        lat_iqr = float(np.percentile(valid, 75) - np.percentile(valid, 25)) if n_valid > 0 else 0.0
 
         if n_valid > best_points:
             best_points = n_valid
         if lat_range > best_range:
             best_range = lat_range
+        if lat_iqr > best_iqr:
+            best_iqr = lat_iqr
 
     if best_points < _MIN_VALID_LAT_POINTS:
         return VectorQuality(
@@ -136,6 +149,7 @@ def _assess_vector_quality(
             reason=f"sparse data, {best_points} valid LAT points",
             valid_points=best_points,
             lat_range_ms=best_range,
+            lat_iqr_ms=best_iqr,
         )
     if best_range < _MIN_LAT_RANGE_MS:
         return VectorQuality(
@@ -143,12 +157,22 @@ def _assess_vector_quality(
             reason=f"small LAT range, {best_range:.0f} ms",
             valid_points=best_points,
             lat_range_ms=best_range,
+            lat_iqr_ms=best_iqr,
+        )
+    if best_iqr < _MIN_LAT_IQR_MS:
+        return VectorQuality(
+            suitable=False,
+            reason=f"low LAT spread (IQR {best_iqr:.0f} ms), uniform activation",
+            valid_points=best_points,
+            lat_range_ms=best_range,
+            lat_iqr_ms=best_iqr,
         )
     return VectorQuality(
         suitable=True,
         reason="",
         valid_points=best_points,
         lat_range_ms=best_range,
+        lat_iqr_ms=best_iqr,
     )
 
 

@@ -117,7 +117,7 @@ class TestRunCartoWizard:
             preset_coloring="bipolar",
             preset_animate=True,
             preset_static=False,
-            preset_vectors=True,
+            preset_vectors="yes",
             preset_subdivide=1,
             preset_meshes="all",
         )
@@ -125,7 +125,7 @@ class TestRunCartoWizard:
         assert config.coloring == "bipolar"
         assert config.animate is True
         assert config.static is False
-        assert config.vectors is True
+        assert config.vectors == "yes"
         assert config.subdivide == 1
         assert config.selected_mesh_indices is None  # "all"
 
@@ -139,7 +139,7 @@ class TestRunCartoWizard:
         assert config.coloring == "lat"
         assert config.animate is True
         assert config.static is True
-        assert config.vectors is False
+        assert config.vectors == "no"
         assert config.subdivide == 2
 
 
@@ -237,6 +237,39 @@ class TestAssessVectorQuality:
         quality = _assess_vector_quality(study, None)
         assert quality.suitable is False
         assert "range" in quality.reason
+
+    def test_low_iqr_not_suitable(self):
+        """Wide range but clustered LAT values → low IQR → not suitable."""
+        vertices = np.random.rand(100, 3).astype(np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+        normals = np.tile([0, 0, 1], (100, 1)).astype(np.float64)
+        mesh = CartoMesh(
+            mesh_id=1, vertices=vertices, faces=faces, normals=normals,
+            group_ids=np.zeros(100, dtype=np.int32),
+            face_group_ids=np.zeros(1, dtype=np.int32),
+            mesh_color=(1, 0, 0, 1), color_names=["LAT"],
+            structure_name="ClusteredMap",
+        )
+        # 80 points: most clustered around 50 ms, a few outliers for wide range
+        rng = np.random.default_rng(42)
+        points = [
+            CartoPoint(i, rng.random(3), np.zeros(3), 1.0, 5.0,
+                       50.0 + rng.normal(0, 5))  # tight cluster around 50
+            for i in range(76)
+        ] + [
+            CartoPoint(77, rng.random(3), np.zeros(3), 1.0, 5.0, -100.0),
+            CartoPoint(78, rng.random(3), np.zeros(3), 1.0, 5.0, 200.0),
+            CartoPoint(79, rng.random(3), np.zeros(3), 1.0, 5.0, -90.0),
+            CartoPoint(80, rng.random(3), np.zeros(3), 1.0, 5.0, 190.0),
+        ]
+        study = CartoStudy(
+            meshes=[mesh], points={"ClusteredMap": points},
+            version="6.0", study_name="Test",
+        )
+        quality = _assess_vector_quality(study, None)
+        assert quality.suitable is False
+        assert "IQR" in quality.reason
+        assert quality.lat_iqr_ms < 50
 
     def test_good_data_suitable(self):
         """Enough points with sufficient LAT range."""
