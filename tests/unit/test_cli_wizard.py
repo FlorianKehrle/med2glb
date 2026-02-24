@@ -354,3 +354,8 @@ class TestAssessVectorQuality:
         # Selecting only the bad mesh
         quality = _assess_vector_quality(study, [1])
         assert quality.suitable is False
+
+        # Selecting all — overall suitable because Good passes, but only [0] in suitable_indices
+        quality_all = _assess_vector_quality(study, None)
+        assert quality_all.suitable is True
+        assert quality_all.suitable_indices == [0]

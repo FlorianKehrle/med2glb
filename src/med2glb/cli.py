@@ -518,22 +518,30 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
     # vectors="yes": produce BOTH with and without vectors (user can compare).
     # vectors="only": produce ONLY the animated+vectors variant.
     # vectors="no": no vector variants at all.
+    # vector_mesh_indices limits which meshes get vectors (None = all).
     has_vectors = config.vectors in ("yes", "only")
     vectors_only = config.vectors == "only"
+    vec_meshes = set(config.vector_mesh_indices) if config.vector_mesh_indices is not None else None
     jobs: list[tuple[int, bool, bool]] = []
     if vectors_only:
         # Only animated+vectors — nothing else
         for mesh_idx in selected:
-            jobs.append((mesh_idx, True, True))
+            mesh_has_vec = vec_meshes is None or mesh_idx in vec_meshes
+            if mesh_has_vec:
+                jobs.append((mesh_idx, True, True))
+            else:
+                # Mesh not suitable for vectors — fall back to animated without
+                jobs.append((mesh_idx, True, False))
     else:
         for mesh_idx in selected:
+            mesh_has_vec = has_vectors and (vec_meshes is None or mesh_idx in vec_meshes)
             if config.static:
                 jobs.append((mesh_idx, False, False))
-                if has_vectors:
+                if mesh_has_vec:
                     jobs.append((mesh_idx, False, True))
             if config.animate:
                 jobs.append((mesh_idx, True, False))
-                if has_vectors:
+                if mesh_has_vec:
                     jobs.append((mesh_idx, True, True))
 
     for mesh_idx, do_animate, do_vectors in jobs:

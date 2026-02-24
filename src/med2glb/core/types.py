@@ -161,6 +161,7 @@ class CartoConfig:
     animate: bool = True       # default: both static + animated
     static: bool = True        # default: both
     vectors: str = "no"  # "no", "yes" (both with/without), "only" (vectors only)
+    vector_mesh_indices: list[int] | None = None  # meshes suitable for vectors; None = all
     target_faces: int = 80000
     max_size_mb: int = 99
     compress_strategy: str = "draco"

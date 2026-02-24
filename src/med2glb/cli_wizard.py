@@ -97,6 +97,7 @@ class VectorQuality:
     lat_range_ms: float = 0.0
     lat_iqr_ms: float = 0.0
     point_density: float = 0.0  # points per mm²
+    suitable_indices: list[int] | None = None  # mesh indices suitable for vectors
 
 
 _MIN_VALID_LAT_POINTS = 50
@@ -114,99 +115,114 @@ def _mesh_surface_area(mesh: CartoMesh) -> float:
     return float(0.5 * np.sum(np.linalg.norm(cross, axis=1)))
 
 
+def _assess_single_mesh(
+    mesh: CartoMesh,
+    pts: list[CartoPoint],
+) -> VectorQuality:
+    """Assess vector suitability for a single mesh."""
+    if not pts:
+        return VectorQuality(suitable=False, reason="no measurement points")
+
+    lats = np.array([p.lat for p in pts], dtype=np.float64)
+    valid = lats[~np.isnan(lats)]
+    n_valid = len(valid)
+    lat_range = float(np.ptp(valid)) if n_valid > 0 else 0.0
+    lat_iqr = float(np.percentile(valid, 75) - np.percentile(valid, 25)) if n_valid > 0 else 0.0
+    area = _mesh_surface_area(mesh)
+    density = n_valid / area if area > 1e-6 else 0.0
+
+    if n_valid < _MIN_VALID_LAT_POINTS:
+        return VectorQuality(
+            suitable=False,
+            reason=f"sparse data, {n_valid} valid LAT points",
+            valid_points=n_valid, lat_range_ms=lat_range,
+            lat_iqr_ms=lat_iqr, point_density=density,
+        )
+    if lat_range < _MIN_LAT_RANGE_MS:
+        return VectorQuality(
+            suitable=False,
+            reason=f"small LAT range, {lat_range:.0f} ms",
+            valid_points=n_valid, lat_range_ms=lat_range,
+            lat_iqr_ms=lat_iqr, point_density=density,
+        )
+    if lat_iqr < _MIN_LAT_IQR_MS:
+        return VectorQuality(
+            suitable=False,
+            reason=f"low LAT spread (IQR {lat_iqr:.0f} ms), uniform activation",
+            valid_points=n_valid, lat_range_ms=lat_range,
+            lat_iqr_ms=lat_iqr, point_density=density,
+        )
+    if density < _MIN_POINT_DENSITY:
+        return VectorQuality(
+            suitable=False,
+            reason=f"low point density ({density:.2f} pts/mm²), gradients too smooth",
+            valid_points=n_valid, lat_range_ms=lat_range,
+            lat_iqr_ms=lat_iqr, point_density=density,
+        )
+    return VectorQuality(
+        suitable=True, reason="",
+        valid_points=n_valid, lat_range_ms=lat_range,
+        lat_iqr_ms=lat_iqr, point_density=density,
+    )
+
+
 def _assess_vector_quality(
     study: CartoStudy,
     selected_indices: list[int] | None,
 ) -> VectorQuality:
     """Check whether the selected meshes have enough LAT data for useful vectors.
 
-    Evaluates the *best* mesh among those selected — if any mesh is suitable
-    the overall assessment is suitable (vectors will only be generated where
-    the data supports it).
+    Evaluates each mesh individually. The overall result is suitable if *any*
+    mesh passes. ``suitable_indices`` lists which meshes are suitable.
 
-    Checks four criteria:
+    Checks four criteria per mesh:
     - Enough valid LAT points (≥50)
     - Sufficient total LAT range (≥30 ms)
-    - Sufficient LAT spread / IQR (≥50 ms) — a wide range with most values
-      clustered together produces a nearly uniform surface with no visible
-      gradient, making vectors useless.
-    - Sufficient point density (≥0.3 pts/mm²) — sparse sampling produces
-      over-smoothed gradients after IDW interpolation, resulting in tiny
-      circling streamlines instead of coherent flow arrows.
+    - Sufficient LAT spread / IQR (≥50 ms)
+    - Sufficient point density (≥0.3 pts/mm²)
     """
     indices = selected_indices if selected_indices is not None else list(range(len(study.meshes)))
 
-    best_points = 0
-    best_range = 0.0
-    best_iqr = 0.0
-    best_density = 0.0
+    suitable_indices: list[int] = []
+    best_result: VectorQuality | None = None
 
     for idx in indices:
         mesh = study.meshes[idx]
         pts = study.points.get(mesh.structure_name, [])
-        if not pts:
-            continue
-        lats = np.array([p.lat for p in pts], dtype=np.float64)
-        valid = lats[~np.isnan(lats)]
-        n_valid = len(valid)
-        lat_range = float(np.ptp(valid)) if n_valid > 0 else 0.0
-        lat_iqr = float(np.percentile(valid, 75) - np.percentile(valid, 25)) if n_valid > 0 else 0.0
+        result = _assess_single_mesh(mesh, pts)
+        if result.suitable:
+            suitable_indices.append(idx)
+        # Track the best result for summary (prefer a suitable one)
+        if best_result is None or (result.suitable and not best_result.suitable):
+            best_result = result
+        elif not best_result.suitable and not result.suitable:
+            # Among unsuitable, keep the one with more points (more informative reason)
+            if result.valid_points > best_result.valid_points:
+                best_result = result
 
-        area = _mesh_surface_area(mesh)
-        density = n_valid / area if area > 1e-6 else 0.0
+    if best_result is None:
+        return VectorQuality(suitable=False, reason="no meshes selected")
 
-        if n_valid > best_points:
-            best_points = n_valid
-        if lat_range > best_range:
-            best_range = lat_range
-        if lat_iqr > best_iqr:
-            best_iqr = lat_iqr
-        if density > best_density:
-            best_density = density
+    # Override overall suitability based on per-mesh results
+    if suitable_indices:
+        return VectorQuality(
+            suitable=True,
+            reason="",
+            valid_points=best_result.valid_points,
+            lat_range_ms=best_result.lat_range_ms,
+            lat_iqr_ms=best_result.lat_iqr_ms,
+            point_density=best_result.point_density,
+            suitable_indices=suitable_indices,
+        )
 
-    if best_points < _MIN_VALID_LAT_POINTS:
-        return VectorQuality(
-            suitable=False,
-            reason=f"sparse data, {best_points} valid LAT points",
-            valid_points=best_points,
-            lat_range_ms=best_range,
-            lat_iqr_ms=best_iqr,
-            point_density=best_density,
-        )
-    if best_range < _MIN_LAT_RANGE_MS:
-        return VectorQuality(
-            suitable=False,
-            reason=f"small LAT range, {best_range:.0f} ms",
-            valid_points=best_points,
-            lat_range_ms=best_range,
-            lat_iqr_ms=best_iqr,
-            point_density=best_density,
-        )
-    if best_iqr < _MIN_LAT_IQR_MS:
-        return VectorQuality(
-            suitable=False,
-            reason=f"low LAT spread (IQR {best_iqr:.0f} ms), uniform activation",
-            valid_points=best_points,
-            lat_range_ms=best_range,
-            lat_iqr_ms=best_iqr,
-            point_density=best_density,
-        )
-    if best_density < _MIN_POINT_DENSITY:
-        return VectorQuality(
-            suitable=False,
-            reason=f"low point density ({best_density:.2f} pts/mm²), gradients too smooth",
-            valid_points=best_points,
-            lat_range_ms=best_range,
-            lat_iqr_ms=best_iqr,
-            point_density=best_density,
-        )
     return VectorQuality(
-        suitable=True,
-        reason="",
-        valid_points=best_points,
-        lat_range_ms=best_range,
-        lat_iqr_ms=best_iqr,
-        point_density=best_density,
+        suitable=False,
+        reason=best_result.reason,
+        valid_points=best_result.valid_points,
+        lat_range_ms=best_result.lat_range_ms,
+        lat_iqr_ms=best_result.lat_iqr_ms,
+        point_density=best_result.point_density,
+        suitable_indices=[],
     )
 
 
@@ -313,15 +329,24 @@ def run_carto_wizard(
         logger.info("Using default output mode: both (static + animated)")
 
     # --- LAT vectors ---
-    # Assess quality across selected meshes to set a sensible default
+    # Assess quality per mesh to determine which ones are suitable
     vec_quality = _assess_vector_quality(study, selected_indices)
+    vector_mesh_indices: list[int] | None = None  # None = all selected
 
     if preset_vectors is not None:
         vectors = preset_vectors
+        # When user explicitly requests vectors, apply to all selected meshes
+        if vectors in ("yes", "only"):
+            vector_mesh_indices = None
     elif interactive and coloring == "lat":
         if vec_quality.suitable:
             default_vec = "yes"
             prompt_label = "LAT conduction vectors"
+            # If only some meshes are suitable, note which ones
+            all_indices = selected_indices if selected_indices is not None else list(range(len(study.meshes)))
+            if vec_quality.suitable_indices and len(vec_quality.suitable_indices) < len(all_indices):
+                names = [study.meshes[i].structure_name for i in vec_quality.suitable_indices]
+                prompt_label += f" [dim](suitable: {', '.join(names)})[/dim]"
         else:
             default_vec = "no"
             prompt_label = f"LAT conduction vectors [dim]({vec_quality.reason})[/dim]"
@@ -332,8 +357,12 @@ def run_carto_wizard(
             console=console,
         )
         vectors = vec_choice
+        if vectors in ("yes", "only") and vec_quality.suitable_indices is not None:
+            vector_mesh_indices = vec_quality.suitable_indices
     elif not interactive and coloring == "lat":
         vectors = "yes" if vec_quality.suitable else "no"
+        if vectors == "yes" and vec_quality.suitable_indices is not None:
+            vector_mesh_indices = vec_quality.suitable_indices
         if vectors == "no":
             logger.info(f"Skipping LAT vectors: {vec_quality.reason}")
     else:
@@ -361,7 +390,11 @@ def run_carto_wizard(
     mode_str = ("static + animated" if static and animate
                 else "animated" if animate else "static")
     console.print(f"  Output:     {mode_str}")
-    console.print(f"  Vectors:    {vectors}")
+    if vectors in ("yes", "only") and vector_mesh_indices is not None:
+        vec_names = [study.meshes[i].structure_name for i in vector_mesh_indices]
+        console.print(f"  Vectors:    {vectors} ({', '.join(vec_names)})")
+    else:
+        console.print(f"  Vectors:    {vectors}")
     console.print(f"  Subdivide:  {subdivide}")
 
     return CartoConfig(
@@ -372,6 +405,7 @@ def run_carto_wizard(
         animate=animate,
         static=static,
         vectors=vectors,
+        vector_mesh_indices=vector_mesh_indices,
     )
 
 
