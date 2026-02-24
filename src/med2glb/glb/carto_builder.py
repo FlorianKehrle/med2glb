@@ -26,6 +26,22 @@ _RING_WIDTH = 0.025  # σ of Gaussian — narrow, sharp band like the real CARTO
 _HIGHLIGHT_ADD = np.array([0.55, 0.55, 0.55], dtype=np.float32)  # additive white brightness
 
 
+def _compute_anim_target_faces(
+    n_faces: int,
+    n_frames: int,
+    max_size_bytes: int,
+) -> int:
+    """Compute the max face count that keeps animated GLB under a size limit.
+
+    Animated GLBs share geometry but duplicate COLOR_0 per frame.
+    Approximate bytes: F/2 * (60 + 16*N_frames) where F/2 ≈ vertex count.
+    """
+    bytes_per_face = (60 + 16 * n_frames) / 2  # ≈270 for 30 frames
+    max_faces = int(max_size_bytes / bytes_per_face)
+    # Clamp: never exceed original, never go below 10K
+    return max(10000, min(max_faces, n_faces))
+
+
 def build_carto_animated_glb(
     mesh_data: MeshData,
     lat_values: np.ndarray,
@@ -33,6 +49,7 @@ def build_carto_animated_glb(
     n_frames: int = 30,
     loop_duration_s: float = 2.0,
     target_faces: int = 20000,
+    max_size_mb: float = 50.0,
     vectors: bool = False,
     progress: Callable[[str, int, int], None] | None = None,
 ) -> None:
@@ -48,7 +65,10 @@ def build_carto_animated_glb(
         output_path: Where to write the .glb file.
         n_frames: Number of animation frames.
         loop_duration_s: Total animation loop time in seconds.
-        target_faces: Decimate mesh to this count before creating frames.
+        target_faces: Explicit face limit (legacy). Overridden by max_size_mb
+            when max_size_mb yields a higher limit.
+        max_size_mb: Target max file size in MB. Used to compute an appropriate
+            face count that balances quality and file size.
         vectors: If True, add animated LAT streamline arrows.
         progress: Optional callback(description, current, total) for progress.
     """
@@ -56,13 +76,19 @@ def build_carto_animated_glb(
         if progress:
             progress(desc, current, total)
 
+    # Use whichever limit allows more faces (better quality)
+    size_based_target = _compute_anim_target_faces(
+        len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
+    )
+    effective_target = max(target_faces, size_based_target)
+
     # Decimate if mesh is large (animation duplicates mesh N times)
-    if len(mesh_data.faces) > target_faces:
-        _report(f"Decimating {len(mesh_data.faces):,} → {target_faces:,} faces...")
+    if len(mesh_data.faces) > effective_target:
+        _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
         from med2glb.mesh.processing import decimate, compute_normals
 
         orig_colors = mesh_data.vertex_colors
-        decimated = decimate(mesh_data, target_faces=target_faces)
+        decimated = decimate(mesh_data, target_faces=effective_target)
         decimated = compute_normals(decimated)
         # Resample LAT values and vertex colors to decimated mesh via nearest neighbor
         from scipy.spatial import KDTree

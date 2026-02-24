@@ -619,6 +619,7 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                 build_carto_animated_glb(
                     mesh_data, active_lat, out_path,
                     target_faces=config.target_faces,
+                    max_size_mb=config.max_size_mb,
                     vectors=do_vectors,
                     progress=_anim_progress,
                 )
@@ -988,6 +989,7 @@ def _run_carto_pipeline(
                 build_carto_animated_glb(
                     mesh_data, active_lat, out_path,
                     target_faces=target_faces,
+                    max_size_mb=max_size_mb,
                     vectors=_has_vectors,
                     progress=_anim_progress,
                 )
