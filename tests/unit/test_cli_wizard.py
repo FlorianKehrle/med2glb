@@ -273,10 +273,10 @@ class TestAssessVectorQuality:
         assert quality.lat_iqr_ms < 50
 
     def test_low_density_not_suitable(self):
-        """Good LAT stats but sparse sampling on a large mesh → not suitable."""
-        # Large triangle (~5000 mm² area) with few points
+        """Good LAT stats but extremely sparse sampling on a huge mesh."""
+        # Very large triangle (~500,000 mm² area) with few points → density < 0.005
         vertices = np.array([
-            [0, 0, 0], [100, 0, 0], [50, 100, 0],
+            [0, 0, 0], [1000, 0, 0], [500, 1000, 0],
         ], dtype=np.float64)
         faces = np.array([[0, 1, 2]], dtype=np.int32)
         normals = np.tile([0, 0, 1], (3, 1)).astype(np.float64)
@@ -287,10 +287,10 @@ class TestAssessVectorQuality:
             mesh_color=(1, 0, 0, 1), color_names=["LAT"],
             structure_name="SparseMap",
         )
-        # 80 points with good LAT spread but on a huge mesh
+        # 80 points on ~500k mm² mesh → density ~0.00016
         rng = np.random.default_rng(42)
         points = [
-            CartoPoint(i, rng.random(3) * 100, np.zeros(3), 1.0, 5.0,
+            CartoPoint(i, rng.random(3) * 1000, np.zeros(3), 1.0, 5.0,
                        float(i * 2.0))
             for i in range(80)
         ]
@@ -301,7 +301,7 @@ class TestAssessVectorQuality:
         quality = _assess_vector_quality(study, None)
         assert quality.suitable is False
         assert "density" in quality.reason
-        assert quality.point_density < 0.3
+        assert quality.point_density < 0.005
 
     def test_good_data_suitable(self):
         """Enough points with sufficient LAT range."""

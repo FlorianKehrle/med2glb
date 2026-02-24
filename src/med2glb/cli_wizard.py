@@ -158,10 +158,10 @@ class VectorQuality:
     suitable_indices: list[int] | None = None  # mesh indices suitable for vectors
 
 
-_MIN_VALID_LAT_POINTS = 50
-_MIN_LAT_RANGE_MS = 30.0
-_MIN_LAT_IQR_MS = 50.0
-_MIN_POINT_DENSITY = 0.3  # pts/mm² — need dense sampling for meaningful gradients
+_MIN_VALID_LAT_POINTS = 30
+_MIN_LAT_RANGE_MS = 20.0
+_MIN_LAT_IQR_MS = 10.0
+_MIN_POINT_DENSITY = 0.005  # pts/mm² — subdivision + IDW compensate for sparse sampling
 
 
 def _mesh_surface_area(mesh: CartoMesh) -> float:

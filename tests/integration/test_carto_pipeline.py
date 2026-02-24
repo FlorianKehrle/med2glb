@@ -207,14 +207,14 @@ class TestRealCartoV71:
         assert len(gltf.meshes) == 5
 
     def test_vector_quality_rejected(self):
-        """v7.1 single-map data should be rejected for vectors (low density)."""
+        """v7.1 single-map data has enough density for vectors after threshold relaxation."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.cli_wizard import _assess_vector_quality
 
         study = load_carto_study(CARTO_V71)
         quality = _assess_vector_quality(study, selected_indices=None)
-        # Known low point density — vectors not suitable
-        assert not quality.suitable
+        # 2012 points on ~20k mm² mesh → density ~0.1, above 0.005 threshold
+        assert quality.suitable
 
 
 # ---------------------------------------------------------------------------
