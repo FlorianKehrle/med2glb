@@ -228,6 +228,7 @@ def build_animated_arrow_nodes(
     n_frames: int,
     params: ArrowParams | None = None,
     speed_factors: list[list[float]] | None = None,
+    unlit: bool = False,
 ) -> list[int]:
     """Build per-frame arrow nodes in the glTF.
 
@@ -254,7 +255,7 @@ def build_animated_arrow_nodes(
 
     # White material for arrows
     mat_idx = len(gltf.materials)
-    gltf.materials.append(pygltflib.Material(
+    arrow_mat_kwargs: dict = dict(
         name="lat_vectors",
         pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
             baseColorFactor=[1.0, 1.0, 1.0, 1.0],
@@ -262,7 +263,14 @@ def build_animated_arrow_nodes(
             roughnessFactor=0.5,
         ),
         doubleSided=True,
-    ))
+    )
+    if unlit:
+        arrow_mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
+        if not hasattr(gltf, "extensionsUsed") or gltf.extensionsUsed is None:
+            gltf.extensionsUsed = []
+        if "KHR_materials_unlit" not in gltf.extensionsUsed:
+            gltf.extensionsUsed.append("KHR_materials_unlit")
+    gltf.materials.append(pygltflib.Material(**arrow_mat_kwargs))
 
     for fi in range(n_frames):
         dashes = all_frame_dashes[fi] if fi < len(all_frame_dashes) else []

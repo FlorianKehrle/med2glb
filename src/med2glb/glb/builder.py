@@ -104,7 +104,15 @@ def _add_mesh_to_gltf(
     )
     if alpha_cutoff is not None:
         mat_kwargs["alphaCutoff"] = alpha_cutoff
-    gltf.materials.append(pygltflib.Material(**mat_kwargs))
+    if mat.unlit:
+        mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
+    material = pygltflib.Material(**mat_kwargs)
+    gltf.materials.append(material)
+    if mat.unlit:
+        if not hasattr(gltf, "extensionsUsed") or gltf.extensionsUsed is None:
+            gltf.extensionsUsed = []
+        if "KHR_materials_unlit" not in gltf.extensionsUsed:
+            gltf.extensionsUsed.append("KHR_materials_unlit")
 
     # Add vertex position data
     vertices = mesh_data.vertices.astype(np.float32)

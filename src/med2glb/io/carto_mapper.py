@@ -464,6 +464,7 @@ def carto_mesh_to_mesh_data(
             metallic=0.0,
             roughness=0.7,
             name=mesh.structure_name,
+            unlit=True,
         ),
         vertex_colors=vertex_colors,
     )

@@ -70,6 +70,18 @@ def test_build_glb_mask_mode_for_zero_alpha(synthetic_mesh, tmp_path):
     assert mat.alphaCutoff == pytest.approx(0.5)
 
 
+def test_build_glb_unlit_extension(synthetic_mesh, tmp_path):
+    """Unlit material should add KHR_materials_unlit extension."""
+    synthetic_mesh.material.unlit = True
+    output = tmp_path / "unlit.glb"
+    build_glb([synthetic_mesh], output)
+
+    gltf = pygltflib.GLTF2.load(str(output))
+    assert "KHR_materials_unlit" in (gltf.extensionsUsed or [])
+    mat = gltf.materials[0]
+    assert "KHR_materials_unlit" in (mat.extensions or {})
+
+
 def test_build_glb_with_normals(synthetic_mesh, tmp_path):
     synthetic_mesh.normals = np.random.randn(
         len(synthetic_mesh.vertices), 3

@@ -160,6 +160,31 @@ class TestBuildAnimatedArrowNodes:
         assert gltf.nodes[node_indices[0]].scale == [1.0, 1.0, 1.0]
         assert gltf.nodes[node_indices[1]].scale == [0.0, 0.0, 0.0]
 
+    def test_unlit_extension(self, simple_mesh):
+        """unlit=True should add KHR_materials_unlit to arrow material."""
+        vertices, normals = simple_mesh
+        all_dashes = [
+            [(np.array([2, 2, 0.0]), np.array([5, 2, 0.0]))]
+            for _ in range(2)
+        ]
+
+        gltf = pygltflib.GLTF2(
+            scene=0,
+            scenes=[pygltflib.Scene(nodes=[])],
+            nodes=[], meshes=[], accessors=[],
+            bufferViews=[], buffers=[], materials=[],
+        )
+        binary_data = bytearray()
+
+        build_animated_arrow_nodes(
+            all_dashes, vertices, normals,
+            gltf, binary_data, 2, unlit=True,
+        )
+
+        assert "KHR_materials_unlit" in (gltf.extensionsUsed or [])
+        # The arrow material (first one added) should have the extension
+        assert "KHR_materials_unlit" in (gltf.materials[0].extensions or {})
+
     def test_handles_empty_frames(self, simple_mesh):
         vertices, normals = simple_mesh
         all_dashes = [[], [], []]

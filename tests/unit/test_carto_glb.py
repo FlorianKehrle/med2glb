@@ -101,6 +101,11 @@ class TestCartoAnimatedGlb:
             prim = mesh.primitives[0]
             assert prim.attributes.COLOR_0 is not None
 
+        # CARTO meshes should use KHR_materials_unlit
+        assert "KHR_materials_unlit" in (gltf.extensionsUsed or [])
+        for mat in gltf.materials:
+            assert "KHR_materials_unlit" in (mat.extensions or {})
+
     def test_single_frame_no_division_error(self, synthetic_carto_mesh, synthetic_carto_points, tmp_path):
         """n_frames=1 must not raise ZeroDivisionError."""
         from med2glb.glb.carto_builder import build_carto_animated_glb

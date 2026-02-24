@@ -17,6 +17,7 @@ class MaterialConfig:
     metallic: float = 0.0
     roughness: float = 0.7
     name: str = ""
+    unlit: bool = False
 
 
 @dataclass

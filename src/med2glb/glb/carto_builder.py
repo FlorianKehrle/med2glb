@@ -185,6 +185,8 @@ def build_carto_animated_glb(
         materials=[],
         animations=[],
     )
+    if mesh_data.material.unlit:
+        gltf.extensionsUsed = ["KHR_materials_unlit"]
     binary_data = bytearray()
 
     # Shared geometry: positions, normals, indices (written once)
@@ -213,7 +215,7 @@ def build_carto_animated_glb(
     for fi in range(n_frames):
         # Material: white base color, vertex colors drive appearance
         mat_idx = len(gltf.materials)
-        gltf.materials.append(pygltflib.Material(
+        mat_kwargs: dict = dict(
             name=f"wavefront_{fi}",
             pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
                 baseColorFactor=[1.0, 1.0, 1.0, 1.0],
@@ -221,7 +223,10 @@ def build_carto_animated_glb(
                 roughnessFactor=0.7,
             ),
             doubleSided=True,
-        ))
+        )
+        if mesh_data.material.unlit:
+            mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
+        gltf.materials.append(pygltflib.Material(**mat_kwargs))
 
         # COLOR_0 accessor for this frame (already uint8 from frame loop)
         color_acc = write_accessor(
@@ -261,6 +266,7 @@ def build_carto_animated_glb(
             mesh_data.vertices, mesh_data.normals,
             gltf, binary_data, n_frames,
             speed_factors=arrow_speed_factors,
+            unlit=mesh_data.material.unlit,
         )
         # Add arrow nodes to the scene
         gltf.scenes[0].nodes.extend(arrow_node_indices)
