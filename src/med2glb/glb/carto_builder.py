@@ -127,8 +127,9 @@ def build_carto_animated_glb(
         # Fallback: neutral light gray if no colormap was applied
         base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
 
-    # Generate per-frame vertex colors with highlight ring
-    frame_colors = []
+    # Generate per-frame vertex colors with highlight ring (store as uint8
+    # immediately to cut memory from 16 bytes/vert to 4 bytes/vert per frame)
+    frame_colors_u8: list[np.ndarray] = []
     for fi in range(n_frames):
         _report(f"Generating frame {fi + 1}/{n_frames}...", fi, n_frames)
         t = fi / max(n_frames - 1, 1)  # ring position in normalized LAT space
@@ -144,7 +145,7 @@ def build_carto_animated_glb(
         colors[:, :3] = np.minimum(colors[:, :3] + add, 1.0)
         colors[:, 3] = 1.0
 
-        frame_colors.append(colors.astype(np.float32))
+        frame_colors_u8.append(np.clip(colors * 255 + 0.5, 0, 255).astype(np.uint8))
 
     # Compute animated arrow dashes if vectors enabled
     arrow_frame_dashes = None
@@ -222,10 +223,9 @@ def build_carto_animated_glb(
             doubleSided=True,
         ))
 
-        # COLOR_0 accessor for this frame (uint8 normalized — 4x smaller than float32)
-        colors_u8 = np.clip(frame_colors[fi] * 255 + 0.5, 0, 255).astype(np.uint8)
+        # COLOR_0 accessor for this frame (already uint8 from frame loop)
         color_acc = write_accessor(
-            gltf, binary_data, colors_u8, pygltflib.ARRAY_BUFFER,
+            gltf, binary_data, frame_colors_u8[fi], pygltflib.ARRAY_BUFFER,
             pygltflib.UNSIGNED_BYTE, pygltflib.VEC4, normalized=True,
         )
 
