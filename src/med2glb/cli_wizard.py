@@ -160,8 +160,8 @@ class VectorQuality:
 
 _MIN_VALID_LAT_POINTS = 30
 _MIN_LAT_RANGE_MS = 20.0
-_MIN_LAT_IQR_MS = 10.0
-_MIN_POINT_DENSITY = 0.005  # pts/mm² — subdivision + IDW compensate for sparse sampling
+_MIN_LAT_IQR_MS = 50.0   # filter uniform SR maps — vectors need real activation spread
+_MIN_POINT_DENSITY = 0.001  # just catch truly empty meshes; IDW handles sparse data
 
 
 def _mesh_surface_area(mesh: CartoMesh) -> float:

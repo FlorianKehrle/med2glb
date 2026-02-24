@@ -301,7 +301,7 @@ class TestAssessVectorQuality:
         quality = _assess_vector_quality(study, None)
         assert quality.suitable is False
         assert "density" in quality.reason
-        assert quality.point_density < 0.005
+        assert quality.point_density < 0.001
 
     def test_good_data_suitable(self):
         """Enough points with sufficient LAT range."""
