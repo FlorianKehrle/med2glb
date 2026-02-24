@@ -10,13 +10,12 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 
 **Key features:**
 
-- **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring overlay (works with all coloring modes); animated LAT streamline vectors showing conduction direction; Loop subdivision with IDW interpolation for smooth color maps
-- **Interactive wizard** -- when run without flags, analyzes the input and presents relevant options (coloring, output mode, vectors, quality) via Rich prompts; falls back to sensible defaults in non-TTY environments
+- **Analyze-and-prompt workflow** -- point it at a directory, it analyzes the data, shows a summary, and guides you through relevant options with smart defaults
+- **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring overlay; animated LAT streamline vectors showing conduction direction; Loop subdivision with IDW interpolation for smooth color maps
 - **Animated cardiac output** -- 2D cine clips become animated GLB with per-frame texture planes; 3D temporal volumes use morph targets; CARTO excitation ring animation
 - **Gallery mode** -- convert every slice to textured quads with three layouts: individual GLBs, lightbox grid, and spatial fan positioned using DICOM metadata
 - **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and MedSAM2 (echo/general)
 - **Automatic series detection** -- multi-series DICOM folders are analyzed and classified (3D volume, 2D cine, still image) with per-series conversion recommendations
-- **Interactive series selection** -- choose which series to convert from a Rich table, or let the tool auto-select the best one
 - **Multi-format export** -- GLB (with animation and PBR materials), STL, and OBJ
 - **AR-optimized meshes** -- Taubin smoothing (volume-preserving), decimation to configurable triangle count, and configurable transparency
 - **GLB size constraint** -- automatic compression to fit AR viewer limits (default 99 MB) with three strategies: Draco mesh compression, texture downscaling, or JPEG re-encoding
@@ -44,72 +43,95 @@ pip install -e ".[dev]"
 
 ## Quick Start
 
+Just point med2glb at a directory. It analyzes the input, shows you what it found, and walks you through the relevant options:
+
 ```bash
-# Convert a DICOM directory — output placed in glb/ subfolder with auto-detected type
-med2glb ./echo_folder/        # → ./echo_folder/glb/echo_folder_Echo_3D_animated.glb
-med2glb ./ct_scan/            # → ./ct_scan/glb/ct_scan_CT_3D.glb
-med2glb image.dcm             # → ./glb/image_Echo_2D.glb
+med2glb ./patient_data/
+```
 
-# Explicit output name
-med2glb ./echo_folder/ -o heart.glb
+That's it. The tool will:
 
-# Output to a directory — filename derived from input
-med2glb ./echo_folder/ -o output/   # → output/echo_folder_Echo_3D_animated.glb
+1. **Detect the data type** -- CARTO export, DICOM volume, cine clip, or single image
+2. **Display a summary** -- a Rich table with all maps or series, their metadata, and recommendations
+3. **Prompt for options** -- only the choices relevant to your data, with smart defaults you can accept by pressing Enter
+4. **Convert and export** -- output placed in a `glb/` subfolder with a descriptive filename
 
-# Animated 3D echo (cardiac cycle with morph targets)
-med2glb ./echo_folder/ -o heart.glb --animate
+### CARTO example
 
-# Gallery mode: individual GLBs + lightbox grid + spatial fan
+```
+$ med2glb ./Export_Study/
+
+  CARTO Study: Patient_AF_Ablation (v7.2, 3 maps, 4218 points)
+
+┌───┬────────────────┬──────────┬───────────┬────────┬─────────────────┐
+│ # │ Map            │ Vertices │ Triangles │ Points │ LAT Range       │
+├───┼────────────────┼──────────┼───────────┼────────┼─────────────────┤
+│ 1 │ ReBS_V_SR_11   │   12840  │   25676   │  2105  │ -48 ms → 92 ms  │
+│ 2 │ LA_PVI_Post    │    8432  │   16860   │  1650  │ -32 ms → 78 ms  │
+│ 3 │ RA_Flutter     │    6210  │   12416   │   463  │ -15 ms → 45 ms  │
+└───┴────────────────┴──────────┴───────────┴────────┴─────────────────┘
+
+Mesh selection [all]: 1
+Coloring (lat / bipolar / unipolar) [lat]:
+Output mode (static / animated / both) [both]:
+LAT vectors (yes / no / only) [yes]:
+Subdivision level (0-3) [2]:
+
+→ ./Export_Study/glb/ReBS_V_SR_11_lat.glb
+→ ./Export_Study/glb/ReBS_V_SR_11_lat_animated.glb
+→ ./Export_Study/glb/ReBS_V_SR_11_lat_animated_vectors.glb
+```
+
+### DICOM example
+
+```
+$ med2glb ./echo_folder/
+
+  DICOM Series in echo_folder
+
+┌───┬──────────┬──────────────────────────┬───────────┬────────────┬────────────────────┐
+│ # │ Modality │ Description              │ Data Type │ Detail     │ Recommended Method │
+├───┼──────────┼──────────────────────────┼───────────┼────────────┼────────────────────┤
+│ 1 │ US       │ Echokardiographie 4D     │ 2D cine   │ 132 frames │ classical          │
+│ 2 │ CT       │ Thorax mit Kontrastmittel│ 3D volume │ 120 slices │ marching-cubes     │
+└───┴──────────┴──────────────────────────┴───────────┴────────────┴────────────────────┘
+
+Recommendation: Series 1 (2D cine, 132 frames) → classical
+
+Series [1]:
+Method [classical]:
+Quality (draft / standard / high) [standard]:
+Animate [yes]:
+
+→ ./echo_folder/glb/echo_folder_Echo_3D_animated.glb
+```
+
+### Non-interactive / CI usage
+
+In non-TTY environments (piped input, CI), the wizard is skipped and sensible defaults are applied automatically. You can also bypass the wizard by passing explicit flags:
+
+```bash
+# Explicit flags skip the wizard entirely
+med2glb ./Export_Study/ --coloring bipolar --animate
+med2glb ./echo_folder/ -o heart.glb --method totalseg
 med2glb ./dicom_folder/ --gallery
-
-# Cardiac CT with AI segmentation (7 structures)
-med2glb ./ct_folder/ -o heart.glb --method totalseg
-
-# Multi-threshold layered output
-med2glb ./data/ -o layers.glb --multi-threshold "200:bone:1.0,100:tissue:0.5"
-
-# Export as STL or OBJ
-med2glb ./data/ -o model.stl -f stl
-
-# Limit output to 50 MB with JPEG compression
-med2glb ./data/ --max-size 50 --compress jpeg
 ```
 
 ## CARTO 3 Electro-Anatomical Mapping
 
-med2glb auto-detects CARTO 3 export directories (containing `.mesh` files) and converts them to GLB with per-vertex coloring from the mapping data. Output files are placed in a `glb/` subfolder inside the input directory by default.  Supports old CARTO (~2015, v4), v7.1 (v5), and v7.2+ (v6) formats.
+med2glb auto-detects CARTO 3 export directories (containing `.mesh` files) and converts them to GLB with per-vertex coloring from the mapping data. Output files are placed in a `glb/` subfolder inside the input directory by default. Supports old CARTO (~2015, v4), v7.1 (v5), and v7.2+ (v6) formats.
+
+The interactive wizard handles all options, but you can also set them explicitly:
 
 ```bash
-# Auto-detect and convert with LAT coloring (default)
-med2glb ./Export_Study/
-# → ./Export_Study/glb/ReBS_V_SR_11_lat.glb
-
 # Bipolar voltage map (scar mapping)
 med2glb ./Export_Study/ --coloring bipolar
 
-# Unipolar voltage map
-med2glb ./Export_Study/ --coloring unipolar
-
-# Animated excitation ring (works with any coloring mode)
-med2glb ./Export_Study/ --animate
-# → ./Export_Study/glb/ReBS_V_SR_11_lat_animated.glb
-
-med2glb ./Export_Study/ --coloring bipolar --animate
-# → ./Export_Study/glb/ReBS_V_SR_11_bipolar_animated.glb
-
-# Animated LAT streamline vectors (conduction direction arrows)
+# Animated excitation ring with vectors
 med2glb ./Export_Study/ --animate --vectors
-# → ./Export_Study/glb/ReBS_V_SR_11_lat_animated_vectors.glb
-
-# Static output with vectors overlay
-med2glb ./Export_Study/ --vectors
-# → ./Export_Study/glb/ReBS_V_SR_11_lat_vectors.glb
 
 # Smoother color maps with more subdivision (default: 2)
 med2glb ./Export_Study/ --subdivide 3
-
-# Original nearest-neighbor mapping (no subdivision)
-med2glb ./Export_Study/ --subdivide 0
 
 # Explicit output path
 med2glb ./Export_Study/ -o left_atrium_lat.glb --coloring lat
@@ -139,32 +161,14 @@ By default, CARTO meshes are Loop-subdivided twice (`--subdivide 2`) before mapp
 - `_car.txt` files: sparse measurement points mapped to mesh vertices via k-NN IDW interpolation (with subdivision) or nearest-neighbor + linear interpolation (without)
 - LAT sentinel value `-10000` is treated as unmapped (rendered as transparent gray)
 
-When a CARTO export contains multiple meshes (e.g. LA, RA), an interactive selection table is displayed.
+**LAT conduction vectors:**
 
-**LAT conduction vectors (`--vectors`):**
+Animated streamline arrows overlaid on the mesh showing the direction of electrical conduction derived from the LAT gradient field. The arrows flow along curved paths following the gradient, with dashes that advance each frame in sync with the excitation ring animation. In static mode, a single frame of arrows is rendered as an extra mesh node.
 
-When enabled, animated streamline arrows are overlaid on the mesh showing the direction of electrical conduction derived from the LAT gradient field. The arrows flow along curved paths following the gradient, with dashes that advance each frame in sync with the excitation ring animation. In static mode, a single frame of arrows is rendered as an extra mesh node.
-
-In the interactive wizard, the vectors prompt offers three choices:
-- **yes** — produce both with-vectors and without-vectors variants (for comparison)
-- **no** — no vector output
-- **only** — produce only the animated+vectors variant (no static, no non-vector files)
-
-## Interactive Wizard
-
-When run without any pipeline flags (no `--method`, `--coloring`, `--animate`, etc.), med2glb analyzes the input and launches an interactive wizard:
-
-```bash
-# Wizard mode — prompts for coloring, output mode, vectors, subdivision
-med2glb ./Export_Study/
-
-# Bypass wizard — use explicit flags
-med2glb ./Export_Study/ --coloring bipolar --animate
-```
-
-The wizard detects whether the input is CARTO or DICOM, prints a summary of the data, and presents only relevant options. For CARTO data: map selection, coloring, output mode (static/animated/both), LAT vectors, and subdivision level. For DICOM data: series selection, conversion method (filtered to available), quality preset, and animation.
-
-In non-TTY environments (piped input, CI), the wizard is skipped and sensible defaults are used with a summary logged.
+The wizard automatically assesses vector quality based on point density and LAT range, and defaults the vectors option accordingly. In the wizard, the vectors prompt offers three choices:
+- **yes** -- produce both with-vectors and without-vectors variants (for comparison)
+- **no** -- no vector output
+- **only** -- produce only the animated+vectors variant (no static, no non-vector files)
 
 ## Gallery Mode
 
@@ -216,44 +220,15 @@ Output GLB files are automatically constrained to 99 MB (configurable) to fit AR
 Draco compresses mesh geometry losslessly and falls back to texture downscaling if still over the limit. The downscale strategy keeps PNG format but reduces resolution in steps (75%, 50%, 37.5%, 25%). The JPEG strategy re-encodes textures with progressively lower quality (90 down to 30) and scaling.
 
 ```bash
-# Default: 99 MB limit with Draco strategy
-med2glb ./data/ -o output.glb
-
 # Custom size limit
-med2glb ./data/ -o output.glb --max-size 50
+med2glb ./data/ --max-size 50
 
 # Use JPEG compression (smaller but lossy)
-med2glb ./data/ -o output.glb --compress jpeg
+med2glb ./data/ --compress jpeg
 
 # Disable size constraint
-med2glb ./data/ -o output.glb --max-size 0
+med2glb ./data/ --max-size 0
 ```
-
-## Series Selection
-
-When a DICOM folder contains multiple series, med2glb analyzes each series and presents an interactive selection table:
-
-```
-  DICOM Series in echo_folder
-┌───┬──────────┬──────────────────────────┬─────────────┬─────────────┬──────────┬────────────────────┬────────────────────┐
-│ # │ Modality │ Description              │ Data Type   │ Detail      │ Animated │ Recommended Output │ Recommended Method │
-├───┼──────────┼──────────────────────────┼─────────────┼─────────────┼──────────┼────────────────────┼────────────────────┤
-│ 1 │ US       │ Echokardiographie 4D     │ 2D cine     │ 132 frames  │   Yes    │ textured plane     │ classical          │
-│ 2 │ US       │ (no desc)                │ 2D cine     │ 65 frames   │   Yes    │ textured plane     │ classical          │
-│ 3 │ CT       │ Thorax mit Kontrastmittel│ 3D volume   │ 120 slices  │    No    │ 3D mesh            │ marching-cubes     │
-└───┴──────────┴──────────────────────────┴─────────────┴─────────────┴──────────┴────────────────────┴────────────────────┘
-
-Recommendation: Series 1 (2D cine, 132 frames) → classical
-
-Enter number (1-3), comma-separated (1,3), or 'all' [1]: 1,3
-```
-
-- Enter a number (`1`), comma-separated list (`1,3`), or `all`
-- The recommended conversion method is auto-selected per series unless `--method` is explicitly set
-- Single-series folders proceed automatically without prompting
-- Non-interactive (piped) input auto-selects the best series
-
-Use `--list-series` to view the table without converting, or `--series <UID>` to skip selection entirely.
 
 ## Methods
 
@@ -264,7 +239,7 @@ Use `--list-series` to view the table without converting, or `--series <UID>` to
 | `totalseg` | Cardiac CT with contrast | Yes | No |
 | `medsam2` | 3D echo, general cardiac | Yes | Yes |
 
-List available methods and their install status:
+The wizard auto-selects the recommended method based on the data type. You can override it in the wizard or with `--method`. List available methods and their install status:
 
 ```bash
 med2glb --list-methods
@@ -274,35 +249,11 @@ med2glb --list-methods
 
 Full pipeline: Gaussian smoothing, adaptive Otsu threshold, morphological cleanup, largest-component extraction, then marching cubes for surface extraction. Best for noisy 3D echo data.
 
-```bash
-# Basic -- auto-detects threshold via Otsu's method
-med2glb ./echo_folder/ -o heart.glb
-
-# Explicit intensity threshold
-med2glb ./echo_folder/ -o heart.glb --threshold 400
-
-# Animated cardiac cycle (morph targets from temporal 3D echo)
-med2glb ./echo_folder/ -o heart.glb --animate
-
-# More smoothing for noisy data (default: 15 iterations)
-med2glb ./echo_folder/ -o heart.glb --smoothing 30
-
-# Fewer triangles for a lighter file (default: 80000)
-med2glb ./echo_folder/ -o heart.glb --faces 40000
-
-# Semi-transparent output for layered AR viewing
-med2glb ./echo_folder/ -o heart.glb --alpha 0.6
-```
-
 ### Marching Cubes
 
 Minimal pipeline: threshold then marching cubes. No morphological cleanup -- fast but noisier. Supports multi-threshold mode for extracting multiple structures at different intensity levels.
 
 ```bash
-# Basic with auto threshold
-med2glb ./data/ -o model.glb --method marching-cubes
-
-# Multi-threshold: extract bone and soft tissue as separate layers
 med2glb ./ct_folder/ -o layers.glb --method marching-cubes \
   --multi-threshold "200:bone:1.0,100:tissue:0.5,50:skin:0.3"
 ```
@@ -323,30 +274,9 @@ Uses TotalSegmentator's `heartchambers_highres` task to segment 7 cardiac struct
 
 Requires a contrast-enhanced cardiac CT for best results. The `heartchambers_highres` model may require a TotalSegmentator license for commercial use.
 
-```bash
-# Segment all 7 cardiac structures
-med2glb ./ct_folder/ -o heart.glb --method totalseg
-
-# Reduce mesh complexity (default: 80000 faces per structure)
-med2glb ./ct_folder/ -o heart.glb --method totalseg --faces 50000
-
-# Make all structures semi-transparent
-med2glb ./ct_folder/ -o heart.glb --method totalseg --alpha 0.7
-```
-
-The `--threshold` and `--animate` options have no effect on `totalseg` (AI-driven segmentation, single time point).
-
 ### MedSAM2
 
 AI segmentation for 3D echo and general cardiac imaging. Produces multi-structure output with per-structure colors. Currently uses a heuristic pseudo-segmentation; full MedSAM2 model integration is planned.
-
-```bash
-# Segment cardiac structures from 3D echo
-med2glb ./echo_folder/ -o heart.glb --method medsam2
-
-# Animated cardiac cycle
-med2glb ./echo_folder/ -o heart.glb --method medsam2 --animate
-```
 
 Requires AI dependencies: `pip install med2glb[ai]`
 
@@ -382,6 +312,8 @@ Options:
   -v, --verbose           Show detailed processing information
   --version               Show version and exit
 ```
+
+Passing any pipeline flag (`--method`, `--coloring`, `--animate`, `--vectors`, etc.) or `-o` bypasses the interactive wizard and runs with the specified settings directly.
 
 ## Output Formats
 
