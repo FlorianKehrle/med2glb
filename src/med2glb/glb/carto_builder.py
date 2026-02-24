@@ -131,7 +131,7 @@ def build_carto_animated_glb(
     frame_colors = []
     for fi in range(n_frames):
         _report(f"Generating frame {fi + 1}/{n_frames}...", fi, n_frames)
-        t = fi / (n_frames - 1)  # ring position in normalized LAT space
+        t = fi / max(n_frames - 1, 1)  # ring position in normalized LAT space
         colors = base_colors.copy()
 
         # Gaussian ring: bright band centered at current wavefront position
