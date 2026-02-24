@@ -62,4 +62,9 @@ pytest --cov=med2glb
 - **1-dicom-glb-converter**: Initial feature — DICOM to GLB conversion with pluggable methods, morph target animation, cardiac segmentation
 
 <!-- MANUAL ADDITIONS START -->
+
+## Maintenance Rules
+
+- **README.md**: When adding features, changing CLI options, or modifying user-facing workflow, update README.md to reflect the changes. Keep it in sync with actual capabilities.
+
 <!-- MANUAL ADDITIONS END -->

@@ -607,8 +607,13 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                 else:
                     lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
                     lat_values = interpolate_sparse_values(anim_mesh, lat_values)
-                active_mask = anim_mesh.group_ids != -1000000
-                active_lat = lat_values[active_mask]
+                # Resample LAT to match mesh_data vertices (fill-geometry
+                # stripping in carto_mesh_to_mesh_data may remove more
+                # vertices than the simple group_ids != -1000000 mask).
+                from scipy.spatial import KDTree as _KDTree
+                _tree = _KDTree(anim_mesh.vertices)
+                _, _idx = _tree.query(mesh_data.vertices)
+                active_lat = lat_values[_idx]
                 progress.update(task, advance=1)
 
                 def _anim_progress(desc: str, current: int, _total: int) -> None:
@@ -646,8 +651,11 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                     else:
                         vec_lat = map_points_to_vertices(vec_mesh, points, field="lat")
                         vec_lat = interpolate_sparse_values(vec_mesh, vec_lat)
-                    active_mask = vec_mesh.group_ids != -1000000
-                    vec_lat_active = vec_lat[active_mask]
+                    # Resample to mesh_data vertices (fill-stripping may differ)
+                    from scipy.spatial import KDTree as _KDTree_v
+                    _tree_v = _KDTree_v(vec_mesh.vertices)
+                    _, _idx_v = _tree_v.query(mesh_data.vertices)
+                    vec_lat_active = vec_lat[_idx_v]
 
                     streamlines = trace_all_streamlines(
                         mesh_data.vertices, mesh_data.faces, vec_lat_active,
@@ -975,9 +983,11 @@ def _run_carto_pipeline(
                 else:
                     lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
                     lat_values = interpolate_sparse_values(anim_mesh, lat_values)
-                # Filter to active vertices
-                active_mask = anim_mesh.group_ids != -1000000
-                active_lat = lat_values[active_mask]
+                # Resample to mesh_data vertices (fill-stripping may differ)
+                from scipy.spatial import KDTree as _KDTree3
+                _tree3 = _KDTree3(anim_mesh.vertices)
+                _, _idx3 = _tree3.query(mesh_data.vertices)
+                active_lat = lat_values[_idx3]
                 progress.update(task, advance=1)
 
                 def _anim_progress(desc: str, current: int, _total: int) -> None:
@@ -1018,8 +1028,11 @@ def _run_carto_pipeline(
                     else:
                         vec_lat = map_points_to_vertices(vec_mesh, points, field="lat")
                         vec_lat = interpolate_sparse_values(vec_mesh, vec_lat)
-                    active_mask = vec_mesh.group_ids != -1000000
-                    vec_lat_active = vec_lat[active_mask]
+                    # Resample to mesh_data vertices (fill-stripping may differ)
+                    from scipy.spatial import KDTree as _KDTree_v2
+                    _tree_v2 = _KDTree_v2(vec_mesh.vertices)
+                    _, _idx_v2 = _tree_v2.query(mesh_data.vertices)
+                    vec_lat_active = vec_lat[_idx_v2]
 
                     streamlines = trace_all_streamlines(
                         mesh_data.vertices, mesh_data.faces, vec_lat_active,
