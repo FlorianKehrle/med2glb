@@ -431,20 +431,43 @@ def run_batch_carto_wizard(
     interactive = is_interactive()
 
     # --- Summary table of all datasets ---
-    console.print(f"\n[bold cyan]Batch Mode: {len(studies)} CARTO dataset(s) detected[/bold cyan]")
-    table = Table(title="Datasets")
+    version_labels = {
+        "4.0": "CARTO 3 (~2015)",
+        "5.0": "CARTO 3 v7.1",
+        "6.0": "CARTO 3 v7.2+",
+    }
+    table = Table(title="Datasets Overview")
     table.add_column("#", style="bold", justify="right")
-    table.add_column("Path")
-    table.add_column("Meshes", justify="right")
+    table.add_column("Dataset")
+    table.add_column("Version")
+    table.add_column("Maps")
+    table.add_column("Mesh names")
     table.add_column("Points", justify="right")
+    table.add_column("LAT data")
 
     for i, (path, study) in enumerate(studies, 1):
         total_pts = sum(len(p) for p in study.points.values())
+        mesh_names = ", ".join(m.structure_name for m in study.meshes)
+        vlabel = version_labels.get(study.version, f"v{study.version}")
+
+        # Summarise LAT availability per mesh
+        lat_parts = []
+        for m in study.meshes:
+            pts = study.points.get(m.structure_name, [])
+            valid_lats = [p.lat for p in pts if not math.isnan(p.lat)]
+            if valid_lats:
+                lat_parts.append(f"{m.structure_name}: {min(valid_lats):.0f}..{max(valid_lats):.0f} ms")
+            else:
+                lat_parts.append(f"{m.structure_name}: [dim]none[/dim]")
+
         table.add_row(
             str(i),
             path.name,
+            vlabel,
             str(len(study.meshes)),
+            mesh_names,
             f"{total_pts:,}",
+            "\n".join(lat_parts),
         )
 
     console.print(table)

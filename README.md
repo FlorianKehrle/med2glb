@@ -106,6 +106,46 @@ Animate [yes]:
 → ./echo_folder/glb/echo_folder_Echo_3D_animated.glb
 ```
 
+### Multiple CARTO datasets (batch)
+
+Point med2glb at a parent folder containing multiple CARTO exports. It auto-detects all datasets, shows an overview, and asks settings once:
+
+```
+$ med2glb ../clinicalData/CARTO3/Version_7.1.80.33/
+
+  Directory Scan: Version_7.1.80.33
+    Type:     CARTO 3 electro-anatomical mapping
+    Exports:  3 dataset(s) found
+
+┌───┬─────────────────┬───────────────┬──────┬──────────────────┬────────┬─────────────────────┐
+│ # │ Dataset         │ Version       │ Maps │ Mesh names       │ Points │ LAT data            │
+├───┼─────────────────┼───────────────┼──────┼──────────────────┼────────┼─────────────────────┤
+│ 1 │ Export_Study_AF │ CARTO 3 v7.1  │   2  │ 1-LA, 2-RA       │  3,412 │ 1-LA: -48..92 ms    │
+│   │                 │               │      │                  │        │ 2-RA: -15..45 ms    │
+│ 2 │ Export_Study_VT │ CARTO 3 v7.1  │   1  │ 1-LV             │  1,820 │ 1-LV: -30..110 ms   │
+│ 3 │ Export_Study_FL │ CARTO 3 v7.1  │   1  │ 1-RA             │    463 │ 1-RA: -12..38 ms    │
+└───┴─────────────────┴───────────────┴──────┴──────────────────┴────────┴─────────────────────┘
+
+Coloring (applied to all datasets) [lat]:
+Output [both]:
+LAT vectors [yes]:
+Subdivision level [2]:
+
+=== Dataset 1/3: Export_Study_AF ===
+→ ./Export_Study_AF/glb/1-LA_lat.glb
+→ ./Export_Study_AF/glb/1-LA_lat_AR.glb
+...
+
+=== Dataset 2/3: Export_Study_VT ===
+...
+```
+
+Each dataset's output goes into its own `glb/` subfolder. The `--batch` flag can also be used explicitly to force batch mode in non-interactive environments:
+
+```bash
+med2glb ../CARTO_exports/ --batch --coloring lat --animate --vectors
+```
+
 ### Non-interactive / CI usage
 
 In non-TTY environments (piped input, CI), the wizard is skipped and sensible defaults are applied automatically. You can also bypass the wizard by passing explicit flags:
@@ -155,6 +195,14 @@ By default, CARTO meshes are Loop-subdivided twice (`--subdivide 2`) before mapp
 | `lat` (default) | Local activation time | Red (early) → yellow → green → cyan → blue → purple (late) |
 | `bipolar` | Substrate/scar mapping | Red (scar, <0.5 mV) → yellow → green → cyan → purple (normal, >1.5 mV) |
 | `unipolar` | Voltage mapping | Red (low) → yellow → green → blue (high) |
+
+**Dual output (standard + AR):**
+
+Every CARTO conversion produces two variants of each GLB:
+- **Standard** (`_lat.glb`) -- PBR metallic-roughness material with scene lighting, suitable for desktop/web viewers
+- **AR-optimized** (`_lat_AR.glb`) -- uses `KHR_materials_unlit` extension for lighting-independent rendering on AR headsets (HoloLens 2, etc.)
+
+Both variants are always generated automatically.
 
 **What gets parsed:**
 - `.mesh` files: 3D surface geometry with per-vertex group IDs (inactive vertices filtered out)
@@ -304,6 +352,7 @@ Options:
   --multi-threshold TEXT   Multi-threshold config: "val:label:alpha,..."
   --max-size INTEGER      Maximum output GLB file size in MB, 0 to disable (default: 99)
   --compress TEXT         Compression strategy: draco, downscale, jpeg (default: draco)
+  --batch                 Batch mode: find all CARTO exports in subdirectories and convert with shared settings
   --gallery               Gallery mode: individual GLBs, lightbox grid, and spatial fan
   --columns INTEGER       Lightbox grid columns in gallery mode (default: 6)
   --series TEXT           Select DICOM series by UID (partial match)
