@@ -9,6 +9,7 @@ import pytest
 
 from med2glb.io.carto_reader import (
     detect_carto_directory,
+    find_carto_subdirectories,
     load_carto_study,
     parse_car_file,
     parse_mesh_file,
@@ -152,3 +153,73 @@ class TestLoadCartoStudy:
         study = load_carto_study(CARTO_V72)
         assert len(study.meshes) >= 2  # LA and RA at minimum
         assert study.version == "6.0"
+
+
+class TestFindCartoSubdirectories:
+    @staticmethod
+    def _write_carto_files(dest: Path) -> None:
+        """Write minimal CARTO .mesh + _car.txt into *dest*."""
+        mesh_text = """\
+#TriangulatedMeshVersion2.0
+[GeneralAttributes]
+MeshID = 1
+NumVertex = 3
+NumTriangle = 1
+MeshColor = 0 1 0 1
+ColorsNames = LAT
+
+[VerticesSection]
+0 = 0 0 0 0 0 1 0
+1 = 10 0 0 0 0 1 0
+2 = 5 10 0 0 0 1 0
+
+[TrianglesSection]
+0 = 0 1 2 0 0 1 0
+"""
+        (dest / "1-Map.mesh").write_text(mesh_text, encoding="utf-8")
+        car_text = "VERSION_6_0 1-Map\n"
+        (dest / "1-Map_car.txt").write_text(car_text, encoding="utf-8")
+
+    def test_single_export_at_root(self, carto_mesh_dir):
+        """When .mesh files are in the root, returns [root]."""
+        result = find_carto_subdirectories(carto_mesh_dir)
+        assert result == [carto_mesh_dir]
+
+    def test_multiple_subdirs(self, tmp_path):
+        """When subdirs each contain a CARTO export, returns all of them."""
+        parent = tmp_path / "batch"
+        parent.mkdir()
+
+        for name in ("study_a", "study_b"):
+            sub = parent / name
+            sub.mkdir()
+            self._write_carto_files(sub)
+
+        result = find_carto_subdirectories(parent)
+        assert len(result) == 2
+        assert result[0].name == "study_a"
+        assert result[1].name == "study_b"
+
+    def test_empty_dir(self, tmp_path):
+        """Empty directory returns empty list."""
+        result = find_carto_subdirectories(tmp_path)
+        assert result == []
+
+    def test_ignores_non_carto_subdirs(self, tmp_path):
+        """Non-CARTO subdirs are ignored."""
+        parent = tmp_path / "mixed"
+        parent.mkdir()
+
+        # One CARTO subdir
+        carto_sub = parent / "carto_study"
+        carto_sub.mkdir()
+        self._write_carto_files(carto_sub)
+
+        # One non-CARTO subdir
+        other = parent / "other_data"
+        other.mkdir()
+        (other / "readme.txt").write_text("not carto")
+
+        result = find_carto_subdirectories(parent)
+        assert len(result) == 1
+        assert result[0].name == "carto_study"

@@ -35,6 +35,24 @@ def detect_carto_directory(path: Path) -> bool:
     return False
 
 
+def find_carto_subdirectories(path: Path) -> list[Path]:
+    """Find all subdirectories that each contain a self-contained CARTO export.
+
+    Walks one level of subdirectories and returns those where
+    ``detect_carto_directory()`` is True.  If the root path itself is a
+    single CARTO export (has .mesh files directly), returns ``[path]``.
+    """
+    # Root itself is a CARTO export
+    if list(path.glob("*.mesh")):
+        return [path]
+
+    results: list[Path] = []
+    for sub in sorted(path.iterdir()):
+        if sub.is_dir() and detect_carto_directory(sub):
+            results.append(sub)
+    return results
+
+
 def _find_export_dir(path: Path) -> Path:
     """Find the actual export directory containing .mesh files.
 

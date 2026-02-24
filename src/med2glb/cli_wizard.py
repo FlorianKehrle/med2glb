@@ -409,6 +409,155 @@ def _parse_mesh_selection(choice: str, n_meshes: int) -> list[int] | None:
 
 
 # ---------------------------------------------------------------------------
+# Batch CARTO wizard
+# ---------------------------------------------------------------------------
+
+def run_batch_carto_wizard(
+    studies: list[tuple[Path, "CartoStudy"]],
+    console: Console,
+    # Presets from CLI flags — if set, skip the corresponding prompt
+    preset_coloring: str | None = None,
+    preset_animate: bool | None = None,
+    preset_static: bool | None = None,
+    preset_vectors: str | None = None,
+    preset_subdivide: int | None = None,
+) -> list[CartoConfig]:
+    """Batch CARTO wizard: ask settings once, apply to all studies.
+
+    Shows a summary table of all detected datasets, prompts for shared
+    settings (coloring, output mode, vectors, subdivide), then returns
+    one ``CartoConfig`` per study with per-study vector quality assessment.
+    """
+    interactive = is_interactive()
+
+    # --- Summary table of all datasets ---
+    console.print(f"\n[bold cyan]Batch Mode: {len(studies)} CARTO dataset(s) detected[/bold cyan]")
+    table = Table(title="Datasets")
+    table.add_column("#", style="bold", justify="right")
+    table.add_column("Path")
+    table.add_column("Meshes", justify="right")
+    table.add_column("Points", justify="right")
+
+    for i, (path, study) in enumerate(studies, 1):
+        total_pts = sum(len(p) for p in study.points.values())
+        table.add_row(
+            str(i),
+            path.name,
+            str(len(study.meshes)),
+            f"{total_pts:,}",
+        )
+
+    console.print(table)
+
+    # --- Coloring (shared) ---
+    if preset_coloring is not None:
+        coloring = preset_coloring
+    elif interactive:
+        coloring = Prompt.ask(
+            "Coloring (applied to all datasets)",
+            choices=["lat", "bipolar", "unipolar"],
+            default="lat",
+            console=console,
+        )
+    else:
+        coloring = "lat"
+
+    # --- Output mode (shared) ---
+    if preset_animate is not None and preset_static is not None:
+        animate = preset_animate
+        static = preset_static
+    elif interactive:
+        mode = Prompt.ask(
+            "Output",
+            choices=["static", "animated", "both"],
+            default="both",
+            console=console,
+        )
+        static = mode in ("static", "both")
+        animate = mode in ("animated", "both")
+    else:
+        static = True
+        animate = True
+
+    # --- Vectors (shared choice, per-study quality) ---
+    if preset_vectors is not None:
+        vectors = preset_vectors
+    elif interactive and coloring == "lat":
+        vectors = Prompt.ask(
+            "LAT conduction vectors",
+            choices=["yes", "no", "only"],
+            default="yes",
+            console=console,
+        )
+    elif not interactive and coloring == "lat":
+        vectors = "yes"
+    else:
+        vectors = "no"
+
+    # --- Subdivision (shared) ---
+    if preset_subdivide is not None:
+        subdivide = preset_subdivide
+    elif interactive:
+        sub_choice = Prompt.ask(
+            "Subdivision level (0-3, higher = smoother colors)",
+            default="2",
+            console=console,
+        )
+        subdivide = max(0, min(3, int(sub_choice)))
+    else:
+        subdivide = 2
+
+    # --- Build per-study configs ---
+    configs: list[CartoConfig] = []
+    for path, study in studies:
+        vector_mesh_indices: list[int] | None = None
+        study_vectors = vectors
+
+        if study_vectors in ("yes", "only") and coloring == "lat":
+            vec_quality = _assess_vector_quality(study, None)
+            if not vec_quality.suitable:
+                console.print(
+                    f"[yellow]{path.name}: skipping vectors ({vec_quality.reason})[/yellow]"
+                )
+                study_vectors = "no"
+            elif vec_quality.suitable_indices is not None:
+                vector_mesh_indices = vec_quality.suitable_indices
+                if len(vector_mesh_indices) < len(study.meshes):
+                    skip_names = [
+                        study.meshes[i].structure_name
+                        for i in range(len(study.meshes))
+                        if i not in set(vector_mesh_indices)
+                    ]
+                    console.print(
+                        f"[yellow]{path.name}: vectors skipped for "
+                        f"{', '.join(skip_names)} (insufficient data)[/yellow]"
+                    )
+
+        configs.append(CartoConfig(
+            input_path=path,
+            selected_mesh_indices=None,  # all meshes
+            coloring=coloring,
+            subdivide=subdivide,
+            animate=animate,
+            static=static,
+            vectors=study_vectors,
+            vector_mesh_indices=vector_mesh_indices,
+        ))
+
+    # --- Summary ---
+    console.print(f"\n[dim]Batch Configuration:[/dim]")
+    console.print(f"  Datasets:   {len(configs)}")
+    console.print(f"  Coloring:   {coloring}")
+    mode_str = ("static + animated" if static and animate
+                else "animated" if animate else "static")
+    console.print(f"  Output:     {mode_str}")
+    console.print(f"  Vectors:    {vectors}")
+    console.print(f"  Subdivide:  {subdivide}")
+
+    return configs
+
+
+# ---------------------------------------------------------------------------
 # DICOM wizard
 # ---------------------------------------------------------------------------
 

@@ -13,6 +13,7 @@ from med2glb.cli_wizard import (
     _assess_vector_quality,
     _check_ai_available,
     _parse_mesh_selection,
+    run_batch_carto_wizard,
     run_carto_wizard,
     run_dicom_wizard,
 )
@@ -359,3 +360,123 @@ class TestAssessVectorQuality:
         quality_all = _assess_vector_quality(study, None)
         assert quality_all.suitable is True
         assert quality_all.suitable_indices == [0]
+
+
+class TestRunBatchCartoWizard:
+    def _make_study(self, name: str, n_points: int = 100, lat_range: float = 200.0) -> CartoStudy:
+        """Create a minimal CartoStudy for testing."""
+        vertices = np.random.RandomState(42).randn(50, 3).astype(np.float64) * 30
+        faces = np.array([[0, 1, 2]] * 40, dtype=np.int32)
+        normals = np.zeros_like(vertices)
+        group_ids = np.zeros(len(vertices), dtype=np.int32)
+        face_group_ids = np.zeros(len(faces), dtype=np.int32)
+
+        mesh = CartoMesh(
+            mesh_id=1,
+            vertices=vertices,
+            faces=faces,
+            normals=normals,
+            group_ids=group_ids,
+            face_group_ids=face_group_ids,
+            mesh_color=(0.0, 1.0, 0.0, 1.0),
+            color_names=["LAT"],
+            structure_name=name,
+        )
+
+        rng = np.random.RandomState(42)
+        points = [
+            CartoPoint(
+                i, rng.randn(3) * 20, rng.randn(3),
+                rng.uniform(0.1, 5.0), rng.uniform(1.0, 15.0),
+                rng.uniform(-lat_range / 2, lat_range / 2),
+            )
+            for i in range(n_points)
+        ]
+
+        return CartoStudy(
+            meshes=[mesh],
+            points={name: points},
+            version="6.0",
+            study_name=name,
+        )
+
+    def test_returns_one_config_per_study(self, tmp_path):
+        """Should return one CartoConfig per input study."""
+        studies = [
+            (tmp_path / "a", self._make_study("mesh_a")),
+            (tmp_path / "b", self._make_study("mesh_b")),
+        ]
+        console = Console(file=None, force_terminal=False)
+
+        configs = run_batch_carto_wizard(
+            studies, console,
+            preset_coloring="lat",
+            preset_animate=True,
+            preset_static=True,
+            preset_vectors="no",
+            preset_subdivide=2,
+        )
+
+        assert len(configs) == 2
+        assert configs[0].input_path == tmp_path / "a"
+        assert configs[1].input_path == tmp_path / "b"
+
+    def test_shared_settings_applied(self, tmp_path):
+        """All configs should share the same coloring/subdivide/animate settings."""
+        studies = [
+            (tmp_path / "a", self._make_study("mesh_a")),
+            (tmp_path / "b", self._make_study("mesh_b")),
+        ]
+        console = Console(file=None, force_terminal=False)
+
+        configs = run_batch_carto_wizard(
+            studies, console,
+            preset_coloring="bipolar",
+            preset_animate=False,
+            preset_static=True,
+            preset_vectors="no",
+            preset_subdivide=1,
+        )
+
+        for cfg in configs:
+            assert cfg.coloring == "bipolar"
+            assert cfg.subdivide == 1
+            assert cfg.animate is False
+            assert cfg.static is True
+
+    def test_all_meshes_selected(self, tmp_path):
+        """Batch mode should select all meshes (None = all)."""
+        studies = [
+            (tmp_path / "a", self._make_study("mesh_a")),
+        ]
+        console = Console(file=None, force_terminal=False)
+
+        configs = run_batch_carto_wizard(
+            studies, console,
+            preset_coloring="lat",
+            preset_animate=True,
+            preset_static=True,
+            preset_vectors="no",
+            preset_subdivide=2,
+        )
+
+        assert configs[0].selected_mesh_indices is None
+
+    def test_vectors_skipped_for_sparse_study(self, tmp_path):
+        """Study with very few points should have vectors set to 'no'."""
+        sparse_study = self._make_study("sparse", n_points=5, lat_range=10.0)
+        studies = [
+            (tmp_path / "sparse", sparse_study),
+        ]
+        console = Console(file=None, force_terminal=False)
+
+        configs = run_batch_carto_wizard(
+            studies, console,
+            preset_coloring="lat",
+            preset_animate=True,
+            preset_static=True,
+            preset_vectors="yes",
+            preset_subdivide=2,
+        )
+
+        assert configs[0].vectors == "no"

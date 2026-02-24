@@ -184,6 +184,11 @@ def main(
         "--list-series",
         help="List DICOM series found in input directory and exit.",
     ),
+    batch: bool = typer.Option(
+        False,
+        "--batch",
+        help="Batch mode: find all CARTO exports in subdirectories and convert with shared settings.",
+    ),
     verbose: bool = typer.Option(
         False,
         "-v",
@@ -270,6 +275,58 @@ def main(
             output = output / f"{auto_stem}.{format}"
 
     try:
+        # --- Batch mode ---
+        if batch and input_path.is_dir():
+            from med2glb.io.carto_reader import find_carto_subdirectories, load_carto_study
+            subdirs = find_carto_subdirectories(input_path)
+            if not subdirs:
+                err_console.print("[red]No CARTO exports found in subdirectories.[/red]")
+                raise typer.Exit(code=1)
+
+            if _is_interactive():
+                # Batch wizard: load all studies, ask settings once
+                studies = []
+                for d in subdirs:
+                    try:
+                        studies.append((d, load_carto_study(d)))
+                    except Exception as e:
+                        console.print(f"[yellow]Skipping {d.name}: {e}[/yellow]")
+                if not studies:
+                    err_console.print("[red]No valid CARTO studies found.[/red]")
+                    raise typer.Exit(code=1)
+
+                from med2glb.cli_wizard import run_batch_carto_wizard
+                configs = run_batch_carto_wizard(
+                    studies, console,
+                    preset_coloring=coloring if _was_option_provided(ctx, "coloring") else None,
+                    preset_animate=animate if _was_option_provided(ctx, "animate") else None,
+                    preset_static=not no_animate if _was_option_provided(ctx, "no_animate") else None,
+                    preset_vectors=("yes" if vectors else None) if _was_option_provided(ctx, "vectors") else None,
+                    preset_subdivide=subdivide if _was_option_provided(ctx, "subdivide") else None,
+                )
+                for i, cfg in enumerate(configs, 1):
+                    console.print(f"\n[bold]=== Dataset {i}/{len(configs)}: {cfg.input_path.name} ===[/bold]")
+                    _run_carto_from_config(cfg)
+            else:
+                # Non-interactive batch: run each subdir with CLI flags
+                console.print(f"[bold]Batch mode: {len(subdirs)} CARTO export(s) found[/bold]")
+                for i, subdir in enumerate(subdirs, 1):
+                    console.print(f"\n[bold]=== Dataset {i}/{len(subdirs)}: {subdir.name} ===[/bold]")
+                    sub_output = subdir / "glb" / "output.glb"
+                    _run_carto_pipeline(
+                        input_path=subdir,
+                        output=sub_output,
+                        coloring=coloring,
+                        subdivide=subdivide,
+                        animate=animate,
+                        vectors="yes" if vectors else "no",
+                        max_size_mb=max_size,
+                        compress_strategy=compress,
+                        target_faces=faces,
+                        verbose=verbose,
+                    )
+            return
+
         # Auto-detect CARTO data
         if input_path.is_dir():
             from med2glb.io.carto_reader import detect_carto_directory
@@ -355,7 +412,7 @@ def _has_pipeline_flags(ctx: typer.Context) -> bool:
     """
     pipeline_params = [
         "method", "coloring", "animate", "threshold", "gallery",
-        "no_animate", "vectors", "multi_threshold",
+        "no_animate", "vectors", "multi_threshold", "batch",
     ]
     return any(_was_option_provided(ctx, p) for p in pipeline_params)
 
@@ -962,6 +1019,20 @@ def _run_carto_pipeline(
     else:
         selected = list(range(len(study.meshes)))
 
+    # Per-mesh vector quality assessment (same logic the wizard uses)
+    _has_vectors = vectors in ("yes", "only")
+    vec_suitable: set[int] | None = None
+    if _has_vectors and coloring == "lat":
+        from med2glb.cli_wizard import _assess_vector_quality
+        vec_quality = _assess_vector_quality(study, selected)
+        vec_suitable = set(vec_quality.suitable_indices) if vec_quality.suitable_indices else set()
+        if not vec_quality.suitable:
+            console.print(f"[yellow]Skipping vectors: {vec_quality.reason}[/yellow]")
+            _has_vectors = False
+        elif len(vec_suitable) < len(selected):
+            skip_names = [study.meshes[i].structure_name for i in selected if i not in vec_suitable]
+            console.print(f"[yellow]Vectors skipped for: {', '.join(skip_names)} (insufficient data)[/yellow]")
+
     # Use output's parent directory for per-mesh files
     carto_output_dir = output.parent
     carto_output_dir.mkdir(parents=True, exist_ok=True)
@@ -971,10 +1042,12 @@ def _run_carto_pipeline(
         mesh = study.meshes[mesh_idx]
         points = study.points.get(mesh.structure_name)
 
+        # Gate vectors per mesh based on quality assessment
+        mesh_has_vec = _has_vectors and (vec_suitable is None or mesh_idx in vec_suitable)
+
         # Build descriptive filename: <structure>_<coloring>[_animated][_vectors].glb
         anim_suffix = "_animated" if (animate and points) else ""
-        _has_vectors = vectors in ("yes", "only")
-        vec_suffix = "_vectors" if _has_vectors else ""
+        vec_suffix = "_vectors" if mesh_has_vec else ""
         glb_name = f"{mesh.structure_name}_{coloring}{anim_suffix}{vec_suffix}.glb"
         out_path = carto_output_dir / glb_name
 
@@ -988,7 +1061,7 @@ def _run_carto_pipeline(
         if animate and points:
             # Steps: map vertices + subdivide LAT + map LAT + N frames + assemble
             _total_steps = 3 + _n_frames + 1
-        elif _has_vectors and points:
+        elif mesh_has_vec and points:
             # Steps: map vertices + vectors + build GLB
             _total_steps = 3
         else:
@@ -1031,12 +1104,12 @@ def _run_carto_pipeline(
                     mesh_data, active_lat, out_path,
                     target_faces=target_faces,
                     max_size_mb=max_size_mb,
-                    vectors=_has_vectors,
+                    vectors=mesh_has_vec,
                     progress=_anim_progress,
                 )
                 progress.update(task, completed=_total_steps)
             else:
-                if _has_vectors and points:
+                if mesh_has_vec and points:
                     progress.update(task, description="Generating static LAT vectors...")
                     extra = _build_static_vectors(
                         mesh, points, mesh_data, subdivide,
@@ -1050,14 +1123,14 @@ def _run_carto_pipeline(
             if max_size_mb > 0:
                 _build_compressed_carto_variant(
                     out_path, max_size_mb, mesh_data,
-                    animate and bool(points), _n_frames, _has_vectors,
+                    animate and bool(points), _n_frames, mesh_has_vec,
                     active_lat if (animate and points) else None,
                     extra, progress,
                 )
 
         _print_carto_summary(
             study, mesh, mesh_data, points, coloring,
-            subdivide, animate, _has_vectors, out_path, start_time,
+            subdivide, animate, mesh_has_vec, out_path, start_time,
         )
 
 
