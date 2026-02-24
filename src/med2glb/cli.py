@@ -850,6 +850,19 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                     extra, progress,
                 )
 
+            # Produce AR-optimized (unlit) variant
+            progress.add_task("Building AR variant (unlit)...", total=None)
+            ar_path = _build_ar_variant(
+                out_path, mesh_data,
+                is_animated=do_animate and bool(points),
+                active_lat=active_lat if (do_animate and points) else None,
+                extra_meshes=extra,
+                target_faces=config.target_faces,
+                max_size_mb=config.max_size_mb,
+                vectors=do_vectors,
+            )
+            console.print(f"  [dim]AR variant: {ar_path.name}[/dim]")
+
         _print_carto_summary(
             study, mesh, mesh_data, points, config.coloring,
             config.subdivide, do_animate, do_vectors, out_path, start_time,
@@ -1127,6 +1140,19 @@ def _run_carto_pipeline(
                     active_lat if (animate and points) else None,
                     extra, progress,
                 )
+
+            # Produce AR-optimized (unlit) variant
+            progress.add_task("Building AR variant (unlit)...", total=None)
+            ar_path = _build_ar_variant(
+                out_path, mesh_data,
+                is_animated=animate and bool(points),
+                active_lat=active_lat if (animate and points) else None,
+                extra_meshes=extra,
+                target_faces=target_faces,
+                max_size_mb=max_size_mb,
+                vectors=mesh_has_vec,
+            )
+            console.print(f"  [dim]AR variant: {ar_path.name}[/dim]")
 
         _print_carto_summary(
             study, mesh, mesh_data, points, coloring,
@@ -1455,6 +1481,55 @@ def _decimate_with_colors(mesh_data: "MeshData", target_faces: int) -> "MeshData
         _, idx = tree.query(result.vertices)
         result.vertex_colors = orig_colors[idx]
     return result
+
+
+def _build_ar_variant(
+    standard_path: Path,
+    mesh_data: "MeshData",
+    is_animated: bool,
+    active_lat: "np.ndarray | None",
+    extra_meshes: "list[MeshData] | None",
+    target_faces: int = 80000,
+    max_size_mb: int = 99,
+    vectors: bool = False,
+    progress_cb: "Callable[[str, int, int], None] | None" = None,
+) -> Path:
+    """Re-export the same mesh as an AR-optimized (unlit) GLB with ``_AR`` suffix.
+
+    Flips ``material.unlit`` to True, writes the AR variant, then restores
+    the original material state so the caller's mesh_data is unchanged.
+    """
+    ar_path = standard_path.with_name(
+        standard_path.stem + "_AR" + standard_path.suffix
+    )
+
+    # Temporarily enable unlit
+    mesh_data.material.unlit = True
+    if extra_meshes:
+        for em in extra_meshes:
+            em.material.unlit = True
+
+    try:
+        if is_animated and active_lat is not None:
+            from med2glb.glb.carto_builder import build_carto_animated_glb
+            build_carto_animated_glb(
+                mesh_data, active_lat, ar_path,
+                target_faces=target_faces,
+                max_size_mb=max_size_mb,
+                vectors=vectors,
+                progress=progress_cb,
+            )
+        else:
+            from med2glb.glb.builder import build_glb
+            build_glb([mesh_data], ar_path, extra_meshes=extra_meshes)
+    finally:
+        # Restore standard (lit) material
+        mesh_data.material.unlit = False
+        if extra_meshes:
+            for em in extra_meshes:
+                em.material.unlit = False
+
+    return ar_path
 
 
 def _build_compressed_carto_variant(
