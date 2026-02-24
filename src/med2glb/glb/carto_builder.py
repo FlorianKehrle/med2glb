@@ -34,9 +34,10 @@ def _compute_anim_target_faces(
     """Compute the max face count that keeps animated GLB under a size limit.
 
     Animated GLBs share geometry but duplicate COLOR_0 per frame.
-    Approximate bytes: F/2 * (60 + 16*N_frames) where F/2 ≈ vertex count.
+    Per-frame colors use uint8 RGBA (4 bytes/vert) instead of float32 (16).
+    Approximate bytes: F/2 * (60 + 4*N_frames) where F/2 ≈ vertex count.
     """
-    bytes_per_face = (60 + 16 * n_frames) / 2  # ≈270 for 30 frames
+    bytes_per_face = (60 + 4 * n_frames) / 2  # ≈90 for 30 frames
     max_faces = int(max_size_bytes / bytes_per_face)
     # Clamp: never exceed original, never go below 10K
     return max(10000, min(max_faces, n_faces))
@@ -221,10 +222,11 @@ def build_carto_animated_glb(
             doubleSided=True,
         ))
 
-        # COLOR_0 accessor for this frame
+        # COLOR_0 accessor for this frame (uint8 normalized — 4x smaller than float32)
+        colors_u8 = np.clip(frame_colors[fi] * 255 + 0.5, 0, 255).astype(np.uint8)
         color_acc = write_accessor(
-            gltf, binary_data, frame_colors[fi], pygltflib.ARRAY_BUFFER,
-            pygltflib.FLOAT, pygltflib.VEC4,
+            gltf, binary_data, colors_u8, pygltflib.ARRAY_BUFFER,
+            pygltflib.UNSIGNED_BYTE, pygltflib.VEC4, normalized=True,
         )
 
         # Primitive with shared geometry + per-frame color

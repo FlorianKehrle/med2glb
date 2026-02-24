@@ -302,11 +302,15 @@ def build_animated_arrow_nodes(
 
         attrs = pygltflib.Attributes(POSITION=pos_acc)
 
-        # COLOR_0 if available
+        # COLOR_0 if available (uint8 normalized — compact)
         if mesh_data.vertex_colors is not None:
+            colors_u8 = np.clip(
+                mesh_data.vertex_colors * 255 + 0.5, 0, 255,
+            ).astype(np.uint8)
             color_acc = write_accessor(
-                gltf, binary_data, mesh_data.vertex_colors.astype(np.float32),
-                pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC4,
+                gltf, binary_data, colors_u8,
+                pygltflib.ARRAY_BUFFER, pygltflib.UNSIGNED_BYTE, pygltflib.VEC4,
+                normalized=True,
             )
             attrs.COLOR_0 = color_acc
 
