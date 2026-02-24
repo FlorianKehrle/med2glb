@@ -98,9 +98,9 @@ def _apply_colormap(
 
     valid = ~np.isnan(values)
     if not np.any(valid):
-        # All NaN — return transparent gray
+        # All NaN — return fully transparent gray (invisible via MASK)
         colors[:, :3] = 0.5
-        colors[:, 3] = 0.3
+        colors[:, 3] = 0.0
         return colors
 
     v = values.copy()
@@ -128,8 +128,8 @@ def _apply_colormap(
     colors[valid, 2] = np.interp(t[valid], positions, b_stops).astype(np.float32)
     colors[valid, 3] = 1.0
 
-    # NaN values: transparent gray
+    # NaN values: fully transparent gray (invisible via MASK)
     colors[~valid, :3] = 0.5
-    colors[~valid, 3] = 0.3
+    colors[~valid, 3] = 0.0
 
     return colors

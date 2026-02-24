@@ -54,6 +54,22 @@ def test_build_glb_with_transparency(synthetic_mesh, tmp_path):
     assert mat.alphaMode == pygltflib.BLEND
 
 
+def test_build_glb_mask_mode_for_zero_alpha(synthetic_mesh, tmp_path):
+    """Vertex colors with alpha=0.0 should use MASK mode, not BLEND."""
+    n_verts = len(synthetic_mesh.vertices)
+    synthetic_mesh.vertex_colors = np.ones((n_verts, 4), dtype=np.float32)
+    # Some vertices fully transparent (NaN colormap pattern)
+    synthetic_mesh.vertex_colors[0, 3] = 0.0
+
+    output = tmp_path / "mask_mode.glb"
+    build_glb([synthetic_mesh], output)
+
+    gltf = pygltflib.GLTF2.load(str(output))
+    mat = gltf.materials[0]
+    assert mat.alphaMode == pygltflib.MASK
+    assert mat.alphaCutoff == pytest.approx(0.5)
+
+
 def test_build_glb_with_normals(synthetic_mesh, tmp_path):
     synthetic_mesh.normals = np.random.randn(
         len(synthetic_mesh.vertices), 3

@@ -72,11 +72,18 @@ def _add_mesh_to_gltf(
     material_idx = len(gltf.materials)
     has_vertex_colors = mesh_data.vertex_colors is not None
     # When vertex colors are present, use white base so COLOR_0 drives appearance
+    alpha_cutoff = None
     if has_vertex_colors:
         base_color_factor = [1.0, 1.0, 1.0, 1.0]
-        # Enable blending if any vertex alpha < 1
-        has_transparency = np.any(mesh_data.vertex_colors[:, 3] < 0.99)
-        alpha_mode = pygltflib.BLEND if has_transparency else pygltflib.OPAQUE
+        min_alpha = float(mesh_data.vertex_colors[:, 3].min())
+        if min_alpha > 0.99:
+            alpha_mode = pygltflib.OPAQUE
+        elif min_alpha < 0.01:
+            # Fully transparent vertices → MASK is faster than BLEND on HoloLens
+            alpha_mode = pygltflib.MASK
+            alpha_cutoff = 0.5
+        else:
+            alpha_mode = pygltflib.BLEND
     else:
         base_color_factor = [
             mat.base_color[0],
@@ -85,18 +92,19 @@ def _add_mesh_to_gltf(
             mat.alpha,
         ]
         alpha_mode = pygltflib.BLEND if mat.alpha < 1.0 else pygltflib.OPAQUE
-    gltf.materials.append(
-        pygltflib.Material(
-            name=mat.name or mesh_data.structure_name,
-            pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
-                baseColorFactor=base_color_factor,
-                metallicFactor=mat.metallic,
-                roughnessFactor=mat.roughness,
-            ),
-            alphaMode=alpha_mode,
-            doubleSided=True,
-        )
+    mat_kwargs: dict = dict(
+        name=mat.name or mesh_data.structure_name,
+        pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+            baseColorFactor=base_color_factor,
+            metallicFactor=mat.metallic,
+            roughnessFactor=mat.roughness,
+        ),
+        alphaMode=alpha_mode,
+        doubleSided=True,
     )
+    if alpha_cutoff is not None:
+        mat_kwargs["alphaCutoff"] = alpha_cutoff
+    gltf.materials.append(pygltflib.Material(**mat_kwargs))
 
     # Add vertex position data
     vertices = mesh_data.vertices.astype(np.float32)
