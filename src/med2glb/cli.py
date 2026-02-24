@@ -224,34 +224,159 @@ def main(
     from med2glb.cli_wizard import is_interactive as _is_interactive
     if _is_interactive() and not _has_pipeline_flags(ctx):
         try:
-            from med2glb.cli_wizard import analyze_input, run_carto_wizard, run_dicom_wizard
+            from med2glb.cli_wizard import (
+                analyze_input, run_carto_wizard, run_dicom_wizard, scan_directory,
+            )
 
-            # Check for multiple CARTO exports first (auto-batch)
+            # --- Universal directory scan ---
             if input_path.is_dir():
-                from med2glb.io.carto_reader import find_carto_subdirectories, load_carto_study
-                subdirs = find_carto_subdirectories(input_path)
-                if len(subdirs) > 1:
-                    from med2glb.cli_wizard import run_batch_carto_wizard
+                entries = scan_directory(input_path, console)
+                n_carto = sum(1 for e in entries if e.kind == "carto")
+                n_dicom = sum(1 for e in entries if e.kind == "dicom")
+
+                if len(entries) > 1 or (n_carto >= 1 and n_dicom >= 1):
+                    # Multiple datasets or mixed types — show overview
                     console.print(f"\n[bold cyan]Directory Scan: {input_path.name}[/bold cyan]")
-                    console.print(f"  Type:     CARTO 3 electro-anatomical mapping")
-                    console.print(f"  Exports:  {len(subdirs)} dataset(s) found\n")
-                    studies = []
-                    for d in subdirs:
-                        try:
-                            studies.append((d, load_carto_study(d, progress=lambda desc, cur, tot: None)))
-                        except Exception as e:
-                            console.print(f"[yellow]  Skipping {d.name}: {e}[/yellow]")
-                    if studies:
-                        configs = run_batch_carto_wizard(studies, console)
-                        for i, cfg in enumerate(configs, 1):
-                            console.print(f"\n[bold]=== Dataset {i}/{len(configs)}: {cfg.input_path.name} ===[/bold]")
-                            _run_carto_from_config(cfg)
+                    if n_carto:
+                        console.print(f"  CARTO:  {n_carto} export(s)")
+                    if n_dicom:
+                        console.print(f"  DICOM:  {n_dicom} folder(s)")
+                    console.print()
+
+                    # Show overview table
+                    overview = Table(title="Detected Datasets")
+                    overview.add_column("#", style="bold", justify="right")
+                    overview.add_column("Type")
+                    overview.add_column("Name")
+                    overview.add_column("Path")
+                    overview.add_column("Details")
+                    for i, entry in enumerate(entries, 1):
+                        type_label = "[green]CARTO[/green]" if entry.kind == "carto" else "[blue]DICOM[/blue]"
+                        overview.add_row(
+                            str(i), type_label, entry.label, entry.location, entry.detail,
+                        )
+                    console.print(overview)
+
+                    # Let user choose what to process
+                    carto_entries = [e for e in entries if e.kind == "carto"]
+                    dicom_entries = [e for e in entries if e.kind == "dicom"]
+
+                    if n_carto > 1:
+                        # Multiple CARTO exports — batch wizard
+                        from med2glb.io.carto_reader import load_carto_study
+                        from med2glb.cli_wizard import run_batch_carto_wizard
+
+                        choice = Prompt.ask(
+                            "Process",
+                            choices=(
+                                ["all-carto", "select"]
+                                + (["dicom"] if n_dicom else [])
+                            ),
+                            default="all-carto",
+                            console=console,
+                        )
+
+                        if choice == "all-carto":
+                            studies = []
+                            for e in carto_entries:
+                                try:
+                                    studies.append(
+                                        (e.path, load_carto_study(e.path, progress=lambda d, c, t: None))
+                                    )
+                                except Exception as exc:
+                                    console.print(f"[yellow]  Skipping {e.label}: {exc}[/yellow]")
+                            if studies:
+                                configs = run_batch_carto_wizard(studies, console)
+                                for j, cfg in enumerate(configs, 1):
+                                    console.print(
+                                        f"\n[bold]=== Dataset {j}/{len(configs)}: "
+                                        f"{cfg.input_path.name} ===[/bold]"
+                                    )
+                                    _run_carto_from_config(cfg)
+                                return
+
+                        elif choice == "select":
+                            sel = Prompt.ask(
+                                "Enter dataset numbers (comma-separated, e.g. 1,3,5)",
+                                console=console,
+                            )
+                            indices = [int(x.strip()) - 1 for x in sel.split(",") if x.strip().isdigit()]
+                            selected = [entries[i] for i in indices if 0 <= i < len(entries)]
+                            sel_carto = [e for e in selected if e.kind == "carto"]
+                            sel_dicom = [e for e in selected if e.kind == "dicom"]
+
+                            if sel_carto:
+                                studies = []
+                                for e in sel_carto:
+                                    try:
+                                        studies.append(
+                                            (e.path, load_carto_study(e.path, progress=lambda d, c, t: None))
+                                        )
+                                    except Exception as exc:
+                                        console.print(f"[yellow]  Skipping {e.label}: {exc}[/yellow]")
+                                if studies:
+                                    configs = run_batch_carto_wizard(studies, console)
+                                    for j, cfg in enumerate(configs, 1):
+                                        console.print(
+                                            f"\n[bold]=== Dataset {j}/{len(configs)}: "
+                                            f"{cfg.input_path.name} ===[/bold]"
+                                        )
+                                        _run_carto_from_config(cfg)
+
+                            if sel_dicom:
+                                for e in sel_dicom:
+                                    try:
+                                        from med2glb.io.dicom_reader import analyze_series
+                                        series = analyze_series(e.path)
+                                        if series:
+                                            dicom_cfg = run_dicom_wizard(series, e.path, console)
+                                            stem = e.path.name
+                                            glb_dir = e.path / "glb"
+                                            out_path = glb_dir / f"{stem}.glb"
+                                            _run_dicom_from_config(dicom_cfg, out_path)
+                                    except Exception as exc:
+                                        console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
+                            return
+
+                        elif choice == "dicom":
+                            # Fall through to DICOM wizard below
+                            pass
+                        else:
+                            return
+
+                    elif n_carto == 1 and n_dicom >= 1:
+                        # Mixed: 1 CARTO + DICOM — ask what to process
+                        choice = Prompt.ask(
+                            "Process",
+                            choices=["carto", "dicom", "both"],
+                            default="carto",
+                            console=console,
+                        )
+                        if choice in ("carto", "both"):
+                            from med2glb.io.carto_reader import load_carto_study
+                            e = carto_entries[0]
+                            study = load_carto_study(e.path)
+                            config = run_carto_wizard(study, e.path, console)
+                            _run_carto_from_config(config)
+                        if choice in ("dicom", "both"):
+                            e = dicom_entries[0]
+                            try:
+                                from med2glb.io.dicom_reader import analyze_series
+                                series = analyze_series(e.path)
+                                if series:
+                                    dicom_cfg = run_dicom_wizard(series, e.path, console)
+                                    stem = e.path.name
+                                    glb_dir = e.path / "glb"
+                                    out_path = glb_dir / f"{stem}.glb"
+                                    _run_dicom_from_config(dicom_cfg, out_path)
+                            except Exception as exc:
+                                console.print(f"[yellow]  Skipping DICOM: {exc}[/yellow]")
                         return
 
+            # --- Single dataset detection (original flow) ---
             detected = analyze_input(input_path)
 
             if detected.kind == "carto" and detected.carto_study is not None:
-                # Single CARTO export — normal wizard
                 config = run_carto_wizard(
                     detected.carto_study, input_path, console,
                 )

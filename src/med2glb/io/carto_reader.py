@@ -27,55 +27,33 @@ def detect_carto_directory(path: Path) -> bool:
     """Check if a directory contains CARTO export data (.mesh files)."""
     if not path.is_dir():
         return False
-    # Look for .mesh files in the directory tree (max 2 levels deep)
-    for pattern in ["*.mesh", "*/*.mesh", "*/*/*.mesh"]:
-        if any(path.glob(pattern)):
-            return True
-    return False
+    return any(path.rglob("*.mesh"))
 
 
 def find_carto_subdirectories(path: Path) -> list[Path]:
     """Find all directories under *path* that directly contain .mesh files.
 
-    Walks up to two levels of subdirectories.  Each returned path is a
+    Recursively scans the entire directory tree.  Each returned path is a
     self-contained CARTO export directory (has ``.mesh`` files in it).
     If the root path itself contains ``.mesh`` files, returns ``[path]``.
+    Results are sorted by path for deterministic ordering.
     """
-    # Root itself is a CARTO export
-    if list(path.glob("*.mesh")):
-        return [path]
-
-    results: list[Path] = []
-    for sub in sorted(path.iterdir()):
-        if not sub.is_dir():
-            continue
-        if list(sub.glob("*.mesh")):
-            results.append(sub)
-        else:
-            # Check one more level (e.g. Study 1/Export_Study/)
-            for sub2 in sorted(sub.iterdir()):
-                if sub2.is_dir() and list(sub2.glob("*.mesh")):
-                    results.append(sub2)
-    return results
+    dirs: set[Path] = set()
+    for mesh_file in path.rglob("*.mesh"):
+        dirs.add(mesh_file.parent)
+    return sorted(dirs)
 
 
 def _find_export_dir(path: Path) -> Path:
-    """Find the actual export directory containing .mesh files.
+    """Find the first directory containing .mesh files under *path*.
 
-    Users may point at the version directory or the export subdirectory.
-    Walk down until we find .mesh files.
+    Users may point at any ancestor directory.  Walks down recursively
+    and returns the first directory that directly contains ``.mesh`` files.
     """
     if list(path.glob("*.mesh")):
         return path
-    # Search one level of subdirectories
-    for sub in sorted(path.iterdir()):
-        if sub.is_dir() and list(sub.glob("*.mesh")):
-            return sub
-        # Two levels deep (e.g. Version_X/Study 1/Export_Study/)
-        if sub.is_dir():
-            for sub2 in sorted(sub.iterdir()):
-                if sub2.is_dir() and list(sub2.glob("*.mesh")):
-                    return sub2
+    for mesh_file in sorted(path.rglob("*.mesh")):
+        return mesh_file.parent
     return path
 
 

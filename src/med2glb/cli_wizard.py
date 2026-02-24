@@ -49,6 +49,78 @@ class DetectedInput:
     series_list: list[SeriesInfo] | None = None
 
 
+@dataclass
+class ScanEntry:
+    """One convertible dataset discovered during directory scan."""
+    kind: str  # "carto" or "dicom"
+    path: Path
+    label: str  # Human-readable short name (first subfolder under root)
+    detail: str  # Summary info (meshes, series, etc.)
+    location: str  # Full relative path from scan root
+
+
+def _first_subfolder_label(root: Path, target: Path) -> str:
+    """Return the first subfolder name under *root* on the way to *target*.
+
+    For ``root/A/B/C/Export/``, returns ``"A"``.  If *target* is *root*
+    itself, returns ``target.name``.
+    """
+    try:
+        rel = target.relative_to(root)
+    except ValueError:
+        return target.name
+    parts = rel.parts
+    if not parts:
+        return target.name
+    return parts[0]
+
+
+def scan_directory(path: Path, console: Console | None = None) -> list[ScanEntry]:
+    """Scan a directory for all convertible data (CARTO + DICOM).
+
+    Returns a list of :class:`ScanEntry` items, one per dataset found.
+    """
+    entries: list[ScanEntry] = []
+
+    if not path.is_dir():
+        return entries
+
+    # --- CARTO exports ---
+    from med2glb.io.carto_reader import find_carto_subdirectories
+    carto_dirs = find_carto_subdirectories(path)
+    for d in carto_dirs:
+        n_mesh = len(list(d.glob("*.mesh")))
+        n_car = len(list(d.glob("*_car.txt")))
+        try:
+            location = str(d.relative_to(path))
+        except ValueError:
+            location = d.name
+        entries.append(ScanEntry(
+            kind="carto",
+            path=d,
+            label=_first_subfolder_label(path, d),
+            detail=f"{n_mesh} mesh(es), {n_car} car file(s)",
+            location=location,
+        ))
+
+    # --- DICOM data ---
+    try:
+        from med2glb.io.dicom_reader import analyze_series
+        series = analyze_series(path)
+        if series:
+            entries.append(ScanEntry(
+                kind="dicom",
+                path=path,
+                label=path.name,
+                detail=f"{len(series)} series",
+                location=".",
+            ))
+    except Exception:
+        pass
+
+    return entries
+
+
 def analyze_input(path: Path) -> DetectedInput:
     """Detect whether the input is CARTO or DICOM and load metadata."""
     if path.is_dir():
