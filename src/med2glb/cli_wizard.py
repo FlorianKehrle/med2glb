@@ -74,20 +74,6 @@ def analyze_input(path: Path) -> DetectedInput:
 # CARTO wizard
 # ---------------------------------------------------------------------------
 
-def _carto_point_stats(points: list[CartoPoint]) -> dict[str, str]:
-    """Compute summary statistics for CARTO measurement points."""
-    if not points:
-        return {"Points": "0"}
-    lats = np.array([p.lat for p in points], dtype=np.float64)
-    valid = lats[~np.isnan(lats)]
-    stats: dict[str, str] = {
-        "Points": f"{len(points):,} ({len(valid):,} with valid LAT)",
-    }
-    if len(valid) > 0:
-        stats["LAT range"] = f"{np.min(valid):.0f} – {np.max(valid):.0f} ms"
-    return stats
-
-
 @dataclass
 class VectorQuality:
     """Assessment of whether LAT vector data is good enough for streamlines."""

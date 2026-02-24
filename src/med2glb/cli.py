@@ -6,6 +6,7 @@ import logging
 import math
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -464,6 +465,168 @@ def _run_pipeline(
         )
 
 
+def _extract_active_lat(
+    mesh: "CartoMesh",
+    points: list[CartoPoint],
+    mesh_data: "MeshData",
+    subdivide: int,
+    progress_cb: Callable[[str], None] | None = None,
+) -> np.ndarray:
+    """Map LAT values from sparse points to mesh_data vertices via KDTree.
+
+    Handles subdivision-dependent interpolation (IDW for subdivided,
+    NN + linear for raw) and resamples to the active vertex set in mesh_data.
+
+    Args:
+        mesh: Original CARTO mesh (pre-subdivision).
+        points: Measurement points.
+        mesh_data: The MeshData produced by carto_mesh_to_mesh_data.
+        subdivide: Number of Loop-subdivision iterations used.
+        progress_cb: Optional callback(description) for status updates.
+    """
+    from med2glb.io.carto_mapper import (
+        map_points_to_vertices,
+        map_points_to_vertices_idw,
+        interpolate_sparse_values,
+        subdivide_carto_mesh,
+    )
+
+    anim_mesh = mesh
+    if subdivide > 0:
+        if progress_cb:
+            progress_cb("Subdividing mesh for LAT extraction...")
+        anim_mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
+
+    if progress_cb:
+        progress_cb("Mapping LAT values...")
+    if subdivide > 0:
+        lat_values = map_points_to_vertices_idw(anim_mesh, points, field="lat")
+    else:
+        lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
+        lat_values = interpolate_sparse_values(anim_mesh, lat_values)
+
+    # Resample to mesh_data vertices (fill-stripping may differ)
+    from scipy.spatial import KDTree
+    tree = KDTree(anim_mesh.vertices)
+    _, idx = tree.query(mesh_data.vertices)
+    return lat_values[idx]
+
+
+def _build_static_vectors(
+    mesh: "CartoMesh",
+    points: list[CartoPoint],
+    mesh_data: "MeshData",
+    subdivide: int,
+) -> list["MeshData"] | None:
+    """Build static LAT vector arrow meshes for a single frame.
+
+    Returns a list containing one MeshData (the merged arrow mesh),
+    or None if no suitable streamlines were found.
+    """
+    from med2glb.mesh.lat_vectors import (
+        trace_all_streamlines, compute_animated_dashes,
+        compute_face_gradients, compute_dash_speed_factors,
+    )
+    from med2glb.glb.arrow_builder import build_frame_dashes, _auto_scale_params
+
+    # Extract LAT values aligned to mesh_data vertices
+    vec_lat_active = _extract_active_lat(mesh, points, mesh_data, subdivide)
+
+    streamlines = trace_all_streamlines(
+        mesh_data.vertices, mesh_data.faces, vec_lat_active,
+        mesh_data.normals, target_count=300,
+    )
+    if not streamlines:
+        return None
+
+    dashes = compute_animated_dashes(streamlines, n_frames=1)
+    if not dashes or not dashes[0]:
+        return None
+
+    bbox = mesh_data.vertices.max(axis=0) - mesh_data.vertices.min(axis=0)
+    params = _auto_scale_params(float(np.linalg.norm(bbox)))
+    max_r = params.max_radius if params.max_radius is not None else params.head_radius
+
+    face_grads, face_centers, _ = compute_face_gradients(
+        mesh_data.vertices, mesh_data.faces, vec_lat_active,
+    )
+    speed_factors = compute_dash_speed_factors(dashes, face_grads, face_centers)
+    sf = speed_factors[0] if speed_factors and speed_factors[0] else None
+
+    if sf is not None:
+        keep = [s >= 0.15 for s in sf]
+        frame_dashes = [d for d, k in zip(dashes[0], keep) if k]
+        sf = [s for s, k in zip(sf, keep) if k]
+        dash_radii: list[float] | None = [max_r * (1.1 - 0.3 * s) for s in sf]
+    else:
+        frame_dashes = dashes[0]
+        dash_radii = None
+
+    arrow_mesh = build_frame_dashes(
+        frame_dashes, mesh_data.vertices, mesh_data.normals, params,
+        dash_radii=dash_radii,
+    )
+    return [arrow_mesh] if arrow_mesh is not None else None
+
+
+def _print_carto_summary(
+    study: "CartoStudy",
+    mesh: "CartoMesh",
+    mesh_data: "MeshData",
+    points: list[CartoPoint] | None,
+    coloring: str,
+    subdivide: int,
+    do_animate: bool,
+    do_vectors: bool,
+    out_path: Path,
+    start_time: float,
+) -> None:
+    """Print a rich summary table after a CARTO mesh conversion."""
+    file_size = out_path.stat().st_size / 1024
+    elapsed = time.time() - start_time
+    n_total_verts = len(mesh.vertices)
+
+    clamp_info = ""
+    if coloring == "bipolar":
+        clamp_info = "0.05 – 1.5 mV"
+    elif coloring == "unipolar":
+        clamp_info = "3.0 – 10.0 mV"
+    elif coloring == "lat" and points:
+        valid_lats = [p.lat for p in points if not math.isnan(p.lat)]
+        if valid_lats:
+            clamp_info = f"{min(valid_lats):.0f} – {max(valid_lats):.0f} ms (auto)"
+
+    console.print(f"\n[green]CARTO conversion complete![/green]")
+    console.print(f"  System:     {_carto_version_label(study.version)}")
+    if study.study_name:
+        console.print(f"  Study:      {study.study_name}")
+    console.print(f"  Map:        {mesh.structure_name}")
+    console.print(f"  Coloring:   {coloring}")
+    if subdivide > 0:
+        console.print(f"  Subdivide:  level {subdivide} (~{4**subdivide}x face increase)")
+    if clamp_info:
+        console.print(f"  Color range: {clamp_info}")
+
+    mesh_points = points or []
+    point_stats = _carto_point_stats(mesh_points)
+    for label, value in point_stats.items():
+        console.print(f"  {label + ':':14s}{value}")
+
+    console.print(f"  Vertices:   {len(mesh_data.vertices):,} active / {n_total_verts:,} total")
+    console.print(f"  Faces:      {len(mesh_data.faces):,}")
+    anim_desc = "No"
+    if do_animate and points:
+        anim_desc = "Yes (excitation ring)"
+        if do_vectors:
+            anim_desc += " + LAT vectors"
+    elif do_vectors and points:
+        anim_desc = "No (static LAT vectors)"
+    console.print(f"  Animated:   {anim_desc}")
+    console.print(f"  Output:     {out_path}")
+    console.print(f"  Size:       {file_size:.1f} KB")
+    console.print(f"  Time:       {elapsed:.1f}s")
+
+
 def _run_carto_from_config(config: "CartoConfig") -> None:
     """Execute the CARTO pipeline from a wizard-produced config.
 
@@ -588,33 +751,14 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
 
             if do_animate and points:
                 from med2glb.glb.carto_builder import build_carto_animated_glb
-                from med2glb.io.carto_mapper import (
-                    map_points_to_vertices,
-                    map_points_to_vertices_idw,
-                    interpolate_sparse_values,
-                    subdivide_carto_mesh,
+
+                def _lat_progress(desc: str) -> None:
+                    progress.update(task, description=desc, advance=1)
+
+                active_lat = _extract_active_lat(
+                    mesh, points, mesh_data, config.subdivide,
+                    progress_cb=_lat_progress,
                 )
-
-                anim_mesh = mesh
-                if config.subdivide > 0:
-                    progress.update(task, description="Subdividing mesh for LAT extraction...")
-                    anim_mesh = subdivide_carto_mesh(mesh, iterations=config.subdivide)
-                progress.update(task, advance=1)
-
-                progress.update(task, description="Mapping LAT values...")
-                if config.subdivide > 0:
-                    lat_values = map_points_to_vertices_idw(anim_mesh, points, field="lat")
-                else:
-                    lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
-                    lat_values = interpolate_sparse_values(anim_mesh, lat_values)
-                # Resample LAT to match mesh_data vertices (fill-geometry
-                # stripping in carto_mesh_to_mesh_data may remove more
-                # vertices than the simple group_ids != -1000000 mask).
-                from scipy.spatial import KDTree as _KDTree
-                _tree = _KDTree(anim_mesh.vertices)
-                _, _idx = _tree.query(mesh_data.vertices)
-                active_lat = lat_values[_idx]
-                progress.update(task, advance=1)
 
                 def _anim_progress(desc: str, current: int, _total: int) -> None:
                     progress.update(task, description=desc,
@@ -632,63 +776,9 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
             else:
                 if do_vectors and points:
                     progress.update(task, description="Generating static LAT vectors...")
-                    from med2glb.mesh.lat_vectors import (
-                        trace_all_streamlines, compute_animated_dashes,
-                        compute_face_gradients, compute_dash_speed_factors,
+                    extra = _build_static_vectors(
+                        mesh, points, mesh_data, config.subdivide,
                     )
-                    from med2glb.glb.arrow_builder import build_frame_dashes, ArrowParams, _auto_scale_params
-                    from med2glb.io.carto_mapper import (
-                        map_points_to_vertices,
-                        map_points_to_vertices_idw,
-                        interpolate_sparse_values,
-                        subdivide_carto_mesh,
-                    )
-                    vec_mesh = mesh
-                    if config.subdivide > 0:
-                        vec_mesh = subdivide_carto_mesh(mesh, iterations=config.subdivide)
-                    if config.subdivide > 0:
-                        vec_lat = map_points_to_vertices_idw(vec_mesh, points, field="lat")
-                    else:
-                        vec_lat = map_points_to_vertices(vec_mesh, points, field="lat")
-                        vec_lat = interpolate_sparse_values(vec_mesh, vec_lat)
-                    # Resample to mesh_data vertices (fill-stripping may differ)
-                    from scipy.spatial import KDTree as _KDTree_v
-                    _tree_v = _KDTree_v(vec_mesh.vertices)
-                    _, _idx_v = _tree_v.query(mesh_data.vertices)
-                    vec_lat_active = vec_lat[_idx_v]
-
-                    streamlines = trace_all_streamlines(
-                        mesh_data.vertices, mesh_data.faces, vec_lat_active,
-                        mesh_data.normals, target_count=300,
-                    )
-                    if streamlines:
-                        dashes = compute_animated_dashes(streamlines, n_frames=1)
-                        if dashes and dashes[0]:
-                            bbox = mesh_data.vertices.max(axis=0) - mesh_data.vertices.min(axis=0)
-                            params = _auto_scale_params(float(np.linalg.norm(bbox)))
-                            max_r = params.max_radius if params.max_radius is not None else params.head_radius
-                            face_grads, face_centers, _ = compute_face_gradients(
-                                mesh_data.vertices, mesh_data.faces, vec_lat_active,
-                            )
-                            speed_factors = compute_dash_speed_factors(
-                                dashes, face_grads, face_centers,
-                            )
-                            sf = speed_factors[0] if speed_factors and speed_factors[0] else None
-                            if sf is not None:
-                                # Cull low-gradient dashes and compute per-dash radii
-                                keep = [s >= 0.15 for s in sf]
-                                frame_dashes = [d for d, k in zip(dashes[0], keep) if k]
-                                sf = [s for s, k in zip(sf, keep) if k]
-                                dash_radii = [max_r * (1.1 - 0.3 * s) for s in sf]
-                            else:
-                                frame_dashes = dashes[0]
-                                dash_radii = None
-                            arrow_mesh = build_frame_dashes(
-                                frame_dashes, mesh_data.vertices, mesh_data.normals, params,
-                                dash_radii=dash_radii,
-                            )
-                            if arrow_mesh is not None:
-                                extra = [arrow_mesh]
 
                 progress.update(task, description="Building GLB...")
                 build_glb([mesh_data], out_path, extra_meshes=extra)
@@ -703,50 +793,10 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                     extra, progress,
                 )
 
-        # Print summary
-        file_size = out_path.stat().st_size / 1024
-        elapsed = time.time() - start_time
-        n_total_verts = len(mesh.vertices)
-
-        clamp_info = ""
-        if config.coloring == "bipolar":
-            clamp_info = "0.05 – 1.5 mV"
-        elif config.coloring == "unipolar":
-            clamp_info = "3.0 – 10.0 mV"
-        elif config.coloring == "lat" and points:
-            valid_lats = [p.lat for p in points if not math.isnan(p.lat)]
-            if valid_lats:
-                clamp_info = f"{min(valid_lats):.0f} – {max(valid_lats):.0f} ms (auto)"
-
-        console.print(f"\n[green]CARTO conversion complete![/green]")
-        console.print(f"  System:     {_carto_version_label(study.version)}")
-        if study.study_name:
-            console.print(f"  Study:      {study.study_name}")
-        console.print(f"  Map:        {mesh.structure_name}")
-        console.print(f"  Coloring:   {config.coloring}")
-        if config.subdivide > 0:
-            console.print(f"  Subdivide:  level {config.subdivide} (~{4**config.subdivide}x face increase)")
-        if clamp_info:
-            console.print(f"  Color range: {clamp_info}")
-
-        mesh_points = points or []
-        point_stats = _carto_point_stats(mesh_points)
-        for label, value in point_stats.items():
-            console.print(f"  {label + ':':14s}{value}")
-
-        console.print(f"  Vertices:   {len(mesh_data.vertices):,} active / {n_total_verts:,} total")
-        console.print(f"  Faces:      {len(mesh_data.faces):,}")
-        anim_desc = "No"
-        if do_animate and points:
-            anim_desc = "Yes (excitation ring)"
-            if do_vectors:
-                anim_desc += " + LAT vectors"
-        elif do_vectors and points:
-            anim_desc = "No (static LAT vectors)"
-        console.print(f"  Animated:   {anim_desc}")
-        console.print(f"  Output:     {out_path}")
-        console.print(f"  Size:       {file_size:.1f} KB")
-        console.print(f"  Time:       {elapsed:.1f}s")
+        _print_carto_summary(
+            study, mesh, mesh_data, points, config.coloring,
+            config.subdivide, do_animate, do_vectors, out_path, start_time,
+        )
 
 
 def _run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
@@ -963,35 +1013,16 @@ def _run_carto_pipeline(
 
             if animate and points:
                 from med2glb.glb.carto_builder import build_carto_animated_glb
-                from med2glb.io.carto_mapper import (
-                    map_points_to_vertices,
-                    map_points_to_vertices_idw,
-                    interpolate_sparse_values,
-                    subdivide_carto_mesh,
+
+                def _lat_progress(desc: str) -> None:
+                    progress.update(task, description=desc, advance=1)
+
+                active_lat = _extract_active_lat(
+                    mesh, points, mesh_data, subdivide,
+                    progress_cb=_lat_progress,
                 )
 
-                # Use the same subdivided mesh for animation LAT extraction
-                anim_mesh = mesh
-                if subdivide > 0:
-                    progress.update(task, description="Subdividing mesh for LAT extraction...")
-                    anim_mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
-                progress.update(task, advance=1)
-
-                progress.update(task, description="Mapping LAT values...")
-                if subdivide > 0:
-                    lat_values = map_points_to_vertices_idw(anim_mesh, points, field="lat")
-                else:
-                    lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
-                    lat_values = interpolate_sparse_values(anim_mesh, lat_values)
-                # Resample to mesh_data vertices (fill-stripping may differ)
-                from scipy.spatial import KDTree as _KDTree3
-                _tree3 = _KDTree3(anim_mesh.vertices)
-                _, _idx3 = _tree3.query(mesh_data.vertices)
-                active_lat = lat_values[_idx3]
-                progress.update(task, advance=1)
-
                 def _anim_progress(desc: str, current: int, _total: int) -> None:
-                    # Map frame progress into our unified step counter
                     progress.update(task, description=desc,
                                     completed=3 + current + 1)
 
@@ -1005,67 +1036,11 @@ def _run_carto_pipeline(
                 )
                 progress.update(task, completed=_total_steps)
             else:
-                # Static GLB
                 if _has_vectors and points:
                     progress.update(task, description="Generating static LAT vectors...")
-                    from med2glb.mesh.lat_vectors import (
-                        trace_all_streamlines, compute_animated_dashes,
-                        compute_face_gradients, compute_dash_speed_factors,
+                    extra = _build_static_vectors(
+                        mesh, points, mesh_data, subdivide,
                     )
-                    from med2glb.glb.arrow_builder import build_frame_dashes, ArrowParams, _auto_scale_params
-                    from med2glb.io.carto_mapper import (
-                        map_points_to_vertices,
-                        map_points_to_vertices_idw,
-                        interpolate_sparse_values,
-                        subdivide_carto_mesh,
-                    )
-                    # Get LAT values for gradient computation
-                    vec_mesh = mesh
-                    if subdivide > 0:
-                        vec_mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
-                    if subdivide > 0:
-                        vec_lat = map_points_to_vertices_idw(vec_mesh, points, field="lat")
-                    else:
-                        vec_lat = map_points_to_vertices(vec_mesh, points, field="lat")
-                        vec_lat = interpolate_sparse_values(vec_mesh, vec_lat)
-                    # Resample to mesh_data vertices (fill-stripping may differ)
-                    from scipy.spatial import KDTree as _KDTree_v2
-                    _tree_v2 = _KDTree_v2(vec_mesh.vertices)
-                    _, _idx_v2 = _tree_v2.query(mesh_data.vertices)
-                    vec_lat_active = vec_lat[_idx_v2]
-
-                    streamlines = trace_all_streamlines(
-                        mesh_data.vertices, mesh_data.faces, vec_lat_active,
-                        mesh_data.normals, target_count=300,
-                    )
-                    if streamlines:
-                        dashes = compute_animated_dashes(streamlines, n_frames=1)
-                        if dashes and dashes[0]:
-                            bbox = mesh_data.vertices.max(axis=0) - mesh_data.vertices.min(axis=0)
-                            params = _auto_scale_params(float(np.linalg.norm(bbox)))
-                            max_r = params.max_radius if params.max_radius is not None else params.head_radius
-                            face_grads, face_centers, _ = compute_face_gradients(
-                                mesh_data.vertices, mesh_data.faces, vec_lat_active,
-                            )
-                            speed_factors = compute_dash_speed_factors(
-                                dashes, face_grads, face_centers,
-                            )
-                            sf = speed_factors[0] if speed_factors and speed_factors[0] else None
-                            if sf is not None:
-                                # Cull low-gradient dashes and compute per-dash radii
-                                keep = [s >= 0.15 for s in sf]
-                                frame_dashes = [d for d, k in zip(dashes[0], keep) if k]
-                                sf = [s for s, k in zip(sf, keep) if k]
-                                dash_radii = [max_r * (1.1 - 0.3 * s) for s in sf]
-                            else:
-                                frame_dashes = dashes[0]
-                                dash_radii = None
-                            arrow_mesh = build_frame_dashes(
-                                frame_dashes, mesh_data.vertices, mesh_data.normals, params,
-                                dash_radii=dash_radii,
-                            )
-                            if arrow_mesh is not None:
-                                extra = [arrow_mesh]
 
                 progress.update(task, description="Building GLB...")
                 build_glb([mesh_data], out_path, extra_meshes=extra)
@@ -1080,53 +1055,10 @@ def _run_carto_pipeline(
                     extra, progress,
                 )
 
-        # Print summary
-        file_size = out_path.stat().st_size / 1024
-        elapsed = time.time() - start_time
-        n_total_verts = len(mesh.vertices)
-        n_active_verts = int(np.sum(mesh.group_ids != -1000000))
-
-        # Colormap clamp range info
-        clamp_info = ""
-        if coloring == "bipolar":
-            clamp_info = "0.05 – 1.5 mV"
-        elif coloring == "unipolar":
-            clamp_info = "3.0 – 10.0 mV"
-        elif coloring == "lat" and points:
-            valid_lats = [p.lat for p in points if not math.isnan(p.lat)]
-            if valid_lats:
-                clamp_info = f"{min(valid_lats):.0f} – {max(valid_lats):.0f} ms (auto)"
-
-        console.print(f"\n[green]CARTO conversion complete![/green]")
-        console.print(f"  System:     {_carto_version_label(study.version)}")
-        if study.study_name:
-            console.print(f"  Study:      {study.study_name}")
-        console.print(f"  Map:        {mesh.structure_name}")
-        console.print(f"  Coloring:   {coloring}")
-        if subdivide > 0:
-            console.print(f"  Subdivide:  level {subdivide} (~{4**subdivide}x face increase)")
-        if clamp_info:
-            console.print(f"  Color range: {clamp_info}")
-
-        # Point statistics
-        mesh_points = points or []
-        point_stats = _carto_point_stats(mesh_points)
-        for label, value in point_stats.items():
-            console.print(f"  {label + ':':14s}{value}")
-
-        console.print(f"  Vertices:   {len(mesh_data.vertices):,} active / {n_total_verts:,} total")
-        console.print(f"  Faces:      {len(mesh_data.faces):,}")
-        anim_desc = "No"
-        if animate and points:
-            anim_desc = "Yes (excitation ring)"
-            if _has_vectors:
-                anim_desc += " + LAT vectors"
-        elif _has_vectors and points:
-            anim_desc = "No (static LAT vectors)"
-        console.print(f"  Animated:   {anim_desc}")
-        console.print(f"  Output:     {out_path}")
-        console.print(f"  Size:       {file_size:.1f} KB")
-        console.print(f"  Time:       {elapsed:.1f}s")
+        _print_carto_summary(
+            study, mesh, mesh_data, points, coloring,
+            subdivide, animate, _has_vectors, out_path, start_time,
+        )
 
 
 def _print_series_table(series_list: list[SeriesInfo], input_path: Path) -> None:
