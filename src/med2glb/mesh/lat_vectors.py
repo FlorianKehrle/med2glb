@@ -238,9 +238,11 @@ def trace_streamline(
         # Find which edge we crossed (most negative barycentric coord)
         min_idx = int(np.argmin(new_bary))
 
-        # The edge opposite to vertex min_idx
-        edge_verts = [k for k in range(3) if k != min_idx]
-        va_local, vb_local = edge_verts
+        # The edge opposite to vertex min_idx, in face winding order.
+        # Face winding: v0→v1→v2→v0.  Opposite edges (in winding order):
+        #   opposite v0: v1→v2,  opposite v1: v2→v0,  opposite v2: v0→v1
+        va_local = (min_idx + 1) % 3
+        vb_local = (min_idx + 2) % 3
         va = int(fi[va_local])
         vb = int(fi[vb_local])
 
