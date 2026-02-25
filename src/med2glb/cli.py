@@ -339,8 +339,19 @@ def main(
                             return
 
                         elif choice == "dicom":
-                            # Fall through to DICOM wizard below
-                            pass
+                            for e in dicom_entries:
+                                try:
+                                    from med2glb.io.dicom_reader import analyze_series
+                                    series = analyze_series(e.path)
+                                    if series:
+                                        dicom_cfg = run_dicom_wizard(series, e.path, console)
+                                        stem = e.path.name
+                                        glb_dir = e.path / "glb"
+                                        out_path = glb_dir / f"{stem}.glb"
+                                        _run_dicom_from_config(dicom_cfg, out_path)
+                                except Exception as exc:
+                                    console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
+                            return
                         else:
                             return
 
