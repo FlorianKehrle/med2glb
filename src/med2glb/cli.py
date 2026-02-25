@@ -999,7 +999,7 @@ def _run_carto_from_config(config: "CartoConfig") -> None:
                     )
 
                 progress.update(task, description="Building GLB...")
-                build_glb([mesh_data], out_path, extra_meshes=extra)
+                build_glb([mesh_data], out_path, extra_meshes=extra, source_units="mm")
                 progress.update(task, completed=_total_steps)
 
             # Produce a _compressed variant if the file exceeds the size limit
@@ -1290,7 +1290,7 @@ def _run_carto_pipeline(
                     )
 
                 progress.update(task, description="Building GLB...")
-                build_glb([mesh_data], out_path, extra_meshes=extra)
+                build_glb([mesh_data], out_path, extra_meshes=extra, source_units="mm")
                 progress.update(task, completed=_total_steps)
 
             # Produce a _compressed variant if the file exceeds the size limit
@@ -1682,7 +1682,7 @@ def _build_ar_variant(
             )
         else:
             from med2glb.glb.builder import build_glb
-            build_glb([mesh_data], ar_path, extra_meshes=extra_meshes)
+            build_glb([mesh_data], ar_path, extra_meshes=extra_meshes, source_units="mm")
     finally:
         # Restore standard (lit) material
         mesh_data.material.unlit = False
@@ -1748,7 +1748,7 @@ def _build_compressed_carto_variant(
         )
     else:
         from med2glb.glb.builder import build_glb
-        build_glb([decimated], compressed_path, extra_meshes=extra_meshes)
+        build_glb([decimated], compressed_path, extra_meshes=extra_meshes, source_units="mm")
 
     new_kb = compressed_path.stat().st_size / 1024
     progress.update(

@@ -104,7 +104,7 @@ def build_carto_animated_glb(
     if not np.any(valid_lat):
         # No valid LAT — fall back to static export
         from med2glb.glb.builder import build_glb
-        build_glb([mesh_data], output_path)
+        build_glb([mesh_data], output_path, source_units="mm")
         return
 
     lat_min = float(np.nanmin(lat_values))
@@ -112,7 +112,7 @@ def build_carto_animated_glb(
     lat_range = lat_max - lat_min
     if lat_range < 1e-6:
         from med2glb.glb.builder import build_glb
-        build_glb([mesh_data], output_path)
+        build_glb([mesh_data], output_path, source_units="mm")
         return
 
     # Normalize LAT to [0, 1]
@@ -181,10 +181,10 @@ def build_carto_animated_glb(
                 arrow_frame_dashes, face_grads, face_centers,
             )
 
-    # Build glTF with N frame nodes
+    # Build glTF with N frame nodes under a root mm→m scale node
     gltf = pygltflib.GLTF2(
         scene=0,
-        scenes=[pygltflib.Scene(nodes=list(range(n_frames)))],
+        scenes=[pygltflib.Scene(nodes=[])],  # set after building nodes
         nodes=[],
         meshes=[],
         accessors=[],
@@ -264,6 +264,9 @@ def build_carto_animated_glb(
             name=f"wavefront_{fi}", mesh=mesh_idx, scale=scale,
         ))
 
+    # Collect all child node indices for the root node
+    child_node_indices = list(range(n_frames))  # wavefront frame nodes
+
     # Add arrow nodes if vectors enabled
     arrow_node_indices: list[int] = []
     if arrow_frame_dashes is not None:
@@ -276,8 +279,7 @@ def build_carto_animated_glb(
             speed_factors=arrow_speed_factors,
             unlit=mesh_data.material.unlit,
         )
-        # Add arrow nodes to the scene
-        gltf.scenes[0].nodes.extend(arrow_node_indices)
+        child_node_indices.extend(arrow_node_indices)
 
     # Animation: switch visible frame via scale keyframes
     dt = loop_duration_s / n_frames
@@ -338,6 +340,15 @@ def build_carto_animated_glb(
         channels=channels,
         samplers=samplers,
     ))
+
+    # Root node: mm → m conversion (CARTO coordinates are in millimetres)
+    root_idx = len(gltf.nodes)
+    gltf.nodes.append(pygltflib.Node(
+        name="root",
+        children=child_node_indices,
+        scale=[0.001, 0.001, 0.001],
+    ))
+    gltf.scenes[0].nodes = [root_idx]
 
     # Finalize
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))

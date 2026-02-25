@@ -15,6 +15,7 @@ def build_glb(
     meshes: list[MeshData],
     output_path: Path,
     extra_meshes: list[MeshData] | None = None,
+    source_units: str = "m",
 ) -> None:
     """Build a GLB file from one or more meshes with PBR materials.
 
@@ -22,6 +23,8 @@ def build_glb(
         meshes: Primary meshes to include in the GLB.
         output_path: Where to write the .glb file.
         extra_meshes: Additional meshes (e.g. vector arrows) added as separate nodes.
+        source_units: Unit of vertex coordinates. ``"mm"`` adds a root node
+            with scale 0.001 so the GLB is in glTF-standard metres.
     """
     gltf = pygltflib.GLTF2(
         scene=0,
@@ -35,17 +38,30 @@ def build_glb(
     )
 
     all_binary_data = bytearray()
+    child_nodes: list[int] = []
 
     for i, mesh_data in enumerate(meshes):
         node_idx = _add_mesh_to_gltf(gltf, mesh_data, all_binary_data, i)
-        gltf.scenes[0].nodes.append(node_idx)
+        child_nodes.append(node_idx)
 
     if extra_meshes:
         for i, mesh_data in enumerate(extra_meshes):
             node_idx = _add_mesh_to_gltf(
                 gltf, mesh_data, all_binary_data, len(meshes) + i,
             )
-            gltf.scenes[0].nodes.append(node_idx)
+            child_nodes.append(node_idx)
+
+    # Wrap in a root node that converts mm → m when needed
+    if source_units == "mm":
+        root_idx = len(gltf.nodes)
+        gltf.nodes.append(pygltflib.Node(
+            name="root",
+            children=child_nodes,
+            scale=[0.001, 0.001, 0.001],
+        ))
+        gltf.scenes[0].nodes = [root_idx]
+    else:
+        gltf.scenes[0].nodes = child_nodes
 
     # Set buffer
     gltf.buffers.append(
