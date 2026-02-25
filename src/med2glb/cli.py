@@ -330,9 +330,8 @@ def main(
                                         series = analyze_series(e.path)
                                         if series:
                                             dicom_cfg = run_dicom_wizard(series, e.path, console)
-                                            stem = e.path.name
                                             glb_dir = e.path / "glb"
-                                            out_path = glb_dir / f"{stem}.glb"
+                                            out_path = glb_dir / f"{dicom_cfg.name}.glb"
                                             _run_dicom_from_config(dicom_cfg, out_path)
                                     except Exception as exc:
                                         console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
@@ -345,9 +344,8 @@ def main(
                                     series = analyze_series(e.path)
                                     if series:
                                         dicom_cfg = run_dicom_wizard(series, e.path, console)
-                                        stem = e.path.name
                                         glb_dir = e.path / "glb"
-                                        out_path = glb_dir / f"{stem}.glb"
+                                        out_path = glb_dir / f"{dicom_cfg.name}.glb"
                                         _run_dicom_from_config(dicom_cfg, out_path)
                                 except Exception as exc:
                                     console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
@@ -376,9 +374,8 @@ def main(
                                 series = analyze_series(e.path)
                                 if series:
                                     dicom_cfg = run_dicom_wizard(series, e.path, console)
-                                    stem = e.path.name
                                     glb_dir = e.path / "glb"
-                                    out_path = glb_dir / f"{stem}.glb"
+                                    out_path = glb_dir / f"{dicom_cfg.name}.glb"
                                     _run_dicom_from_config(dicom_cfg, out_path)
                             except Exception as exc:
                                 console.print(f"[yellow]  Skipping DICOM: {exc}[/yellow]")
@@ -400,13 +397,12 @@ def main(
                 dicom_config = run_dicom_wizard(
                     detected.series_list, input_path, console,
                 )
-                stem = input_path.stem if input_path.is_file() else input_path.name
                 if output is not None:
                     base = output if output.suffix == "" else output.parent
                     glb_dir = base / "glb"
                 else:
                     glb_dir = (input_path if input_path.is_dir() else input_path.parent) / "glb"
-                out_path = glb_dir / f"{stem}.glb"
+                out_path = glb_dir / f"{dicom_config.name}.glb"
                 _run_dicom_from_config(dicom_config, out_path)
                 return
         except ValueError:

@@ -437,8 +437,16 @@ def run_carto_wizard(
         subdivide = 2
         logger.info("Using default subdivision: 2")
 
+    # --- Name ---
+    # Auto-generate: <study_or_dir>_<coloring>_sub<N>
+    base_name = study.study_name or input_path.name
+    # Sanitise for filesystem: replace spaces/slashes with underscores
+    base_name = base_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+    name = f"{base_name}_{coloring}_sub{subdivide}"
+
     # --- Summary ---
     console.print(f"\n[dim]Configuration:[/dim]")
+    console.print(f"  Name:       {name}")
     sel_str = "all" if selected_indices is None else ", ".join(str(i + 1) for i in selected_indices)
     console.print(f"  Maps:       {sel_str}")
     console.print(f"  Coloring:   {coloring}")
@@ -454,6 +462,7 @@ def run_carto_wizard(
 
     return CartoConfig(
         input_path=input_path,
+        name=name,
         selected_mesh_indices=selected_indices,
         coloring=coloring,
         subdivide=subdivide,
@@ -625,8 +634,14 @@ def run_batch_carto_wizard(
                         f"{', '.join(skip_names)} (insufficient data)[/yellow]"
                     )
 
+        # Auto-generate name: <study_or_dir>_<coloring>_sub<N>
+        base_name = study.study_name or path.name
+        base_name = base_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+        study_name = f"{base_name}_{coloring}_sub{subdivide}"
+
         configs.append(CartoConfig(
             input_path=path,
+            name=study_name,
             selected_mesh_indices=None,  # all meshes
             coloring=coloring,
             subdivide=subdivide,

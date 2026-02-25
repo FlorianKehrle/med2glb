@@ -155,6 +155,7 @@ class CartoConfig:
     """Configuration for CARTO pipeline (from wizard or CLI flags)."""
 
     input_path: Path
+    name: str = ""  # descriptive name (e.g. "LA_lat_sub2")
     output_dir: Path | None = None
     selected_mesh_indices: list[int] | None = None  # None = all
     coloring: str = "lat"
