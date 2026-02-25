@@ -20,11 +20,8 @@ TEST_DATA = _REPO / "test_data" / "CARTO"
 # v7.1 — single mesh (1-Map), sparse points, low vector quality
 CARTO_V71 = TEST_DATA / "Version_7.1.80.33" / "Study 1" / "Export_Study"
 
-# v7.2 test_B — 2 meshes (ReBS)
-CARTO_V72_B = TEST_DATA / "Version_7.2.10.423" / "test_B"
-
-# v7.2 test_O — 4 meshes (LA, RA, remaps) with XML study file
-CARTO_V72_O = TEST_DATA / "Version_7.2.10.423" / "test_O"
+# v7.2 O — 2 meshes (1-1-1-Rp-ReLA, 2-RA)
+CARTO_V72_O = TEST_DATA / "Version_7.2.10.423" / "O"
 
 
 def _extract_active_lat(mesh, points, mesh_data):
@@ -218,72 +215,9 @@ class TestRealCartoV71:
 
 
 # ---------------------------------------------------------------------------
-# Real data: CARTO v7.2 test_B (2 meshes)
+# Real data: CARTO v7.2 O (2 meshes)
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(not CARTO_V72_B.exists(), reason="CARTO v7.2 test_B data not available")
-class TestRealCartoV72B:
-    def test_load_study(self):
-        from med2glb.io.carto_reader import load_carto_study
-
-        study = load_carto_study(CARTO_V72_B)
-        assert len(study.meshes) == 2
-        assert study.version == "6.0"
-
-    def test_static_all_meshes(self, tmp_path):
-        """Convert both meshes to static GLB with all colorings."""
-        from med2glb.io.carto_reader import load_carto_study
-        from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
-        from med2glb.glb.builder import build_glb
-
-        study = load_carto_study(CARTO_V72_B)
-
-        for mesh in study.meshes:
-            points = study.points.get(mesh.structure_name)
-            for coloring in ["lat", "bipolar", "unipolar"]:
-                mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring)
-                output = tmp_path / f"{mesh.structure_name}_{coloring}.glb"
-                build_glb([mesh_data], output)
-                assert output.exists()
-                assert output.stat().st_size > 100
-
-    def test_animated_first_mesh(self, tmp_path):
-        """Animated GLB from first mesh in test_B."""
-        from med2glb.io.carto_reader import load_carto_study
-        from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
-        from med2glb.glb.carto_builder import build_carto_animated_glb
-
-        study = load_carto_study(CARTO_V72_B)
-        mesh = study.meshes[0]
-        points = study.points.get(mesh.structure_name)
-
-        mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat", subdivide=0)
-        active_lat = _extract_active_lat(mesh, points, mesh_data)
-
-        output = tmp_path / f"{mesh.structure_name}_lat_animated.glb"
-        build_carto_animated_glb(
-            mesh_data, active_lat, output,
-            n_frames=5, target_faces=10000,
-        )
-
-        assert output.exists()
-        gltf = pygltflib.GLTF2.load(str(output))
-        assert len(gltf.animations) == 1
-
-    def test_vector_quality_per_mesh(self):
-        """Test per-mesh vector quality assessment on multi-mesh study."""
-        from med2glb.io.carto_reader import load_carto_study
-        from med2glb.cli_wizard import _assess_vector_quality
-
-        study = load_carto_study(CARTO_V72_B)
-        quality = _assess_vector_quality(study, selected_indices=None)
-        # Per-mesh assessment should return suitable_indices (possibly empty)
-        assert quality.suitable_indices is not None or not quality.suitable
-
-
-# ---------------------------------------------------------------------------
-# Real data: CARTO v7.2 test_O (4 meshes with XML study)
-# ---------------------------------------------------------------------------
-@pytest.mark.skipif(not CARTO_V72_O.exists(), reason="CARTO v7.2 test_O data not available")
+@pytest.mark.skipif(not CARTO_V72_O.exists(), reason="CARTO v7.2 O data not available")
 class TestRealCartoV72O:
     def test_load_study(self):
         from med2glb.io.carto_reader import load_carto_study
@@ -362,7 +296,7 @@ class TestRealCartoV72O:
             single = _assess_single_mesh(mesh, pts)
             # Each mesh should have some diagnostic info
             assert single.valid_points >= 0
-            assert single.point_density >= 0.0
+            assert single.lat_range_ms >= 0.0
 
     def test_animated_with_vectors(self, tmp_path):
         """Animated GLB with vectors on a suitable mesh."""

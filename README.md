@@ -213,7 +213,7 @@ Both variants are always generated automatically.
 
 Animated streamline arrows overlaid on the mesh showing the direction of electrical conduction derived from the LAT gradient field. The arrows flow along curved paths following the gradient, with dashes that advance each frame in sync with the excitation ring animation. In static mode, a single frame of arrows is rendered as an extra mesh node.
 
-The wizard automatically assesses vector quality based on point density and LAT range, and defaults the vectors option accordingly. In the wizard, the vectors prompt offers three choices:
+The wizard automatically assesses vector quality using three checks: minimum valid LAT points (≥30), minimum LAT range (≥20 ms), and a gradient coverage trial that computes the actual IDW-interpolated LAT field and face gradients to verify at least 15% of faces have non-zero gradient. This ensures streamlines will be meaningful rather than terminating immediately on locally constant LAT patches. The vectors prompt offers three choices:
 - **yes** -- produce both with-vectors and without-vectors variants (for comparison)
 - **no** -- no vector output
 - **only** -- produce only the animated+vectors variant (no static, no non-vector files)

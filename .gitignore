@@ -36,6 +36,7 @@ htmlcov/
 
 # Output
 output/
+test_output/
 
 # Test data (large CARTO exports, video frames, etc.)
 test_data/

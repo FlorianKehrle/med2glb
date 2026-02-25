@@ -155,11 +155,19 @@ def build_carto_animated_glb(
         from med2glb.mesh.lat_vectors import (
             trace_all_streamlines, compute_animated_dashes,
             compute_face_gradients, compute_dash_speed_factors,
+            assess_streamline_quality,
         )
         streamlines = trace_all_streamlines(
             mesh_data.vertices, mesh_data.faces, lat_values,
             mesh_data.normals, target_count=300,
         )
+        if streamlines:
+            bbox_diag = float(np.linalg.norm(
+                mesh_data.vertices.max(0) - mesh_data.vertices.min(0)))
+            good, reason = assess_streamline_quality(streamlines, bbox_diag)
+            if not good:
+                logger.warning("Vectors skipped: %s", reason)
+                streamlines = []
         if streamlines:
             _report(f"Generating dash animation for {len(streamlines)} streamlines...")
             arrow_frame_dashes = compute_animated_dashes(

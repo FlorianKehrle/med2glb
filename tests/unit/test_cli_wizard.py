@@ -239,85 +239,80 @@ class TestAssessVectorQuality:
         assert quality.suitable is False
         assert "range" in quality.reason
 
-    def test_low_iqr_not_suitable(self):
-        """Wide range but clustered LAT values → low IQR → not suitable."""
-        vertices = np.random.rand(100, 3).astype(np.float64)
-        faces = np.array([[0, 1, 2]], dtype=np.int32)
-        normals = np.tile([0, 0, 1], (100, 1)).astype(np.float64)
+    def test_low_gradient_coverage_not_suitable(self):
+        """Points with identical LAT values → zero gradients → not suitable."""
+        # 4x4 grid mesh (25 verts, 32 faces)
+        verts = []
+        for j in range(5):
+            for i in range(5):
+                verts.append([float(i) * 10, float(j) * 10, 0.0])
+        vertices = np.array(verts, dtype=np.float64)
+        faces_list = []
+        for j in range(4):
+            for i in range(4):
+                v0 = j * 5 + i
+                faces_list.append([v0, v0 + 1, v0 + 6])
+                faces_list.append([v0, v0 + 6, v0 + 5])
+        faces = np.array(faces_list, dtype=np.int32)
+        normals = np.zeros_like(vertices)
+        normals[:, 2] = 1.0
         mesh = CartoMesh(
             mesh_id=1, vertices=vertices, faces=faces, normals=normals,
-            group_ids=np.zeros(100, dtype=np.int32),
-            face_group_ids=np.zeros(1, dtype=np.int32),
+            group_ids=np.zeros(len(vertices), dtype=np.int32),
+            face_group_ids=np.zeros(len(faces), dtype=np.int32),
             mesh_color=(1, 0, 0, 1), color_names=["LAT"],
-            structure_name="ClusteredMap",
+            structure_name="FlatLAT",
         )
-        # 80 points: most clustered around 50 ms, a few outliers for wide range
-        rng = np.random.default_rng(42)
+        # 40 points all with the same integer LAT (quantized) — IDW
+        # will produce uniform values → zero gradient on all faces
         points = [
-            CartoPoint(i, rng.random(3), np.zeros(3), 1.0, 5.0,
-                       50.0 + rng.normal(0, 5))  # tight cluster around 50
-            for i in range(76)
-        ] + [
-            CartoPoint(77, rng.random(3), np.zeros(3), 1.0, 5.0, -100.0),
-            CartoPoint(78, rng.random(3), np.zeros(3), 1.0, 5.0, 200.0),
-            CartoPoint(79, rng.random(3), np.zeros(3), 1.0, 5.0, -90.0),
-            CartoPoint(80, rng.random(3), np.zeros(3), 1.0, 5.0, 190.0),
+            CartoPoint(i, vertices[i % len(vertices)], np.zeros(3),
+                       1.0, 5.0, 50.0)  # all same LAT
+            for i in range(40)
         ]
+        # Add a few outliers so range passes the cheap check
+        points.append(CartoPoint(90, np.array([0.0, 0.0, 0.0]),
+                                 np.zeros(3), 1.0, 5.0, -10.0))
+        points.append(CartoPoint(91, np.array([40.0, 40.0, 0.0]),
+                                 np.zeros(3), 1.0, 5.0, 100.0))
         study = CartoStudy(
-            meshes=[mesh], points={"ClusteredMap": points},
+            meshes=[mesh], points={"FlatLAT": points},
             version="6.0", study_name="Test",
         )
         quality = _assess_vector_quality(study, None)
         assert quality.suitable is False
-        assert "IQR" in quality.reason
-        assert quality.lat_iqr_ms < 50
-
-    def test_low_density_not_suitable(self):
-        """Good LAT stats but extremely sparse sampling on a huge mesh."""
-        # Very large triangle (~500,000 mm² area) with few points → density < 0.005
-        vertices = np.array([
-            [0, 0, 0], [1000, 0, 0], [500, 1000, 0],
-        ], dtype=np.float64)
-        faces = np.array([[0, 1, 2]], dtype=np.int32)
-        normals = np.tile([0, 0, 1], (3, 1)).astype(np.float64)
-        mesh = CartoMesh(
-            mesh_id=1, vertices=vertices, faces=faces, normals=normals,
-            group_ids=np.zeros(3, dtype=np.int32),
-            face_group_ids=np.zeros(1, dtype=np.int32),
-            mesh_color=(1, 0, 0, 1), color_names=["LAT"],
-            structure_name="SparseMap",
-        )
-        # 80 points on ~500k mm² mesh → density ~0.00016
-        rng = np.random.default_rng(42)
-        points = [
-            CartoPoint(i, rng.random(3) * 1000, np.zeros(3), 1.0, 5.0,
-                       float(i * 2.0))
-            for i in range(80)
-        ]
-        study = CartoStudy(
-            meshes=[mesh], points={"SparseMap": points},
-            version="6.0", study_name="Test",
-        )
-        quality = _assess_vector_quality(study, None)
-        assert quality.suitable is False
-        assert "density" in quality.reason
-        assert quality.point_density < 0.001
+        assert "gradient" in quality.reason
 
     def test_good_data_suitable(self):
-        """Enough points with sufficient LAT range."""
-        vertices = np.random.rand(100, 3).astype(np.float64)
-        faces = np.array([[0, 1, 2]], dtype=np.int32)
-        normals = np.tile([0, 0, 1], (100, 1)).astype(np.float64)
+        """Enough points with sufficient LAT range and gradient coverage."""
+        # 4x4 grid mesh (25 verts, 32 faces) — proper geometry
+        verts = []
+        for j in range(5):
+            for i in range(5):
+                verts.append([float(i) * 10, float(j) * 10, 0.0])
+        vertices = np.array(verts, dtype=np.float64)
+        faces_list = []
+        for j in range(4):
+            for i in range(4):
+                v0 = j * 5 + i
+                faces_list.append([v0, v0 + 1, v0 + 6])
+                faces_list.append([v0, v0 + 6, v0 + 5])
+        faces = np.array(faces_list, dtype=np.int32)
+        normals = np.zeros_like(vertices)
+        normals[:, 2] = 1.0
         mesh = CartoMesh(
             mesh_id=1, vertices=vertices, faces=faces, normals=normals,
-            group_ids=np.zeros(100, dtype=np.int32),
-            face_group_ids=np.zeros(1, dtype=np.int32),
+            group_ids=np.zeros(len(vertices), dtype=np.int32),
+            face_group_ids=np.zeros(len(faces), dtype=np.int32),
             mesh_color=(1, 0, 0, 1), color_names=["LAT"],
             structure_name="GoodMap",
         )
-        # 80 points with LAT range 0..120 ms
+        # 80 points with smooth LAT gradient in X direction, positioned on the mesh
+        rng = np.random.default_rng(42)
         points = [
-            CartoPoint(i, np.random.rand(3), np.zeros(3), 1.0, 5.0, float(i * 1.5))
+            CartoPoint(i, np.array([rng.uniform(0, 40), rng.uniform(0, 40), 0.0]),
+                       np.zeros(3), 1.0, 5.0,
+                       float(rng.uniform(0, 40) * 3.0))  # LAT 0..120 ms
             for i in range(80)
         ]
         study = CartoStudy(
@@ -331,18 +326,45 @@ class TestAssessVectorQuality:
 
     def test_selected_indices_filters_meshes(self):
         """Only checks selected meshes, not all."""
-        vertices = np.random.rand(10, 3).astype(np.float64)
-        faces = np.array([[0, 1, 2]], dtype=np.int32)
-        normals = np.tile([0, 0, 1], (10, 1)).astype(np.float64)
-        base = dict(faces=faces, normals=normals,
-                    group_ids=np.zeros(10, dtype=np.int32),
-                    face_group_ids=np.zeros(1, dtype=np.int32),
-                    mesh_color=(1, 0, 0, 1), color_names=["LAT"])
-        mesh_good = CartoMesh(mesh_id=1, vertices=vertices, structure_name="Good", **base)
-        mesh_bad = CartoMesh(mesh_id=2, vertices=vertices, structure_name="Bad", **base)
+        # Build a proper grid mesh for the "good" map
+        verts = []
+        for j in range(5):
+            for i in range(5):
+                verts.append([float(i) * 10, float(j) * 10, 0.0])
+        vertices = np.array(verts, dtype=np.float64)
+        faces_list = []
+        for j in range(4):
+            for i in range(4):
+                v0 = j * 5 + i
+                faces_list.append([v0, v0 + 1, v0 + 6])
+                faces_list.append([v0, v0 + 6, v0 + 5])
+        faces = np.array(faces_list, dtype=np.int32)
+        normals = np.zeros_like(vertices)
+        normals[:, 2] = 1.0
 
+        mesh_good = CartoMesh(
+            mesh_id=1, vertices=vertices, faces=faces, normals=normals,
+            group_ids=np.zeros(len(vertices), dtype=np.int32),
+            face_group_ids=np.zeros(len(faces), dtype=np.int32),
+            mesh_color=(1, 0, 0, 1), color_names=["LAT"],
+            structure_name="Good",
+        )
+        # Tiny single-face mesh for the "bad" map
+        bad_verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float64)
+        bad_faces = np.array([[0, 1, 2]], dtype=np.int32)
+        bad_normals = np.tile([0, 0, 1], (3, 1)).astype(np.float64)
+        mesh_bad = CartoMesh(
+            mesh_id=2, vertices=bad_verts, faces=bad_faces, normals=bad_normals,
+            group_ids=np.zeros(3, dtype=np.int32),
+            face_group_ids=np.zeros(1, dtype=np.int32),
+            mesh_color=(1, 0, 0, 1), color_names=["LAT"],
+            structure_name="Bad",
+        )
+
+        rng = np.random.default_rng(42)
         good_pts = [
-            CartoPoint(i, np.random.rand(3), np.zeros(3), 1.0, 5.0, float(i * 2.0))
+            CartoPoint(i, np.array([rng.uniform(0, 40), rng.uniform(0, 40), 0.0]),
+                       np.zeros(3), 1.0, 5.0, float(rng.uniform(0, 120)))
             for i in range(80)
         ]
         bad_pts = [CartoPoint(1, np.array([0, 0, 0.0]), np.zeros(3), 1.0, 5.0, 0.0)]

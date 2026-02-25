@@ -174,6 +174,7 @@ class DicomConfig:
     """Configuration for DICOM pipeline (from wizard or CLI flags)."""
 
     input_path: Path
+    name: str = ""  # descriptive name (e.g. "transplant-ct_mc_t200_s5_20k")
     output: Path | None = None
     method: str = "classical"
     format: str = "glb"

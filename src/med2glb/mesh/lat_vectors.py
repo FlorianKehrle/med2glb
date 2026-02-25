@@ -440,6 +440,52 @@ def _interpolate_along(
     return (1 - t) * np.array(points[idx]) + t * np.array(points[idx + 1])
 
 
+def assess_streamline_quality(
+    streamlines: list[list[np.ndarray]],
+    mesh_bbox_diag: float,
+    min_count: int = 10,
+    min_median_length_ratio: float = 0.02,
+) -> tuple[bool, str]:
+    """Check whether traced streamlines are usable for visualization.
+
+    Args:
+        streamlines: List of polylines (each a list of 3D points).
+        mesh_bbox_diag: Bounding box diagonal of the mesh.
+        min_count: Minimum number of streamlines with ≥3 points.
+        min_median_length_ratio: Minimum median streamline length as a
+            fraction of the mesh bounding box diagonal.
+
+    Returns:
+        (ok, reason) — *ok* is True if streamlines pass quality checks;
+        *reason* explains the failure when *ok* is False.
+    """
+    if mesh_bbox_diag < 1e-12:
+        return False, "degenerate mesh (zero bounding box)"
+
+    # Count streamlines with enough points
+    lengths: list[float] = []
+    for sl in streamlines:
+        if len(sl) >= 3:
+            pts = np.array(sl)
+            length = float(np.sum(np.linalg.norm(np.diff(pts, axis=0), axis=1)))
+            lengths.append(length)
+
+    if len(lengths) < min_count:
+        return False, (
+            f"only {len(lengths)} usable streamlines (need ≥{min_count})"
+        )
+
+    median_len = float(np.median(lengths))
+    ratio = median_len / mesh_bbox_diag
+    if ratio < min_median_length_ratio:
+        return False, (
+            f"median streamline length {median_len:.1f} is only "
+            f"{ratio:.1%} of mesh size (need ≥{min_median_length_ratio:.0%})"
+        )
+
+    return True, ""
+
+
 def compute_animated_dashes(
     streamlines: list[list[np.ndarray]],
     n_frames: int = 30,

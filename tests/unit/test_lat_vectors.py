@@ -7,6 +7,7 @@ import pytest
 
 from med2glb.mesh.lat_vectors import (
     _smooth_streamline,
+    assess_streamline_quality,
     build_face_adjacency,
     compute_animated_dashes,
     compute_dash_speed_factors,
@@ -313,3 +314,64 @@ class TestComputeDashSpeedFactors:
         centers = np.array([[0, 0, 0]], dtype=np.float64)
         speed_factors = compute_dash_speed_factors([[], []], grads, centers)
         assert speed_factors == [[], []]
+
+
+class TestAssessStreamlineQuality:
+    def test_good_streamlines_pass(self, larger_mesh):
+        vertices, faces, normals, lat = larger_mesh
+        streamlines = trace_all_streamlines(
+            vertices, faces, lat, normals, target_count=20, max_steps=100,
+        )
+        bbox_diag = float(np.linalg.norm(vertices.max(0) - vertices.min(0)))
+        # Small test mesh only produces a few streamlines, so lower min_count
+        ok, reason = assess_streamline_quality(
+            streamlines, bbox_diag, min_count=2,
+        )
+        assert ok, f"Expected pass but got: {reason}"
+        assert reason == ""
+
+    def test_too_few_streamlines_fail(self):
+        # Only 3 streamlines — below default min_count=10
+        streamlines = [
+            [np.array([0, 0, 0.0]), np.array([1, 0, 0.0]), np.array([2, 0, 0.0])]
+            for _ in range(3)
+        ]
+        ok, reason = assess_streamline_quality(streamlines, mesh_bbox_diag=100.0)
+        assert not ok
+        assert "3 usable" in reason
+
+    def test_short_streamlines_fail(self):
+        # 20 streamlines but very short (length ~0.02 vs bbox diag 1000)
+        streamlines = [
+            [np.array([0, 0, 0.0]), np.array([0.01, 0, 0.0]), np.array([0.02, 0, 0.0])]
+            for _ in range(20)
+        ]
+        ok, reason = assess_streamline_quality(streamlines, mesh_bbox_diag=1000.0)
+        assert not ok
+        assert "median" in reason
+
+    def test_empty_streamlines_fail(self):
+        ok, reason = assess_streamline_quality([], mesh_bbox_diag=100.0)
+        assert not ok
+
+    def test_degenerate_bbox_fail(self):
+        streamlines = [
+            [np.array([0, 0, 0.0]), np.array([1, 0, 0.0]), np.array([2, 0, 0.0])]
+            for _ in range(20)
+        ]
+        ok, reason = assess_streamline_quality(streamlines, mesh_bbox_diag=0.0)
+        assert not ok
+        assert "degenerate" in reason
+
+    def test_custom_thresholds(self):
+        # 5 streamlines, length ~2 each, bbox 100 → ratio 2%
+        streamlines = [
+            [np.array([0, 0, 0.0]), np.array([1, 0, 0.0]), np.array([2, 0, 0.0])]
+            for _ in range(5)
+        ]
+        # With relaxed thresholds, should pass
+        ok, _ = assess_streamline_quality(
+            streamlines, mesh_bbox_diag=100.0,
+            min_count=3, min_median_length_ratio=0.01,
+        )
+        assert ok

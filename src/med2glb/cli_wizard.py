@@ -153,31 +153,45 @@ class VectorQuality:
     reason: str  # human-readable explanation when not suitable
     valid_points: int = 0
     lat_range_ms: float = 0.0
-    lat_iqr_ms: float = 0.0
-    point_density: float = 0.0  # points per mm²
     suitable_indices: list[int] | None = None  # mesh indices suitable for vectors
 
 
 _MIN_VALID_LAT_POINTS = 30
 _MIN_LAT_RANGE_MS = 20.0
-_MIN_LAT_IQR_MS = 50.0   # filter uniform SR maps — vectors need real activation spread
-_MIN_POINT_DENSITY = 0.001  # just catch truly empty meshes; IDW handles sparse data
+_MIN_GRADIENT_COVERAGE = 0.15  # at least 15% of faces must have non-zero gradient
 
 
-def _mesh_surface_area(mesh: CartoMesh) -> float:
-    """Compute total surface area of a CARTO mesh in mm²."""
-    v0 = mesh.vertices[mesh.faces[:, 0]]
-    v1 = mesh.vertices[mesh.faces[:, 1]]
-    v2 = mesh.vertices[mesh.faces[:, 2]]
-    cross = np.cross(v1 - v0, v2 - v0)
-    return float(0.5 * np.sum(np.linalg.norm(cross, axis=1)))
+def _trial_gradient_coverage(mesh: CartoMesh, pts: list[CartoPoint]) -> tuple[bool, str]:
+    """Quick trial: compute IDW LAT + face gradients, check coverage.
+
+    Instead of guessing from global statistics (IQR, density) whether the
+    data will produce usable streamlines, this actually computes the IDW-
+    interpolated LAT field and face gradients, then checks what fraction
+    of faces have non-zero gradient.  ~100 ms per mesh.
+    """
+    from med2glb.io.carto_mapper import map_points_to_vertices_idw
+    from med2glb.mesh.lat_vectors import compute_face_gradients
+
+    lat = map_points_to_vertices_idw(mesh, pts, field="lat", k=6, power=2.0)
+    grads, _, _valid = compute_face_gradients(mesh.vertices, mesh.faces, lat)
+    mag = np.linalg.norm(grads, axis=1)
+    nonzero_frac = float(np.sum(mag > 1e-6)) / max(len(mag), 1)
+
+    if nonzero_frac < _MIN_GRADIENT_COVERAGE:
+        return False, f"only {nonzero_frac:.0%} of faces have gradient (need ≥{_MIN_GRADIENT_COVERAGE:.0%})"
+    return True, ""
 
 
 def _assess_single_mesh(
     mesh: CartoMesh,
     pts: list[CartoPoint],
 ) -> VectorQuality:
-    """Assess vector suitability for a single mesh."""
+    """Assess vector suitability for a single mesh.
+
+    Uses cheap early-exit checks (point count, LAT range) followed by an
+    actual gradient-coverage trial that computes IDW interpolation and face
+    gradients to see whether enough of the mesh has usable gradient data.
+    """
     if not pts:
         return VectorQuality(suitable=False, reason="no measurement points")
 
@@ -185,42 +199,32 @@ def _assess_single_mesh(
     valid = lats[~np.isnan(lats)]
     n_valid = len(valid)
     lat_range = float(np.ptp(valid)) if n_valid > 0 else 0.0
-    lat_iqr = float(np.percentile(valid, 75) - np.percentile(valid, 25)) if n_valid > 0 else 0.0
-    area = _mesh_surface_area(mesh)
-    density = n_valid / area if area > 1e-6 else 0.0
 
     if n_valid < _MIN_VALID_LAT_POINTS:
         return VectorQuality(
             suitable=False,
             reason=f"sparse data, {n_valid} valid LAT points",
             valid_points=n_valid, lat_range_ms=lat_range,
-            lat_iqr_ms=lat_iqr, point_density=density,
         )
     if lat_range < _MIN_LAT_RANGE_MS:
         return VectorQuality(
             suitable=False,
             reason=f"small LAT range, {lat_range:.0f} ms",
             valid_points=n_valid, lat_range_ms=lat_range,
-            lat_iqr_ms=lat_iqr, point_density=density,
         )
-    if lat_iqr < _MIN_LAT_IQR_MS:
+
+    # Trial-based check: actually compute gradients and check coverage
+    ok, reason = _trial_gradient_coverage(mesh, pts)
+    if not ok:
         return VectorQuality(
             suitable=False,
-            reason=f"low LAT spread (IQR {lat_iqr:.0f} ms), uniform activation",
+            reason=reason,
             valid_points=n_valid, lat_range_ms=lat_range,
-            lat_iqr_ms=lat_iqr, point_density=density,
         )
-    if density < _MIN_POINT_DENSITY:
-        return VectorQuality(
-            suitable=False,
-            reason=f"low point density ({density:.2f} pts/mm²), gradients too smooth",
-            valid_points=n_valid, lat_range_ms=lat_range,
-            lat_iqr_ms=lat_iqr, point_density=density,
-        )
+
     return VectorQuality(
         suitable=True, reason="",
         valid_points=n_valid, lat_range_ms=lat_range,
-        lat_iqr_ms=lat_iqr, point_density=density,
     )
 
 
@@ -233,11 +237,8 @@ def _assess_vector_quality(
     Evaluates each mesh individually. The overall result is suitable if *any*
     mesh passes. ``suitable_indices`` lists which meshes are suitable.
 
-    Checks four criteria per mesh:
-    - Enough valid LAT points (≥50)
-    - Sufficient total LAT range (≥30 ms)
-    - Sufficient LAT spread / IQR (≥50 ms)
-    - Sufficient point density (≥0.3 pts/mm²)
+    Uses cheap early-exit checks (point count, LAT range) followed by an
+    actual gradient-coverage trial on each mesh to determine suitability.
     """
     indices = selected_indices if selected_indices is not None else list(range(len(study.meshes)))
 
@@ -268,8 +269,6 @@ def _assess_vector_quality(
             reason="",
             valid_points=best_result.valid_points,
             lat_range_ms=best_result.lat_range_ms,
-            lat_iqr_ms=best_result.lat_iqr_ms,
-            point_density=best_result.point_density,
             suitable_indices=suitable_indices,
         )
 
@@ -278,8 +277,6 @@ def _assess_vector_quality(
         reason=best_result.reason,
         valid_points=best_result.valid_points,
         lat_range_ms=best_result.lat_range_ms,
-        lat_iqr_ms=best_result.lat_iqr_ms,
-        point_density=best_result.point_density,
         suitable_indices=[],
     )
 
@@ -665,6 +662,7 @@ def run_dicom_wizard(
     preset_animate: bool | None = None,
     preset_series: str | None = None,
     preset_quality: str | None = None,
+    preset_name: str | None = None,
 ) -> DicomConfig:
     """Interactive DICOM wizard. Skips prompts when presets are provided."""
     interactive = is_interactive()
@@ -772,8 +770,22 @@ def run_dicom_wizard(
     else:
         animate = False
 
+    # --- Name ---
+    if preset_name is not None:
+        name = preset_name
+    else:
+        # Auto-generate: <input>_<modality>_<method>_s<smooth>_<faces>k
+        stem = input_path.stem if input_path.is_file() else input_path.name
+        mod = selected_info.modality.lower() if selected_info.modality else "dcm"
+        method_short = method.replace("marching-cubes", "mc")
+        faces_k = f"{target_faces // 1000}k"
+        name = f"{stem}_{mod}_{method_short}_s{smoothing}_{faces_k}"
+        if animate:
+            name += "_anim"
+
     # --- Summary ---
     console.print(f"\n[dim]Configuration:[/dim]")
+    console.print(f"  Name:     {name}")
     console.print(f"  Series:   {selected_info.description or series_uid}")
     console.print(f"  Method:   {method}")
     console.print(f"  Quality:  smoothing={smoothing}, faces={target_faces:,}")
@@ -781,6 +793,7 @@ def run_dicom_wizard(
 
     return DicomConfig(
         input_path=input_path,
+        name=name,
         method=method,
         animate=animate,
         smoothing=smoothing,
