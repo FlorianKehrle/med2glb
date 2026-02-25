@@ -104,19 +104,56 @@ def scan_directory(path: Path, console: Console | None = None) -> list[ScanEntry
         ))
 
     # --- DICOM data ---
-    try:
-        from med2glb.io.dicom_reader import analyze_series
-        series = analyze_series(path)
-        if series:
-            entries.append(ScanEntry(
-                kind="dicom",
-                path=path,
-                label=path.name,
-                detail=f"{len(series)} series",
-                location=".",
-            ))
-    except Exception:
-        pass
+    # Try subdirectories first (like CARTO), then fall back to root
+    from med2glb.io.dicom_reader import analyze_series as _analyze_series
+
+    dicom_found = False
+    # Check immediate subdirectories for DICOM data
+    if path.is_dir():
+        for subdir in sorted(path.iterdir()):
+            if not subdir.is_dir():
+                continue
+            # Skip directories already claimed as CARTO exports
+            if any(e.path == subdir or str(subdir).startswith(str(e.path)) for e in entries):
+                continue
+            try:
+                series = _analyze_series(subdir)
+                if series:
+                    modalities = sorted({s.modality for s in series})
+                    types = sorted({s.data_type for s in series})
+                    detail = f"{len(series)} series ({', '.join(modalities)}; {', '.join(types)})"
+                    try:
+                        location = str(subdir.relative_to(path))
+                    except ValueError:
+                        location = subdir.name
+                    entries.append(ScanEntry(
+                        kind="dicom",
+                        path=subdir,
+                        label=_first_subfolder_label(path, subdir),
+                        detail=detail,
+                        location=location,
+                    ))
+                    dicom_found = True
+            except Exception:
+                pass
+
+    # Fall back: check root directory itself
+    if not dicom_found:
+        try:
+            series = _analyze_series(path)
+            if series:
+                modalities = sorted({s.modality for s in series})
+                types = sorted({s.data_type for s in series})
+                detail = f"{len(series)} series ({', '.join(modalities)}; {', '.join(types)})"
+                entries.append(ScanEntry(
+                    kind="dicom",
+                    path=path,
+                    label=path.name,
+                    detail=detail,
+                    location=".",
+                ))
+        except Exception:
+            pass
 
     return entries
 
@@ -789,12 +826,12 @@ def run_dicom_wizard(
     if preset_name is not None:
         name = preset_name
     else:
-        # Auto-generate: <input>_<modality>_<method>_s<smooth>_<faces>k
-        stem = input_path.stem if input_path.is_file() else input_path.name
+        # Auto-generate: <modality>_<method>_s<smooth>_<faces>k[_anim]
+        # No input dir name — output already lives inside the source folder.
         mod = selected_info.modality.lower() if selected_info.modality else "dcm"
         method_short = method.replace("marching-cubes", "mc")
         faces_k = f"{target_faces // 1000}k"
-        name = f"{stem}_{mod}_{method_short}_s{smoothing}_{faces_k}"
+        name = f"{mod}_{method_short}_s{smoothing}_{faces_k}"
         if animate:
             name += "_anim"
 

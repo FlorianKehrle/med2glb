@@ -261,22 +261,29 @@ def main(
                     carto_entries = [e for e in entries if e.kind == "carto"]
                     dicom_entries = [e for e in entries if e.kind == "dicom"]
 
-                    if n_carto > 1:
-                        # Multiple CARTO exports — batch wizard
+                    if n_carto >= 1 or n_dicom >= 1:
+                        # Build choices based on what's available
                         from med2glb.io.carto_reader import load_carto_study
                         from med2glb.cli_wizard import run_batch_carto_wizard
 
+                        choices: list[str] = []
+                        if n_carto >= 1:
+                            choices.append("all-carto")
+                        if n_dicom >= 1:
+                            choices.append("all-dicom")
+                        if n_carto >= 1 and n_dicom >= 1:
+                            choices.append("all")
+                        choices.append("select")
+                        default = "all-carto" if n_carto >= 1 else "all-dicom"
+
                         choice = Prompt.ask(
                             "Process",
-                            choices=(
-                                ["all-carto", "select"]
-                                + (["dicom"] if n_dicom else [])
-                            ),
-                            default="all-carto",
+                            choices=choices,
+                            default=default,
                             console=console,
                         )
 
-                        if choice == "all-carto":
+                        if choice in ("all-carto", "all"):
                             studies = []
                             for e in carto_entries:
                                 try:
@@ -290,12 +297,31 @@ def main(
                                 for j, cfg in enumerate(configs, 1):
                                     console.print(
                                         f"\n[bold]=== Dataset {j}/{len(configs)}: "
-                                        f"{cfg.input_path.name} ===[/bold]"
+                                        f"{cfg.name} ===[/bold]"
                                     )
                                     _run_carto_from_config(cfg)
-                                return
 
-                        elif choice == "select":
+                        if choice in ("all-dicom", "all"):
+                            for e in dicom_entries:
+                                try:
+                                    from med2glb.io.dicom_reader import analyze_series
+                                    series = analyze_series(e.path)
+                                    if series:
+                                        dicom_cfg = run_dicom_wizard(series, e.path, console)
+                                        console.print(
+                                            f"\n[bold]=== DICOM: "
+                                            f"{dicom_cfg.name} ===[/bold]"
+                                        )
+                                        glb_dir = e.path / "glb"
+                                        out_path = glb_dir / f"{dicom_cfg.name}.glb"
+                                        _run_dicom_from_config(dicom_cfg, out_path)
+                                except Exception as exc:
+                                    console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
+
+                        if choice in ("all-carto", "all-dicom", "all"):
+                            return
+
+                        if choice == "select":
                             sel = Prompt.ask(
                                 "Enter dataset numbers (comma-separated, e.g. 1,3,5)",
                                 console=console,
@@ -319,7 +345,7 @@ def main(
                                     for j, cfg in enumerate(configs, 1):
                                         console.print(
                                             f"\n[bold]=== Dataset {j}/{len(configs)}: "
-                                            f"{cfg.input_path.name} ===[/bold]"
+                                            f"{cfg.name} ===[/bold]"
                                         )
                                         _run_carto_from_config(cfg)
 
@@ -337,48 +363,6 @@ def main(
                                         console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
                             return
 
-                        elif choice == "dicom":
-                            for e in dicom_entries:
-                                try:
-                                    from med2glb.io.dicom_reader import analyze_series
-                                    series = analyze_series(e.path)
-                                    if series:
-                                        dicom_cfg = run_dicom_wizard(series, e.path, console)
-                                        glb_dir = e.path / "glb"
-                                        out_path = glb_dir / f"{dicom_cfg.name}.glb"
-                                        _run_dicom_from_config(dicom_cfg, out_path)
-                                except Exception as exc:
-                                    console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
-                            return
-                        else:
-                            return
-
-                    elif n_carto == 1 and n_dicom >= 1:
-                        # Mixed: 1 CARTO + DICOM — ask what to process
-                        choice = Prompt.ask(
-                            "Process",
-                            choices=["carto", "dicom", "both"],
-                            default="carto",
-                            console=console,
-                        )
-                        if choice in ("carto", "both"):
-                            from med2glb.io.carto_reader import load_carto_study
-                            e = carto_entries[0]
-                            study = load_carto_study(e.path)
-                            config = run_carto_wizard(study, e.path, console)
-                            _run_carto_from_config(config)
-                        if choice in ("dicom", "both"):
-                            e = dicom_entries[0]
-                            try:
-                                from med2glb.io.dicom_reader import analyze_series
-                                series = analyze_series(e.path)
-                                if series:
-                                    dicom_cfg = run_dicom_wizard(series, e.path, console)
-                                    glb_dir = e.path / "glb"
-                                    out_path = glb_dir / f"{dicom_cfg.name}.glb"
-                                    _run_dicom_from_config(dicom_cfg, out_path)
-                            except Exception as exc:
-                                console.print(f"[yellow]  Skipping DICOM: {exc}[/yellow]")
                         return
 
             # --- Single dataset detection (original flow) ---
@@ -461,7 +445,7 @@ def main(
                     preset_subdivide=subdivide if _was_option_provided(ctx, "subdivide") else None,
                 )
                 for i, cfg in enumerate(configs, 1):
-                    console.print(f"\n[bold]=== Dataset {i}/{len(configs)}: {cfg.input_path.name} ===[/bold]")
+                    console.print(f"\n[bold]=== Dataset {i}/{len(configs)}: {cfg.name or cfg.input_path.name} ===[/bold]")
                     _run_carto_from_config(cfg)
             else:
                 # Non-interactive batch: run each subdir with CLI flags
