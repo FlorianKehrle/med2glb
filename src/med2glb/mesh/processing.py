@@ -30,7 +30,12 @@ def taubin_smooth(mesh: MeshData, iterations: int = 15) -> MeshData:
 
 
 def decimate(mesh: MeshData, target_faces: int = 80000) -> MeshData:
-    """Reduce triangle count via simplification."""
+    """Reduce triangle count via simplification.
+
+    When the input mesh has ``vertex_colors``, they are preserved by
+    resampling from the original vertices via nearest-neighbour KDTree
+    lookup (decimation algorithms don't track per-vertex attributes).
+    """
     current_faces = len(mesh.faces)
     if current_faces <= target_faces:
         return mesh
@@ -50,10 +55,22 @@ def decimate(mesh: MeshData, target_faces: int = 80000) -> MeshData:
         target_reduction = 1.0 - target_faces / current_faces
         decimated = tri.simplify_quadric_decimation(target_reduction)
 
+    new_verts = np.array(decimated.vertices, dtype=np.float32)
+
+    # Preserve vertex colors via nearest-neighbour resampling
+    new_colors = None
+    if mesh.vertex_colors is not None:
+        from scipy.spatial import KDTree
+
+        tree = KDTree(mesh.vertices)
+        _, idx = tree.query(new_verts)
+        new_colors = mesh.vertex_colors[idx]
+
     return MeshData(
-        vertices=np.array(decimated.vertices, dtype=np.float32),
+        vertices=new_verts,
         faces=np.array(decimated.faces, dtype=np.int32),
         normals=None,
+        vertex_colors=new_colors,
         structure_name=mesh.structure_name,
         material=mesh.material,
     )

@@ -13,6 +13,8 @@ import pygltflib
 import pytest
 from scipy.spatial import KDTree
 
+from med2glb.cli_wizard import _MIN_LAT_RANGE_MS
+
 # Real test data paths (relative to repo root)
 _REPO = Path(__file__).parent.parent.parent
 TEST_DATA = _REPO / "test_data" / "CARTO"
@@ -203,15 +205,16 @@ class TestRealCartoV71:
         assert len(gltf.animations) == 1
         assert len(gltf.meshes) == 5
 
-    def test_vector_quality_rejected(self):
-        """v7.1 single-map data rejected — low IQR (43ms) indicates uniform activation."""
+    def test_vector_quality_accepted(self):
+        """v7.1 single-map data accepted — LAT range (297ms) and gradient coverage are sufficient."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.cli_wizard import _assess_vector_quality
 
         study = load_carto_study(CARTO_V71)
         quality = _assess_vector_quality(study, selected_indices=None)
-        # IQR ~43ms < 50ms threshold — too uniform for meaningful vectors
-        assert not quality.suitable
+        assert quality.suitable
+        assert quality.valid_points > 0
+        assert quality.lat_range_ms > _MIN_LAT_RANGE_MS
 
 
 # ---------------------------------------------------------------------------

@@ -88,16 +88,14 @@ def build_carto_animated_glb(
         _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
         from med2glb.mesh.processing import decimate, compute_normals
 
-        orig_colors = mesh_data.vertex_colors
         decimated = decimate(mesh_data, target_faces=effective_target)
         decimated = compute_normals(decimated)
-        # Resample LAT values and vertex colors to decimated mesh via nearest neighbor
+        # Resample LAT values to decimated mesh via nearest neighbor
+        # (vertex_colors are already preserved inside decimate())
         from scipy.spatial import KDTree
         tree = KDTree(mesh_data.vertices)
         _, idx = tree.query(decimated.vertices)
         lat_values = lat_values[idx]
-        if orig_colors is not None:
-            decimated.vertex_colors = orig_colors[idx]
         mesh_data = decimated
 
     valid_lat = ~np.isnan(lat_values)
