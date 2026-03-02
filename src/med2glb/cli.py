@@ -66,7 +66,7 @@ def main(
         "classical",
         "-m",
         "--method",
-        help="Conversion method: marching-cubes, classical, totalseg, medsam2.",
+        help="Conversion method: marching-cubes, classical, totalseg, medsam2, compare.",
     ),
     format: str = typer.Option(
         "glb",

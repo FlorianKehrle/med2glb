@@ -777,6 +777,7 @@ def run_dicom_wizard(
         choices = ["classical", "marching-cubes"]
         if ai_available:
             choices.extend(["totalseg", "medsam2"])
+        choices.append("compare")
         rec_label = f" (recommended: {recommended})" if recommended in choices else ""
         method = Prompt.ask(
             f"Method{rec_label}",
@@ -829,9 +830,12 @@ def run_dicom_wizard(
         # Auto-generate: <modality>_<method>_s<smooth>_<faces>k[_anim]
         # No input dir name — output already lives inside the source folder.
         mod = selected_info.modality.lower() if selected_info.modality else "dcm"
-        method_short = method.replace("marching-cubes", "mc")
         faces_k = f"{target_faces // 1000}k"
-        name = f"{mod}_{method_short}_s{smoothing}_{faces_k}"
+        if method == "compare":
+            name = f"{mod}_compare_s{smoothing}_{faces_k}"
+        else:
+            method_short = method.replace("marching-cubes", "mc")
+            name = f"{mod}_{method_short}_s{smoothing}_{faces_k}"
         if animate:
             name += "_anim"
 

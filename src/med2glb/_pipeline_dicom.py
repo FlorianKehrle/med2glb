@@ -13,6 +13,7 @@ from rich.table import Table
 
 from med2glb._console import console, err_console
 from med2glb.core.types import (
+    ConversionStats,
     MaterialConfig,
     MethodParams,
     SeriesInfo,
@@ -227,6 +228,10 @@ def _parse_multi_threshold(spec: str) -> list[ThresholdLayer]:
 
 def run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
     """Execute the DICOM pipeline from a wizard-produced config."""
+    if config.method == "compare":
+        run_compare_mode(config, output.parent, output.stem)
+        return
+
     convert_series(
         input_path=config.input_path,
         output=output,
@@ -263,6 +268,29 @@ def run_pipeline(
     verbose: bool,
 ) -> None:
     """Execute the conversion pipeline with series selection."""
+    # Compare mode: run all methods and produce a summary
+    if method_name == "compare":
+        from med2glb.core.types import DicomConfig
+
+        config = DicomConfig(
+            input_path=input_path,
+            method="compare",
+            format=format,
+            animate=animate,
+            threshold=threshold,
+            smoothing=smoothing,
+            target_faces=target_faces,
+            alpha=alpha,
+            series_uid=series,
+            max_size_mb=max_size_mb,
+            compress_strategy=compress_strategy,
+            verbose=verbose,
+        )
+        output_dir = output.parent
+        base_name = output.stem
+        run_compare_mode(config, output_dir, base_name)
+        return
+
     # If --series provided or input is a single file, pass through directly
     if series or input_path.is_file():
         convert_series(
@@ -365,7 +393,7 @@ def convert_series(
     max_size_mb: int = 0,
     compress_strategy: str = "draco",
     verbose: bool = False,
-) -> None:
+) -> ConversionStats | None:
     """Execute the full conversion pipeline for a single series."""
     from med2glb.io.dicom_reader import InputType, load_dicom_directory
     from med2glb.methods.registry import _ensure_methods_loaded, get_method
@@ -431,7 +459,7 @@ def convert_series(
                 console.print(f"  Output:   {output}")
                 console.print(f"  Size:     {file_size:.1f} KB")
                 console.print(f"  Time:     {elapsed:.1f}s")
-                return
+                return None
 
         if input_type == InputType.SINGLE_SLICE:
             task = progress.add_task("Building textured plane...", total=None)
@@ -450,7 +478,7 @@ def convert_series(
             console.print(f"  Output:   {output}")
             console.print(f"  Size:     {file_size:.1f} KB")
             console.print(f"  Time:     {elapsed:.1f}s")
-            return
+            return None
 
         if input_type == InputType.TEMPORAL and animate:
             from med2glb.core.volume import TemporalSequence
@@ -473,7 +501,7 @@ def convert_series(
                 console.print(f"  Output:   {output} (animated)")
                 console.print(f"  Size:     {file_size:.1f} KB")
                 console.print(f"  Time:     {elapsed:.1f}s")
-                return
+                return None
             # 3D temporal + --animate → standard morph target pipeline
             result = _run_animated_pipeline(data, converter, params, alpha, progress)
         else:
@@ -547,3 +575,132 @@ def convert_series(
 
     for w in result.warnings:
         err_console.print(f"[yellow]Warning: {w}[/yellow]")
+
+    return ConversionStats(
+        method_name=method_name,
+        output_path=output,
+        file_size_kb=file_size,
+        vertex_count=total_verts,
+        face_count=total_faces,
+        mesh_count=len(result.meshes),
+        elapsed_seconds=elapsed,
+    )
+
+
+def run_compare_mode(
+    config: "DicomConfig",
+    output_dir: Path,
+    base_name: str,
+) -> list[ConversionStats]:
+    """Run all available conversion methods and produce a comparison summary.
+
+    Each method writes to ``<output_dir>/<base_name>_<method_short>.glb``.
+    Methods that fail are recorded with ``success=False`` and skipped.
+    """
+    from med2glb.methods.registry import _ensure_methods_loaded, list_methods
+
+    _ensure_methods_loaded()
+    methods = list_methods()
+    available = [m for m in methods if m["available"]]
+
+    if not available:
+        err_console.print("[red]No conversion methods available.[/red]")
+        return []
+
+    console.print(f"\n[bold cyan]Compare Mode[/bold cyan]")
+    console.print(f"  Methods:  {', '.join(m['name'] for m in available)}")
+    console.print(f"  Output:   {output_dir}/")
+    console.print()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stats: list[ConversionStats] = []
+
+    for m in available:
+        method_name = m["name"]
+        method_short = method_name.replace("marching-cubes", "mc")
+        out_path = output_dir / f"{base_name}_{method_short}.glb"
+
+        console.print(f"\n[bold]--- {method_name} ---[/bold]")
+        try:
+            result = convert_series(
+                input_path=config.input_path,
+                output=out_path,
+                method_name=method_name,
+                format=config.format,
+                animate=config.animate,
+                threshold=config.threshold,
+                smoothing=config.smoothing,
+                target_faces=config.target_faces,
+                alpha=config.alpha,
+                multi_threshold=None,
+                series_uid=config.series_uid,
+                max_size_mb=config.max_size_mb,
+                compress_strategy=config.compress_strategy,
+                verbose=config.verbose,
+            )
+            if result is not None:
+                stats.append(result)
+            else:
+                # 2D / single-slice early returns — record basic stats
+                file_size = out_path.stat().st_size / 1024 if out_path.exists() else 0
+                stats.append(ConversionStats(
+                    method_name=method_name,
+                    output_path=out_path,
+                    file_size_kb=file_size,
+                    vertex_count=0,
+                    face_count=0,
+                    mesh_count=0,
+                    elapsed_seconds=0,
+                ))
+        except Exception as exc:
+            console.print(f"[red]  {method_name} failed: {exc}[/red]")
+            stats.append(ConversionStats(
+                method_name=method_name,
+                output_path=out_path,
+                file_size_kb=0,
+                vertex_count=0,
+                face_count=0,
+                mesh_count=0,
+                elapsed_seconds=0,
+                success=False,
+                error=str(exc),
+            ))
+
+    _print_compare_table(stats)
+    return stats
+
+
+def _print_compare_table(stats: list[ConversionStats]) -> None:
+    """Print a Rich comparison table of conversion results."""
+    table = Table(title="Comparison Results")
+    table.add_column("Method", style="bold")
+    table.add_column("Status", justify="center")
+    table.add_column("File Size", justify="right")
+    table.add_column("Vertices", justify="right")
+    table.add_column("Faces", justify="right")
+    table.add_column("Meshes", justify="right")
+    table.add_column("Time", justify="right")
+    table.add_column("Output")
+
+    for s in stats:
+        if s.success:
+            status = "[green]OK[/green]"
+            size = f"{s.file_size_kb:.0f} KB"
+            verts = f"{s.vertex_count:,}" if s.vertex_count else "-"
+            faces = f"{s.face_count:,}" if s.face_count else "-"
+            meshes = str(s.mesh_count) if s.mesh_count else "-"
+            elapsed = f"{s.elapsed_seconds:.1f}s"
+            output = str(s.output_path)
+        else:
+            status = "[red]FAIL[/red]"
+            size = "-"
+            verts = "-"
+            faces = "-"
+            meshes = "-"
+            elapsed = "-"
+            output = s.error
+
+        table.add_row(s.method_name, status, size, verts, faces, meshes, elapsed, output)
+
+    console.print(f"\n")
+    console.print(table)

@@ -97,6 +97,21 @@ class AnimatedResult:
 
 
 @dataclass
+class ConversionStats:
+    """Statistics from a single conversion run."""
+
+    method_name: str
+    output_path: Path
+    file_size_kb: float
+    vertex_count: int
+    face_count: int
+    mesh_count: int
+    elapsed_seconds: float
+    success: bool = True
+    error: str = ""
+
+
+@dataclass
 class GallerySlice:
     """Single DICOM slice with metadata for gallery mode (no shape filtering)."""
 
