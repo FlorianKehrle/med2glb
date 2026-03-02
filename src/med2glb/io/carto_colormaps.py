@@ -6,7 +6,11 @@ and unipolar voltage displays.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def lat_colormap(values: np.ndarray, clamp_range: tuple[float, float] | None = None) -> np.ndarray:
@@ -97,6 +101,10 @@ def _apply_colormap(
     colors = np.zeros((n, 4), dtype=np.float32)
 
     valid = ~np.isnan(values)
+    n_nan = int(np.sum(~valid))
+    if n_nan > 0:
+        pct = 100.0 * n_nan / n
+        logger.debug("Colormap: %d / %d vertices (%.1f%%) are NaN (unmapped)", n_nan, n, pct)
     if not np.any(valid):
         # All NaN — return fully transparent gray (invisible via MASK)
         colors[:, :3] = 0.5
@@ -115,6 +123,17 @@ def _apply_colormap(
         t = np.full(n, 0.5, dtype=np.float64)
     else:
         t = (v - lo) / (hi - lo)
+        # Log clamping statistics
+        valid_v = v[valid]
+        n_below = int(np.sum(valid_v < lo))
+        n_above = int(np.sum(valid_v > hi))
+        if n_below > 0 or n_above > 0:
+            n_valid = int(np.sum(valid))
+            logger.debug(
+                "Colormap: clamped to [%.2f, %.2f] — %d below (%.1f%%), %d above (%.1f%%)",
+                lo, hi, n_below, 100.0 * n_below / n_valid,
+                n_above, 100.0 * n_above / n_valid,
+            )
     t = np.clip(t, 0.0, 1.0)
 
     # Interpolate through color stops

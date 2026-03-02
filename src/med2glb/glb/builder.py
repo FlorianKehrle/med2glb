@@ -190,11 +190,13 @@ def _add_mesh_to_gltf(
             )
         )
 
-    # Add vertex colors (COLOR_0) if available
+    # Add vertex colors (COLOR_0) if available — stored as uint8 normalized
+    # to reduce file size by 75% vs float32 (8-bit precision is sufficient
+    # for clinical colormaps).
     color_acc_idx = None
     if has_vertex_colors:
-        colors = mesh_data.vertex_colors.astype(np.float32)
-        color_data = colors.tobytes()
+        colors_u8 = np.clip(mesh_data.vertex_colors * 255.0, 0, 255).astype(np.uint8)
+        color_data = colors_u8.tobytes()
         color_offset = len(binary_data)
         binary_data.extend(color_data)
         _pad_to_4(binary_data)
@@ -213,9 +215,10 @@ def _add_mesh_to_gltf(
         gltf.accessors.append(
             pygltflib.Accessor(
                 bufferView=color_bv_idx,
-                componentType=pygltflib.FLOAT,
-                count=len(colors),
+                componentType=pygltflib.UNSIGNED_BYTE,
+                count=len(colors_u8),
                 type=pygltflib.VEC4,
+                normalized=True,
             )
         )
 
