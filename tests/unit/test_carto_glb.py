@@ -12,7 +12,7 @@ from med2glb.glb.builder import build_glb
 
 class TestGlbVertexColors:
     def test_build_glb_with_vertex_colors(self, synthetic_mesh, tmp_path):
-        """Test that COLOR_0 attribute is written when vertex_colors is set."""
+        """Test that vertex colors are baked into a texture (TEXCOORD_0 + baseColorTexture)."""
         n_verts = len(synthetic_mesh.vertices)
         synthetic_mesh.vertex_colors = np.random.rand(n_verts, 4).astype(np.float32)
         synthetic_mesh.vertex_colors[:, 3] = 1.0  # opaque
@@ -23,10 +23,13 @@ class TestGlbVertexColors:
         assert output.exists()
         gltf = pygltflib.GLTF2.load(str(output))
         prim = gltf.meshes[0].primitives[0]
-        assert prim.attributes.COLOR_0 is not None
+        # Vertex colors are now baked into a texture, not stored as COLOR_0
+        assert prim.attributes.TEXCOORD_0 is not None
+        assert prim.attributes.COLOR_0 is None
 
-        # Material should have white base color
+        # Material should have baseColorTexture
         mat = gltf.materials[0]
+        assert mat.pbrMetallicRoughness.baseColorTexture is not None
         bcf = mat.pbrMetallicRoughness.baseColorFactor
         assert bcf == pytest.approx([1.0, 1.0, 1.0, 1.0])
 
@@ -38,6 +41,7 @@ class TestGlbVertexColors:
         gltf = pygltflib.GLTF2.load(str(output))
         prim = gltf.meshes[0].primitives[0]
         assert prim.attributes.COLOR_0 is None
+        assert prim.attributes.TEXCOORD_0 is None
 
         # Material should use original base color
         mat = gltf.materials[0]
@@ -92,9 +96,9 @@ class TestCartoAnimatedGlb:
         assert gltf.nodes[0].scale == [1.0, 1.0, 1.0]
         assert gltf.nodes[1].scale == [0.0, 0.0, 0.0]
 
-        # Root node wraps all frames with mm→m scale
+        # Root node wraps all frames with mm→m + 10x AR scale
         root = gltf.nodes[5]
-        assert root.scale == [0.001, 0.001, 0.001]
+        assert root.scale == [0.01, 0.01, 0.01]
         assert root.children == [0, 1, 2, 3, 4]
         assert gltf.scenes[0].nodes == [5]
 
@@ -102,10 +106,11 @@ class TestCartoAnimatedGlb:
         assert len(gltf.animations) == 1
         assert gltf.animations[0].name == "excitation_ring"
 
-        # Each mesh should have COLOR_0
+        # Each mesh should have TEXCOORD_0 (colors baked into textures)
         for mesh in gltf.meshes:
             prim = mesh.primitives[0]
-            assert prim.attributes.COLOR_0 is not None
+            assert prim.attributes.TEXCOORD_0 is not None
+            assert prim.attributes.COLOR_0 is None
 
         # Standard output should NOT have unlit (AR variant gets unlit separately)
         assert "KHR_materials_unlit" not in (gltf.extensionsUsed or [])

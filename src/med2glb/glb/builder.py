@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import struct
 from pathlib import Path
 
@@ -9,6 +10,8 @@ import numpy as np
 import pygltflib
 
 from med2glb.core.types import MeshData
+
+logger = logging.getLogger("med2glb")
 
 
 def build_glb(
@@ -51,13 +54,15 @@ def build_glb(
             )
             child_nodes.append(node_idx)
 
-    # Wrap in a root node that converts mm → m when needed
+    # Wrap in a root node that converts mm → m when needed.
+    # 10x real-world scale so cardiac structures (~12cm) render at ~120cm
+    # in AR — large enough to inspect comfortably on HoloLens 2.
     if source_units == "mm":
         root_idx = len(gltf.nodes)
         gltf.nodes.append(pygltflib.Node(
             name="root",
             children=child_nodes,
-            scale=[0.001, 0.001, 0.001],
+            scale=[0.01, 0.01, 0.01],
         ))
         gltf.scenes[0].nodes = [root_idx]
     else:
@@ -81,40 +86,116 @@ def _add_mesh_to_gltf(
     binary_data: bytearray,
     index: int,
 ) -> int:
-    """Add a single mesh with material to the glTF document. Returns node index."""
-    mat = mesh_data.material
+    """Add a single mesh with material to the glTF document. Returns node index.
 
-    # Create material
-    material_idx = len(gltf.materials)
+    When vertex colors are present, they are baked into a baseColorTexture
+    (PNG atlas) for universal compatibility — HoloLens 2 / MRTK / glTFast
+    do not render the COLOR_0 vertex attribute.
+    """
+    mat = mesh_data.material
     has_vertex_colors = mesh_data.vertex_colors is not None
-    # When vertex colors are present, use white base so COLOR_0 drives appearance
-    alpha_cutoff = None
+
+    # --- Bake vertex colors into a texture ---
+    tex_info = None
     if has_vertex_colors:
-        base_color_factor = [1.0, 1.0, 1.0, 1.0]
+        from med2glb.glb.vertex_color_bake import (
+            bake_vertex_colors_to_texture,
+            compute_texture_size,
+        )
+
+        tex_size = compute_texture_size(len(mesh_data.faces))
+        uvs, png_bytes = bake_vertex_colors_to_texture(
+            mesh_data.faces, mesh_data.vertex_colors, texture_size=tex_size,
+        )
+
+        # Unweld the mesh: each face gets 3 unique vertices
+        faces_flat = mesh_data.faces.ravel()  # (F*3,)
+        vertices = mesh_data.vertices[faces_flat].astype(np.float32)  # (F*3, 3)
+        normals = None
+        if mesh_data.normals is not None:
+            normals = mesh_data.normals[faces_flat].astype(np.float32)
+        # New face indices: sequential (0,1,2), (3,4,5), ...
+        n_unwelded = len(vertices)
+        faces = np.arange(n_unwelded, dtype=np.uint32).reshape(-1, 3)
+
+        # Embed PNG image into binary buffer
+        img_offset = len(binary_data)
+        binary_data.extend(png_bytes)
+        _pad_to_4(binary_data)
+
+        img_bv_idx = len(gltf.bufferViews)
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0, byteOffset=img_offset, byteLength=len(png_bytes),
+        ))
+
+        # Ensure images/textures/samplers lists exist
+        if not hasattr(gltf, "images") or gltf.images is None:
+            gltf.images = []
+        if not hasattr(gltf, "textures") or gltf.textures is None:
+            gltf.textures = []
+        if not hasattr(gltf, "samplers") or gltf.samplers is None:
+            gltf.samplers = []
+
+        img_idx = len(gltf.images)
+        gltf.images.append(pygltflib.Image(
+            bufferView=img_bv_idx, mimeType="image/png",
+        ))
+
+        # One shared sampler (add only once)
+        if len(gltf.samplers) == 0:
+            gltf.samplers.append(pygltflib.Sampler(
+                magFilter=pygltflib.LINEAR,
+                minFilter=pygltflib.LINEAR,
+                wrapS=pygltflib.CLAMP_TO_EDGE,
+                wrapT=pygltflib.CLAMP_TO_EDGE,
+            ))
+
+        tex_idx = len(gltf.textures)
+        gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
+
+        tex_info = pygltflib.TextureInfo(index=tex_idx)
+
+        # Alpha mode from vertex colors
         min_alpha = float(mesh_data.vertex_colors[:, 3].min())
         if min_alpha > 0.99:
             alpha_mode = pygltflib.OPAQUE
+            alpha_cutoff = None
         elif min_alpha < 0.01:
-            # Fully transparent vertices → MASK is faster than BLEND on HoloLens
             alpha_mode = pygltflib.MASK
             alpha_cutoff = 0.5
         else:
             alpha_mode = pygltflib.BLEND
+            alpha_cutoff = None
+
+        logger.info(
+            "Texture-baked mesh %d: %d verts (unwelded from %d), %dx%d texture",
+            index, n_unwelded, len(mesh_data.vertices), tex_size, tex_size,
+        )
     else:
-        base_color_factor = [
-            mat.base_color[0],
-            mat.base_color[1],
-            mat.base_color[2],
-            mat.alpha,
-        ]
+        vertices = mesh_data.vertices.astype(np.float32)
+        normals = mesh_data.normals.astype(np.float32) if mesh_data.normals is not None else None
+        faces = mesh_data.faces.astype(np.uint32)
+        uvs = None
         alpha_mode = pygltflib.BLEND if mat.alpha < 1.0 else pygltflib.OPAQUE
+        alpha_cutoff = None
+
+    # --- Create material ---
+    material_idx = len(gltf.materials)
+    pbr_kwargs: dict = dict(
+        metallicFactor=mat.metallic,
+        roughnessFactor=mat.roughness,
+    )
+    if tex_info is not None:
+        pbr_kwargs["baseColorTexture"] = tex_info
+        pbr_kwargs["baseColorFactor"] = [1.0, 1.0, 1.0, 1.0]
+    else:
+        pbr_kwargs["baseColorFactor"] = [
+            mat.base_color[0], mat.base_color[1], mat.base_color[2], mat.alpha,
+        ]
+
     mat_kwargs: dict = dict(
         name=mat.name or mesh_data.structure_name,
-        pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
-            baseColorFactor=base_color_factor,
-            metallicFactor=mat.metallic,
-            roughnessFactor=mat.roughness,
-        ),
+        pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(**pbr_kwargs),
         alphaMode=alpha_mode,
         doubleSided=True,
     )
@@ -122,141 +203,108 @@ def _add_mesh_to_gltf(
         mat_kwargs["alphaCutoff"] = alpha_cutoff
     if mat.unlit:
         mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
-    material = pygltflib.Material(**mat_kwargs)
-    gltf.materials.append(material)
+    gltf.materials.append(pygltflib.Material(**mat_kwargs))
     if mat.unlit:
         if not hasattr(gltf, "extensionsUsed") or gltf.extensionsUsed is None:
             gltf.extensionsUsed = []
         if "KHR_materials_unlit" not in gltf.extensionsUsed:
             gltf.extensionsUsed.append("KHR_materials_unlit")
 
-    # Add vertex position data
-    vertices = mesh_data.vertices.astype(np.float32)
+    # --- Write geometry ---
+    # Positions
     pos_data = vertices.tobytes()
     pos_offset = len(binary_data)
     binary_data.extend(pos_data)
     _pad_to_4(binary_data)
 
     pos_bv_idx = len(gltf.bufferViews)
-    gltf.bufferViews.append(
-        pygltflib.BufferView(
-            buffer=0,
-            byteOffset=pos_offset,
-            byteLength=len(pos_data),
-            target=pygltflib.ARRAY_BUFFER,
-        )
-    )
+    gltf.bufferViews.append(pygltflib.BufferView(
+        buffer=0, byteOffset=pos_offset, byteLength=len(pos_data),
+        target=pygltflib.ARRAY_BUFFER,
+    ))
 
-    pos_min = vertices.min(axis=0).tolist()
-    pos_max = vertices.max(axis=0).tolist()
     pos_acc_idx = len(gltf.accessors)
-    gltf.accessors.append(
-        pygltflib.Accessor(
-            bufferView=pos_bv_idx,
-            componentType=pygltflib.FLOAT,
-            count=len(vertices),
-            type=pygltflib.VEC3,
-            max=pos_max,
-            min=pos_min,
-        )
-    )
+    gltf.accessors.append(pygltflib.Accessor(
+        bufferView=pos_bv_idx,
+        componentType=pygltflib.FLOAT,
+        count=len(vertices),
+        type=pygltflib.VEC3,
+        max=vertices.max(axis=0).tolist(),
+        min=vertices.min(axis=0).tolist(),
+    ))
 
-    # Add normals if available
+    # Normals
     normal_acc_idx = None
-    if mesh_data.normals is not None:
-        normals = mesh_data.normals.astype(np.float32)
+    if normals is not None:
         norm_data = normals.tobytes()
         norm_offset = len(binary_data)
         binary_data.extend(norm_data)
         _pad_to_4(binary_data)
 
         norm_bv_idx = len(gltf.bufferViews)
-        gltf.bufferViews.append(
-            pygltflib.BufferView(
-                buffer=0,
-                byteOffset=norm_offset,
-                byteLength=len(norm_data),
-                target=pygltflib.ARRAY_BUFFER,
-            )
-        )
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0, byteOffset=norm_offset, byteLength=len(norm_data),
+            target=pygltflib.ARRAY_BUFFER,
+        ))
 
         normal_acc_idx = len(gltf.accessors)
-        gltf.accessors.append(
-            pygltflib.Accessor(
-                bufferView=norm_bv_idx,
-                componentType=pygltflib.FLOAT,
-                count=len(normals),
-                type=pygltflib.VEC3,
-            )
-        )
+        gltf.accessors.append(pygltflib.Accessor(
+            bufferView=norm_bv_idx,
+            componentType=pygltflib.FLOAT,
+            count=len(normals),
+            type=pygltflib.VEC3,
+        ))
 
-    # Add vertex colors (COLOR_0) if available — stored as uint8 normalized
-    # to reduce file size by 75% vs float32 (8-bit precision is sufficient
-    # for clinical colormaps).
-    color_acc_idx = None
-    if has_vertex_colors:
-        colors_u8 = np.clip(mesh_data.vertex_colors * 255.0, 0, 255).astype(np.uint8)
-        color_data = colors_u8.tobytes()
-        color_offset = len(binary_data)
-        binary_data.extend(color_data)
+    # UVs (only when texture-baked)
+    uv_acc_idx = None
+    if uvs is not None:
+        uv_data = uvs.tobytes()
+        uv_offset = len(binary_data)
+        binary_data.extend(uv_data)
         _pad_to_4(binary_data)
 
-        color_bv_idx = len(gltf.bufferViews)
-        gltf.bufferViews.append(
-            pygltflib.BufferView(
-                buffer=0,
-                byteOffset=color_offset,
-                byteLength=len(color_data),
-                target=pygltflib.ARRAY_BUFFER,
-            )
-        )
+        uv_bv_idx = len(gltf.bufferViews)
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0, byteOffset=uv_offset, byteLength=len(uv_data),
+            target=pygltflib.ARRAY_BUFFER,
+        ))
 
-        color_acc_idx = len(gltf.accessors)
-        gltf.accessors.append(
-            pygltflib.Accessor(
-                bufferView=color_bv_idx,
-                componentType=pygltflib.UNSIGNED_BYTE,
-                count=len(colors_u8),
-                type=pygltflib.VEC4,
-                normalized=True,
-            )
-        )
+        uv_acc_idx = len(gltf.accessors)
+        gltf.accessors.append(pygltflib.Accessor(
+            bufferView=uv_bv_idx,
+            componentType=pygltflib.FLOAT,
+            count=len(uvs),
+            type=pygltflib.VEC2,
+        ))
 
-    # Add face indices
-    faces = mesh_data.faces.astype(np.uint32)
+    # Indices
     idx_data = faces.tobytes()
     idx_offset = len(binary_data)
     binary_data.extend(idx_data)
     _pad_to_4(binary_data)
 
     idx_bv_idx = len(gltf.bufferViews)
-    gltf.bufferViews.append(
-        pygltflib.BufferView(
-            buffer=0,
-            byteOffset=idx_offset,
-            byteLength=len(idx_data),
-            target=pygltflib.ELEMENT_ARRAY_BUFFER,
-        )
-    )
+    gltf.bufferViews.append(pygltflib.BufferView(
+        buffer=0, byteOffset=idx_offset, byteLength=len(idx_data),
+        target=pygltflib.ELEMENT_ARRAY_BUFFER,
+    ))
 
     idx_acc_idx = len(gltf.accessors)
-    gltf.accessors.append(
-        pygltflib.Accessor(
-            bufferView=idx_bv_idx,
-            componentType=pygltflib.UNSIGNED_INT,
-            count=faces.size,
-            type=pygltflib.SCALAR,
-            max=[int(faces.max())],
-            min=[int(faces.min())],
-        )
-    )
+    gltf.accessors.append(pygltflib.Accessor(
+        bufferView=idx_bv_idx,
+        componentType=pygltflib.UNSIGNED_INT,
+        count=faces.size,
+        type=pygltflib.SCALAR,
+        max=[int(faces.max())],
+        min=[int(faces.min())],
+    ))
 
-    # Create primitive
+    # --- Primitive ---
     attributes = pygltflib.Attributes(POSITION=pos_acc_idx)
     if normal_acc_idx is not None:
         attributes.NORMAL = normal_acc_idx
-    if color_acc_idx is not None:
-        attributes.COLOR_0 = color_acc_idx
+    if uv_acc_idx is not None:
+        attributes.TEXCOORD_0 = uv_acc_idx
 
     primitive = pygltflib.Primitive(
         attributes=attributes,
@@ -266,20 +314,16 @@ def _add_mesh_to_gltf(
 
     # Create mesh and node
     mesh_idx = len(gltf.meshes)
-    gltf.meshes.append(
-        pygltflib.Mesh(
-            name=mesh_data.structure_name,
-            primitives=[primitive],
-        )
-    )
+    gltf.meshes.append(pygltflib.Mesh(
+        name=mesh_data.structure_name,
+        primitives=[primitive],
+    ))
 
     node_idx = len(gltf.nodes)
-    gltf.nodes.append(
-        pygltflib.Node(
-            name=mesh_data.structure_name,
-            mesh=mesh_idx,
-        )
-    )
+    gltf.nodes.append(pygltflib.Node(
+        name=mesh_data.structure_name,
+        mesh=mesh_idx,
+    ))
 
     return node_idx
 

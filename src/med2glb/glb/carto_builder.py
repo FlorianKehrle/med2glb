@@ -179,6 +179,41 @@ def build_carto_animated_glb(
                 arrow_frame_dashes, face_grads, face_centers,
             )
 
+    # Bake per-frame vertex colors into textures for HoloLens 2 compatibility
+    from med2glb.glb.vertex_color_bake import (
+        bake_vertex_colors_to_texture,
+        compute_texture_size,
+    )
+
+    tex_size = compute_texture_size(len(mesh_data.faces))
+
+    # Bake all frames — UVs are the same for every frame (same topology)
+    _report("Baking frame textures...", 0, n_frames)
+    frame_textures: list[bytes] = []
+    shared_uvs = None
+    for fi in range(n_frames):
+        _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
+        # Convert uint8 frame colors back to float for the bake function
+        colors_f32 = frame_colors_u8[fi].astype(np.float32) / 255.0
+        uvs, png_bytes = bake_vertex_colors_to_texture(
+            mesh_data.faces, colors_f32, texture_size=tex_size,
+        )
+        if shared_uvs is None:
+            shared_uvs = uvs
+        frame_textures.append(png_bytes)
+
+    # Free per-frame color arrays (textures are baked now)
+    del frame_colors_u8
+
+    # Unweld the mesh: each face gets 3 unique vertices
+    faces_flat = mesh_data.faces.ravel()
+    unwelded_verts = mesh_data.vertices[faces_flat].astype(np.float32)
+    unwelded_normals = None
+    if mesh_data.normals is not None:
+        unwelded_normals = mesh_data.normals[faces_flat].astype(np.float32)
+    n_unwelded = len(unwelded_verts)
+    unwelded_faces = np.arange(n_unwelded, dtype=np.uint32).reshape(-1, 3)
+
     # Build glTF with N frame nodes under a root mm→m scale node
     gltf = pygltflib.GLTF2(
         scene=0,
@@ -190,40 +225,71 @@ def build_carto_animated_glb(
         buffers=[],
         materials=[],
         animations=[],
+        images=[],
+        textures=[],
+        samplers=[],
     )
     if mesh_data.material.unlit:
         gltf.extensionsUsed = ["KHR_materials_unlit"]
     binary_data = bytearray()
 
-    # Shared geometry: positions, normals, indices (written once)
-    vertices = mesh_data.vertices.astype(np.float32)
+    # Shared sampler
+    gltf.samplers.append(pygltflib.Sampler(
+        magFilter=pygltflib.LINEAR,
+        minFilter=pygltflib.LINEAR,
+        wrapS=pygltflib.CLAMP_TO_EDGE,
+        wrapT=pygltflib.CLAMP_TO_EDGE,
+    ))
+
+    # Embed per-frame textures into binary buffer
+    for fi in range(n_frames):
+        img_offset = len(binary_data)
+        binary_data.extend(frame_textures[fi])
+        _pad_to_4(binary_data)
+
+        img_bv_idx = len(gltf.bufferViews)
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0, byteOffset=img_offset, byteLength=len(frame_textures[fi]),
+        ))
+        img_idx = len(gltf.images)
+        gltf.images.append(pygltflib.Image(
+            bufferView=img_bv_idx, mimeType="image/png",
+        ))
+        gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
+
+    del frame_textures  # free memory
+
+    # Shared geometry: positions, normals, UVs, indices (written once, unwelded)
     pos_acc = write_accessor(
-        gltf, binary_data, vertices, pygltflib.ARRAY_BUFFER,
+        gltf, binary_data, unwelded_verts, pygltflib.ARRAY_BUFFER,
         pygltflib.FLOAT, pygltflib.VEC3, with_minmax=True,
     )
 
     norm_acc = None
-    if mesh_data.normals is not None:
-        normals = mesh_data.normals.astype(np.float32)
+    if unwelded_normals is not None:
         norm_acc = write_accessor(
-            gltf, binary_data, normals, pygltflib.ARRAY_BUFFER,
+            gltf, binary_data, unwelded_normals, pygltflib.ARRAY_BUFFER,
             pygltflib.FLOAT, pygltflib.VEC3,
         )
 
-    faces = mesh_data.faces.astype(np.uint32)
+    uv_acc = write_accessor(
+        gltf, binary_data, shared_uvs, pygltflib.ARRAY_BUFFER,
+        pygltflib.FLOAT, pygltflib.VEC2,
+    )
+
     idx_acc = write_accessor(
-        gltf, binary_data, faces.ravel(), pygltflib.ELEMENT_ARRAY_BUFFER,
+        gltf, binary_data, unwelded_faces.ravel(), pygltflib.ELEMENT_ARRAY_BUFFER,
         pygltflib.UNSIGNED_INT, pygltflib.SCALAR, with_minmax=True,
     )
 
-    # Per-frame: material + COLOR_0 + mesh + node
+    # Per-frame: material (with texture) + mesh + node
     _report("Assembling GLB...", n_frames, n_frames)
     for fi in range(n_frames):
-        # Material: white base color, vertex colors drive appearance
         mat_idx = len(gltf.materials)
         mat_kwargs: dict = dict(
             name=f"wavefront_{fi}",
             pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+                baseColorTexture=pygltflib.TextureInfo(index=fi),
                 baseColorFactor=[1.0, 1.0, 1.0, 1.0],
                 metallicFactor=0.0,
                 roughnessFactor=0.7,
@@ -234,17 +300,11 @@ def build_carto_animated_glb(
             mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
         gltf.materials.append(pygltflib.Material(**mat_kwargs))
 
-        # COLOR_0 accessor for this frame (already uint8 from frame loop)
-        color_acc = write_accessor(
-            gltf, binary_data, frame_colors_u8[fi], pygltflib.ARRAY_BUFFER,
-            pygltflib.UNSIGNED_BYTE, pygltflib.VEC4, normalized=True,
-        )
-
-        # Primitive with shared geometry + per-frame color
+        # Primitive with shared geometry + per-frame texture
         attrs = pygltflib.Attributes(POSITION=pos_acc)
         if norm_acc is not None:
             attrs.NORMAL = norm_acc
-        attrs.COLOR_0 = color_acc
+        attrs.TEXCOORD_0 = uv_acc
 
         mesh_idx = len(gltf.meshes)
         gltf.meshes.append(pygltflib.Mesh(
@@ -339,12 +399,13 @@ def build_carto_animated_glb(
         samplers=samplers,
     ))
 
-    # Root node: mm → m conversion (CARTO coordinates are in millimetres)
+    # Root node: mm → m conversion + 10x AR display scale.
+    # Cardiac structures (~12cm) render at ~120cm for comfortable AR inspection.
     root_idx = len(gltf.nodes)
     gltf.nodes.append(pygltflib.Node(
         name="root",
         children=child_node_indices,
-        scale=[0.001, 0.001, 0.001],
+        scale=[0.01, 0.01, 0.01],
     ))
     gltf.scenes[0].nodes = [root_idx]
 

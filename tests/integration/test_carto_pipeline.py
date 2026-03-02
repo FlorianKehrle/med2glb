@@ -67,7 +67,7 @@ class TestCartoEndToEnd:
         gltf = pygltflib.GLTF2.load(str(output))
         assert len(gltf.meshes) == 1
         prim = gltf.meshes[0].primitives[0]
-        assert prim.attributes.COLOR_0 is not None
+        assert prim.attributes.TEXCOORD_0 is not None
 
     def test_synthetic_animated_pipeline(self, carto_mesh_dir, tmp_path):
         """End-to-end: synthetic CARTO dir -> animated GLB."""
@@ -179,7 +179,7 @@ class TestRealCartoV71:
         assert output.exists()
         gltf = pygltflib.GLTF2.load(str(output))
         prim = gltf.meshes[0].primitives[0]
-        assert prim.attributes.COLOR_0 is not None
+        assert prim.attributes.TEXCOORD_0 is not None
 
     def test_animated_lat(self, tmp_path):
         """Animated GLB from v7.1 data (low frame count for speed)."""
