@@ -55,3 +55,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v"
+markers = [
+    "integration: marks tests that need real data or run full pipelines (deselect with '-m \"not integration\"')",
+]
