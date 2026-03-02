@@ -179,40 +179,40 @@ def build_carto_animated_glb(
                 arrow_frame_dashes, face_grads, face_centers,
             )
 
-    # Bake per-frame vertex colors into textures for HoloLens 2 compatibility
+    # UV unwrap ONCE with xatlas, precompute raster map, apply per frame
     from med2glb.glb.vertex_color_bake import (
-        bake_vertex_colors_to_texture,
+        xatlas_unwrap,
+        precompute_rasterization_map,
+        apply_rasterization_map,
         compute_texture_size,
     )
 
     tex_size = compute_texture_size(len(mesh_data.faces))
 
-    # Bake all frames — UVs are the same for every frame (same topology)
-    _report("Baking frame textures...", 0, n_frames)
-    frame_textures: list[bytes] = []
-    shared_uvs = None
-    for fi in range(n_frames):
-        _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
-        # Convert uint8 frame colors back to float for the bake function
-        colors_f32 = frame_colors_u8[fi].astype(np.float32) / 255.0
-        uvs, png_bytes = bake_vertex_colors_to_texture(
-            mesh_data.faces, colors_f32, texture_size=tex_size,
-        )
-        if shared_uvs is None:
-            shared_uvs = uvs
-        frame_textures.append(png_bytes)
-
-    # Free per-frame color arrays (textures are baked now)
-    del frame_colors_u8
-
-    # Unweld the mesh: each face gets 3 unique vertices
-    faces_flat = mesh_data.faces.ravel()
-    unwelded_verts = mesh_data.vertices[faces_flat].astype(np.float32)
+    _report("UV unwrapping with xatlas...", 0, n_frames)
+    vmapping, new_faces, shared_uvs = xatlas_unwrap(
+        mesh_data.vertices, mesh_data.faces, mesh_data.normals,
+    )
+    unwelded_verts = mesh_data.vertices[vmapping].astype(np.float32)
     unwelded_normals = None
     if mesh_data.normals is not None:
-        unwelded_normals = mesh_data.normals[faces_flat].astype(np.float32)
-    n_unwelded = len(unwelded_verts)
-    unwelded_faces = np.arange(n_unwelded, dtype=np.uint32).reshape(-1, 3)
+        unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
+    unwelded_faces = new_faces
+
+    # Precompute pixel→triangle mapping once (expensive), then apply per frame (cheap)
+    _report("Precomputing rasterization map...", 0, n_frames)
+    raster_map = precompute_rasterization_map(new_faces, shared_uvs, tex_size)
+
+    _report("Baking frame textures...", 0, n_frames)
+    frame_textures: list[bytes] = []
+    for fi in range(n_frames):
+        _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
+        colors_remapped = frame_colors_u8[fi][vmapping].astype(np.float32) / 255.0
+        png_bytes = apply_rasterization_map(raster_map, colors_remapped)
+        frame_textures.append(png_bytes)
+
+    # Free per-frame color arrays and raster map (textures are baked now)
+    del frame_colors_u8, raster_map
 
     # Build glTF with N frame nodes under a root mm→m scale node
     gltf = pygltflib.GLTF2(

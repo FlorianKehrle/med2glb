@@ -104,19 +104,10 @@ def _add_mesh_to_gltf(
         )
 
         tex_size = compute_texture_size(len(mesh_data.faces))
-        uvs, png_bytes = bake_vertex_colors_to_texture(
-            mesh_data.faces, mesh_data.vertex_colors, texture_size=tex_size,
+        vertices, faces, normals, uvs, png_bytes = bake_vertex_colors_to_texture(
+            mesh_data.vertices, mesh_data.faces, mesh_data.vertex_colors,
+            texture_size=tex_size, normals=mesh_data.normals,
         )
-
-        # Unweld the mesh: each face gets 3 unique vertices
-        faces_flat = mesh_data.faces.ravel()  # (F*3,)
-        vertices = mesh_data.vertices[faces_flat].astype(np.float32)  # (F*3, 3)
-        normals = None
-        if mesh_data.normals is not None:
-            normals = mesh_data.normals[faces_flat].astype(np.float32)
-        # New face indices: sequential (0,1,2), (3,4,5), ...
-        n_unwelded = len(vertices)
-        faces = np.arange(n_unwelded, dtype=np.uint32).reshape(-1, 3)
 
         # Embed PNG image into binary buffer
         img_offset = len(binary_data)
@@ -168,8 +159,8 @@ def _add_mesh_to_gltf(
             alpha_cutoff = None
 
         logger.info(
-            "Texture-baked mesh %d: %d verts (unwelded from %d), %dx%d texture",
-            index, n_unwelded, len(mesh_data.vertices), tex_size, tex_size,
+            "Texture-baked mesh %d: %d verts (xatlas from %d), %dx%d texture",
+            index, len(vertices), len(mesh_data.vertices), tex_size, tex_size,
         )
     else:
         vertices = mesh_data.vertices.astype(np.float32)
