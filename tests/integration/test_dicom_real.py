@@ -20,7 +20,7 @@ _REPO = Path(__file__).parent.parent.parent
 DICOM_DATA = _REPO / "test_data" / "DICOM"
 
 # Persistent output directory for inspecting GLBs after test runs
-_GLB_OUTPUT = _REPO / "test_output" / "dicom"
+_GLB_OUTPUT = _REPO / "test_data" / "Output" / "dicom"
 
 # Transplant patient — 97-slice CT volume (512x512, 1.27mm spacing, 3mm thickness)
 TRANSPLANT_CT = DICOM_DATA / "Transplant" / "BPL-CT"

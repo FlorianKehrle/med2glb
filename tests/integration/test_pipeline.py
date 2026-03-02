@@ -1,15 +1,16 @@
-"""Integration test: end-to-end DICOM directory to GLB file."""
+"""Integration test: end-to-end DICOM special cases (textured plane, temporal animation).
+
+Standard volume-to-GLB flow is covered by test_pipeline_dicom.py
+(convert_series) and test_cli.py (test_full_pipeline).
+"""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pygltflib
 import pytest
 
 from med2glb.core.types import MethodParams
 from med2glb.io.dicom_reader import InputType, load_dicom_directory
-from med2glb.io.exporters import export_glb, export_stl
 from med2glb.mesh.processing import process_mesh
 from med2glb.methods.registry import _ensure_methods_loaded, get_method
 
@@ -17,45 +18,6 @@ from med2glb.methods.registry import _ensure_methods_loaded, get_method
 @pytest.fixture(autouse=True)
 def _load_methods():
     _ensure_methods_loaded()
-
-
-def test_volume_to_glb(dicom_directory, tmp_path):
-    """End-to-end: DICOM directory -> marching-cubes -> GLB."""
-    input_type, volume = load_dicom_directory(dicom_directory)
-    assert input_type == InputType.VOLUME
-
-    method = get_method("marching-cubes")
-    params = MethodParams(threshold=250.0, smoothing_iterations=5, target_faces=5000)
-    result = method.convert(volume, params)
-
-    # Process meshes
-    processed = [process_mesh(m, smoothing_iterations=5, target_faces=5000) for m in result.meshes]
-    result.meshes = processed
-
-    # Export
-    output = tmp_path / "test.glb"
-    export_glb(result.meshes, output)
-
-    assert output.exists()
-    gltf = pygltflib.GLTF2.load(str(output))
-    assert len(gltf.meshes) >= 1
-
-
-def test_volume_to_stl(dicom_directory, tmp_path):
-    """End-to-end: DICOM directory -> classical -> STL."""
-    input_type, volume = load_dicom_directory(dicom_directory)
-
-    method = get_method("classical")
-    params = MethodParams(threshold=250.0, smoothing_iterations=5, target_faces=5000)
-    result = method.convert(volume, params)
-
-    processed = [process_mesh(m, smoothing_iterations=5, target_faces=5000) for m in result.meshes]
-    result.meshes = processed
-
-    output = tmp_path / "test.stl"
-    export_stl(result.meshes, output)
-    assert output.exists()
-    assert output.stat().st_size > 0
 
 
 def test_single_slice_to_textured_glb(tmp_path):

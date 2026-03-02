@@ -72,7 +72,7 @@ def main(
         "glb",
         "-f",
         "--format",
-        help="Output format: glb, stl, obj.",
+        help="Output format.",
     ),
     animate: bool = typer.Option(
         False,

@@ -36,9 +36,8 @@ htmlcov/
 
 # Output
 output/
-test_output/
 
-# Test data (large CARTO exports, video frames, etc.)
+# Test data (large CARTO exports, DICOM files, generated GLBs, etc.)
 test_data/
 
 # Windows artifacts

@@ -18,12 +18,29 @@ from med2glb.cli_wizard import _MIN_LAT_RANGE_MS
 # Real test data paths (relative to repo root)
 _REPO = Path(__file__).parent.parent.parent
 TEST_DATA = _REPO / "test_data" / "CARTO"
+_GLB_OUTPUT = _REPO / "test_data" / "Output" / "carto"
 
 # v7.1 — single mesh (1-Map), sparse points, low vector quality
 CARTO_V71 = TEST_DATA / "Version_7.1.80.33" / "Study 1" / "Export_Study"
 
 # v7.2 O — 2 meshes (1-1-1-Rp-ReLA, 2-RA)
 CARTO_V72_O = TEST_DATA / "Version_7.2.10.423" / "O"
+
+
+@pytest.fixture
+def v71_output() -> Path:
+    """Persistent output for CARTO v7.1 GLBs."""
+    d = _GLB_OUTPUT / "v7.1"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@pytest.fixture
+def v72_o_output() -> Path:
+    """Persistent output for CARTO v7.2 O GLBs."""
+    d = _GLB_OUTPUT / "v7.2-O"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _extract_active_lat(mesh, points, mesh_data):
@@ -162,7 +179,7 @@ class TestRealCartoV71:
         assert len(study.meshes) >= 1
         assert study.version in ("5.0", "6.0")
 
-    def test_static_lat(self, tmp_path):
+    def test_static_lat(self, v71_output):
         """Static LAT GLB from v7.1 data."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
@@ -173,7 +190,7 @@ class TestRealCartoV71:
         points = study.points.get(mesh.structure_name)
 
         mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat")
-        output = tmp_path / f"{mesh.structure_name}_lat.glb"
+        output = v71_output / f"{mesh.structure_name}_lat.glb"
         build_glb([mesh_data], output)
 
         assert output.exists()
@@ -181,7 +198,7 @@ class TestRealCartoV71:
         prim = gltf.meshes[0].primitives[0]
         assert prim.attributes.TEXCOORD_0 is not None
 
-    def test_animated_lat(self, tmp_path):
+    def test_animated_lat(self, v71_output):
         """Animated GLB from v7.1 data (low frame count for speed)."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
@@ -194,7 +211,7 @@ class TestRealCartoV71:
         mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat", subdivide=0)
         active_lat = _extract_active_lat(mesh, points, mesh_data)
 
-        output = tmp_path / f"{mesh.structure_name}_lat_animated.glb"
+        output = v71_output / f"{mesh.structure_name}_lat_animated.glb"
         build_carto_animated_glb(
             mesh_data, active_lat, output,
             n_frames=5, target_faces=10000,
@@ -234,7 +251,7 @@ class TestRealCartoV72O:
         for expected in ["1-1-1-Rp-ReLA", "2-RA"]:
             assert expected in names, f"Expected mesh '{expected}' not found in {names}"
 
-    def test_static_all_meshes_all_colorings(self, tmp_path):
+    def test_static_all_meshes_all_colorings(self, v72_o_output):
         """Full static pipeline: all meshes x all colorings."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
@@ -246,12 +263,12 @@ class TestRealCartoV72O:
             points = study.points.get(mesh.structure_name)
             for coloring in ["lat", "bipolar", "unipolar"]:
                 mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring)
-                output = tmp_path / f"{mesh.structure_name}_{coloring}.glb"
+                output = v72_o_output / f"{mesh.structure_name}_{coloring}.glb"
                 build_glb([mesh_data], output)
                 assert output.exists()
                 assert output.stat().st_size > 100
 
-    def test_animated_all_meshes(self, tmp_path):
+    def test_animated_all_meshes(self, v72_o_output):
         """Animated GLB for each mesh (low frame count for test speed)."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
@@ -271,7 +288,7 @@ class TestRealCartoV72O:
             if np.all(np.isnan(active_lat)):
                 continue
 
-            output = tmp_path / f"{mesh.structure_name}_lat_animated.glb"
+            output = v72_o_output / f"{mesh.structure_name}_lat_animated.glb"
             build_carto_animated_glb(
                 mesh_data, active_lat, output,
                 n_frames=5, target_faces=10000,
@@ -301,7 +318,7 @@ class TestRealCartoV72O:
             assert single.valid_points >= 0
             assert single.lat_range_ms >= 0.0
 
-    def test_animated_with_vectors(self, tmp_path):
+    def test_animated_with_vectors(self, v72_o_output):
         """Animated GLB with vectors on a suitable mesh."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
@@ -322,7 +339,7 @@ class TestRealCartoV72O:
         mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat", subdivide=0)
         active_lat = _extract_active_lat(mesh, points, mesh_data)
 
-        output = tmp_path / f"{mesh.structure_name}_lat_animated_vectors.glb"
+        output = v72_o_output / f"{mesh.structure_name}_lat_animated_vectors.glb"
         build_carto_animated_glb(
             mesh_data, active_lat, output,
             n_frames=5, target_faces=10000,

@@ -193,20 +193,16 @@ def _run_animated_pipeline(data, converter, params, alpha, progress):
 def _export(result, output: Path, format: str, animate: bool) -> None:
     """Export conversion result to file."""
     from med2glb.core.types import AnimatedResult
-    from med2glb.io.exporters import export_glb, export_obj, export_stl
+    from med2glb.io.exporters import export_glb
 
-    if format == "glb":
-        if isinstance(result, AnimatedResult) and animate:
-            from med2glb.glb.animation import build_animated_glb
-            build_animated_glb(result, output)
-        else:
-            export_glb(result.meshes, output)
-    elif format == "stl":
-        export_stl(result.meshes, output)
-    elif format == "obj":
-        export_obj(result.meshes, output)
-    else:
+    if format != "glb":
         raise ValueError(f"Unsupported format: {format}")
+
+    if isinstance(result, AnimatedResult) and animate:
+        from med2glb.glb.animation import build_animated_glb
+        build_animated_glb(result, output)
+    else:
+        export_glb(result.meshes, output)
 
 
 def _parse_multi_threshold(spec: str) -> list[ThresholdLayer]:

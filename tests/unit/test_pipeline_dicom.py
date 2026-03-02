@@ -66,24 +66,6 @@ def test_export_glb(synthetic_mesh, tmp_path):
     assert output.stat().st_size > 0
 
 
-def test_export_stl(synthetic_mesh, tmp_path):
-    from med2glb.core.types import ConversionResult
-
-    result = ConversionResult(meshes=[synthetic_mesh], method_name="test")
-    output = tmp_path / "test.stl"
-    _export(result, output, "stl", animate=False)
-    assert output.exists()
-
-
-def test_export_obj(synthetic_mesh, tmp_path):
-    from med2glb.core.types import ConversionResult
-
-    result = ConversionResult(meshes=[synthetic_mesh], method_name="test")
-    output = tmp_path / "test.obj"
-    _export(result, output, "obj", animate=False)
-    assert output.exists()
-
-
 def test_export_unsupported_format(synthetic_mesh, tmp_path):
     from med2glb.core.types import ConversionResult
 
@@ -168,28 +150,6 @@ def test_convert_series_with_alpha(dicom_directory, tmp_path):
     gltf = pygltflib.GLTF2.load(str(output))
     # At least one material should have BLEND alpha
     assert any(m.alphaMode == pygltflib.BLEND for m in gltf.materials)
-
-
-def test_convert_series_stl_format(dicom_directory, tmp_path):
-    """Convert to STL format."""
-    output = tmp_path / "output.stl"
-    convert_series(
-        input_path=dicom_directory,
-        output=output,
-        method_name="marching-cubes",
-        format="stl",
-        animate=False,
-        threshold=250.0,
-        smoothing=3,
-        target_faces=5000,
-        alpha=1.0,
-        multi_threshold=None,
-        series_uid=None,
-        max_size_mb=0,
-        compress_strategy="draco",
-        verbose=False,
-    )
-    assert output.exists()
 
 
 # --- run_dicom_from_config tests ---
