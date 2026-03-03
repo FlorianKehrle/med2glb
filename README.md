@@ -394,6 +394,16 @@ pytest
 pytest --cov=med2glb
 ```
 
+## Code Review with Claude Code
+
+To run a comprehensive code review using [Claude Code](https://claude.com/claude-code):
+
+```bash
+claude "run a code review"
+```
+
+This launches a read-only analysis covering architecture overview, latest features and changes, supported pipelines, code quality, AR-specific optimizations, and improvement suggestions. The review is aware that GLB outputs target augmented reality viewers and that inputs are clinical data formats (DICOM, CARTO).
+
 ## License
 
 MIT
