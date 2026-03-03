@@ -16,7 +16,7 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 - **Gallery mode** -- convert every slice to textured quads with three layouts: individual GLBs, lightbox grid, and spatial fan positioned using DICOM metadata
 - **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and MedSAM2 (echo/general)
 - **Automatic series detection** -- multi-series DICOM folders are analyzed and classified (3D volume, 2D cine, still image) with per-series conversion recommendations
-- **Multi-format export** -- GLB (with animation and PBR materials), STL, and OBJ
+- **GLB output** -- with animation, PBR materials, and `KHR_materials_unlit` AR variants
 - **AR-optimized meshes** -- Taubin smoothing (volume-preserving), decimation to configurable triangle count, and configurable transparency
 - **GLB size constraint** -- automatic compression to fit AR viewer limits (default 99 MB) with three strategies: Draco mesh compression, texture downscaling, or JPEG re-encoding
 - **Multi-threshold layered output** -- extract multiple structures at different intensity thresholds with per-layer colors and transparency
@@ -286,6 +286,9 @@ med2glb ./data/ --max-size 0
 | `marching-cubes` | Quick preview, any modality | No | Yes |
 | `totalseg` | Cardiac CT with contrast | Yes | No |
 | `medsam2` | 3D echo, general cardiac | Yes | Yes |
+| `compare` | Method comparison | No* | No |
+
+\* `compare` runs all non-AI methods by default; AI methods are included if installed.
 
 The wizard auto-selects the recommended method based on the data type. You can override it in the wizard or with `--method`. List available methods and their install status:
 
@@ -328,6 +331,14 @@ AI segmentation for 3D echo and general cardiac imaging. Produces multi-structur
 
 Requires AI dependencies: `pip install med2glb[ai]`
 
+### Compare
+
+Runs all available conversion methods side-by-side on the same input and produces a comparison table showing mesh stats (vertices, faces), file size, and processing time for each method. Useful for choosing the best method for a new dataset. AI methods are included automatically if installed.
+
+```bash
+med2glb ./echo_folder/ --method compare
+```
+
 ## CLI Reference
 
 ```
@@ -338,8 +349,7 @@ Arguments:
 
 Options:
   -o, --output PATH       Output file path (default: <input>/glb/<name>_<type>.glb)
-  -m, --method TEXT        Conversion method: classical, marching-cubes, totalseg, medsam2
-  -f, --format TEXT        Output format: glb, stl, obj (default: glb)
+  -m, --method TEXT        Conversion method: classical, marching-cubes, totalseg, medsam2, compare
   --coloring TEXT         CARTO coloring: lat, bipolar, unipolar (default: lat)
   --subdivide INTEGER     CARTO mesh subdivision level 0-3 (default: 2)
   --vectors               Add animated LAT streamline arrows (CARTO LAT maps)
@@ -363,14 +373,6 @@ Options:
 ```
 
 Passing any pipeline flag (`--method`, `--coloring`, `--animate`, `--vectors`, etc.) bypasses the interactive wizard and runs with the specified settings directly. The `-o` flag can be combined with the wizard to control the output location.
-
-## Output Formats
-
-| Format | Animation | Materials | Use Case |
-|---|---|---|---|
-| GLB | Yes (per-frame planes / morph targets) | PBR with transparency | AR viewers, web (model-viewer) |
-| STL | No | No | 3D printing, CAD |
-| OBJ | No | Basic | General 3D software |
 
 ## AR Viewer Compatibility
 
