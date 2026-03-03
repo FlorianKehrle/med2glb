@@ -338,14 +338,11 @@ def build_animated_arrow_nodes(
         # Node: first frame visible, rest hidden
         scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]
         node_idx = len(gltf.nodes)
-        node_kwargs: dict = dict(
+        gltf.nodes.append(pygltflib.Node(
             name=f"lat_vectors_{fi}",
             mesh=mesh_idx,
             scale=scale,
-        )
-        if centroid_offset is not None:
-            node_kwargs["translation"] = centroid_offset
-        gltf.nodes.append(pygltflib.Node(**node_kwargs))
+        ))
         node_indices.append(node_idx)
 
     logger.info(f"Built {len(node_indices)} arrow animation frames")

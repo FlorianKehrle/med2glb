@@ -72,11 +72,14 @@ def build_glb(
 
     if legend_info and centroid is not None:
         from med2glb.glb.legend_builder import add_legend_nodes
+        centered_verts = (
+            meshes[0].vertices - np.array(centroid, dtype=np.float32)
+        ).astype(np.float32)
         legend_nodes = add_legend_nodes(
-            gltf, all_binary_data, meshes[0].vertices,
+            gltf, all_binary_data, centered_verts,
             coloring=legend_info["coloring"],
             clamp_range=tuple(legend_info["clamp_range"]),
-            centroid=centroid,
+            centroid=[0.0, 0.0, 0.0],
             metadata=legend_info.get("metadata"),
         )
         child_nodes.extend(legend_nodes)
@@ -349,7 +352,6 @@ def _add_mesh_to_gltf(
     gltf.nodes.append(pygltflib.Node(
         name=mesh_data.structure_name,
         mesh=mesh_idx,
-        translation=centroid,
     ))
 
     return node_idx, centroid

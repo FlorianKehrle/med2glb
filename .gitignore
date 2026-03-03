@@ -34,9 +34,6 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 
-# Output
-output/
-
 # Test data (large CARTO exports, DICOM files, generated GLBs, etc.)
 test_data/
 

@@ -323,7 +323,6 @@ def build_carto_animated_glb(
         scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]
         gltf.nodes.append(pygltflib.Node(
             name=f"wavefront_{fi}", mesh=mesh_idx, scale=scale,
-            translation=centroid,
         ))
 
     # Collect all child node indices for the root node
@@ -346,11 +345,14 @@ def build_carto_animated_glb(
 
     if legend_info:
         from med2glb.glb.legend_builder import add_legend_nodes
+        centered_verts = (
+            mesh_data.vertices - np.array(centroid, dtype=np.float32)
+        ).astype(np.float32)
         legend_nodes = add_legend_nodes(
-            gltf, binary_data, mesh_data.vertices,
+            gltf, binary_data, centered_verts,
             coloring=legend_info["coloring"],
             clamp_range=tuple(legend_info["clamp_range"]),
-            centroid=centroid,
+            centroid=[0.0, 0.0, 0.0],
             metadata=legend_info.get("metadata"),
         )
         child_node_indices.extend(legend_nodes)

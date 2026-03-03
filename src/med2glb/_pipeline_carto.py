@@ -124,69 +124,6 @@ def _extract_active_lat(
     return lat_values[idx]
 
 
-def _build_static_vectors(
-    mesh: "CartoMesh",
-    points: list[CartoPoint],
-    mesh_data: "MeshData",
-    subdivide: int,
-    active_lat: "np.ndarray | None" = None,
-) -> list["MeshData"] | None:
-    """Build static LAT vector arrow meshes for a single frame.
-
-    Returns a list containing one MeshData (the merged arrow mesh),
-    or None if no suitable streamlines were found.
-
-    Args:
-        active_lat: Pre-computed LAT values aligned to mesh_data vertices.
-            If None, will be extracted internally.
-    """
-    from med2glb.mesh.lat_vectors import (
-        trace_all_streamlines, compute_animated_dashes,
-        compute_face_gradients, compute_dash_speed_factors,
-    )
-    from med2glb.glb.arrow_builder import build_frame_dashes, _auto_scale_params
-
-    # Extract LAT values aligned to mesh_data vertices
-    if active_lat is None:
-        active_lat = _extract_active_lat(mesh, points, mesh_data, subdivide)
-
-    streamlines = trace_all_streamlines(
-        mesh_data.vertices, mesh_data.faces, active_lat,
-        mesh_data.normals, target_count=300,
-    )
-    if not streamlines:
-        return None
-
-    dashes = compute_animated_dashes(streamlines, n_frames=1)
-    if not dashes or not dashes[0]:
-        return None
-
-    bbox = mesh_data.vertices.max(axis=0) - mesh_data.vertices.min(axis=0)
-    params = _auto_scale_params(float(np.linalg.norm(bbox)))
-    max_r = params.max_radius if params.max_radius is not None else params.head_radius
-
-    face_grads, face_centers, _ = compute_face_gradients(
-        mesh_data.vertices, mesh_data.faces, active_lat,
-    )
-    speed_factors = compute_dash_speed_factors(dashes, face_grads, face_centers)
-    sf = speed_factors[0] if speed_factors and speed_factors[0] else None
-
-    if sf is not None:
-        keep = [s >= 0.15 for s in sf]
-        frame_dashes = [d for d, k in zip(dashes[0], keep) if k]
-        sf = [s for s, k in zip(sf, keep) if k]
-        dash_radii: list[float] | None = [max_r * (1.1 - 0.3 * s) for s in sf]
-    else:
-        frame_dashes = dashes[0]
-        dash_radii = None
-
-    arrow_mesh = build_frame_dashes(
-        frame_dashes, mesh_data.vertices, mesh_data.normals, params,
-        dash_radii=dash_radii,
-    )
-    return [arrow_mesh] if arrow_mesh is not None else None
-
-
 def _print_carto_summary(
     study: "CartoStudy",
     mesh: "CartoMesh",
@@ -237,8 +174,6 @@ def _print_carto_summary(
         anim_desc = "Yes (excitation ring)"
         if do_vectors:
             anim_desc += " + LAT vectors"
-    elif do_vectors and points:
-        anim_desc = "No (static LAT vectors)"
     console.print(f"  Animated:   {anim_desc}")
     console.print(f"  Output:     {out_path}")
     console.print(f"  Size:       {file_size:.1f} KB")
@@ -418,8 +353,6 @@ def _convert_carto_meshes(
             mesh_has_vec = has_vectors and (vec_meshes is None or mesh_idx in vec_meshes)
             if config.static:
                 jobs.append((mesh_idx, False, False))
-                if mesh_has_vec:
-                    jobs.append((mesh_idx, False, True))
             if config.animate:
                 jobs.append((mesh_idx, True, False))
                 if mesh_has_vec:
@@ -476,16 +409,6 @@ def _convert_carto_meshes(
                 active_lat = _extract_active_lat(
                     mesh, points, mesh_data, config.subdivide,
                     subdivided_mesh=subdivided,
-                )
-
-            # 4. Static vectors once (if any variant needs them)
-            needs_static_vec = any(not anim and vec for anim, vec in variants)
-            static_extra = None
-            if needs_static_vec and points:
-                progress.update(task, description="Generating static LAT vectors...")
-                static_extra = _build_static_vectors(
-                    mesh, points, mesh_data, config.subdivide,
-                    active_lat=active_lat,
                 )
 
             progress.remove_task(task)
@@ -570,10 +493,9 @@ def _convert_carto_meshes(
                     )
                     progress.update(task, completed=_total_steps)
                 else:
-                    extra = static_extra if do_vectors else None
                     progress.update(task, description="Building GLB...")
                     build_glb(
-                        [mesh_data], out_path, extra_meshes=extra,
+                        [mesh_data], out_path,
                         source_units="mm", legend_info=legend_info,
                     )
                     progress.update(task, completed=_total_steps)
@@ -584,7 +506,7 @@ def _convert_carto_meshes(
                         out_path, config.max_size_mb, mesh_data,
                         do_animate and bool(points), _n_frames, do_vectors,
                         active_lat if (do_animate and points) else None,
-                        static_extra if do_vectors else None, progress,
+                        None, progress,
                     )
 
             _print_carto_summary(
