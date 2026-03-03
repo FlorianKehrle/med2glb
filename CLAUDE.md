@@ -65,6 +65,6 @@ pytest --cov=med2glb
 
 ## Maintenance Rules
 
-- **README.md**: When adding features, changing CLI options, or modifying user-facing workflow, update README.md to reflect the changes. Keep it in sync with actual capabilities.
+- **README.md**: When adding features, changing CLI options, or modifying user-facing workflow, update README.md to reflect the changes. Keep it in sync with actual capabilities. README updates MUST be included in the same commit as the code change — never as a separate follow-up commit.
 
 <!-- MANUAL ADDITIONS END -->
