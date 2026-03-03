@@ -1,4 +1,4 @@
-"""MedSAM2 method: AI segmentation for 3D echo and general cardiac imaging."""
+"""Chamber detect method: multi-structure cardiac chamber detection via intensity heuristics."""
 
 from __future__ import annotations
 
@@ -16,21 +16,12 @@ from med2glb.methods.registry import register_method
 logger = logging.getLogger(__name__)
 
 
-@register_method("medsam2")
-class MedSAM2Method(ConversionMethod):
-    """AI segmentation via MedSAM2 for 3D echo and cardiac imaging."""
+@register_method("chamber-detect")
+class ChamberDetectMethod(ConversionMethod):
+    """Multi-structure cardiac chamber detection using intensity heuristics."""
 
-    description = "AI segmentation via MedSAM2."
-    recommended_for = "3D echo, general cardiac imaging."
-    requires_ai = True
-
-    @classmethod
-    def check_dependencies(cls) -> tuple[bool, str]:
-        try:
-            import torch  # noqa: F401
-            return True, "MedSAM2 dependencies installed."
-        except ImportError:
-            return False, "Install with: pip install med2glb[ai]"
+    description = "Multi-structure cardiac chamber detection (intensity heuristic)."
+    recommended_for = "3D echo, cardiac volumes with contrast."
 
     def convert(
         self,
@@ -45,20 +36,13 @@ class MedSAM2Method(ConversionMethod):
             if progress is not None:
                 progress(desc, current, total)
 
-        available, msg = self.check_dependencies()
-        if not available:
-            raise ImportError(
-                "MedSAM2 dependencies not installed. Install with: pip install med2glb[ai]"
-            )
-
-        # MedSAM2 segmentation pipeline
-        _report("Running MedSAM2 AI segmentation...")
+        _report("Running chamber detection...")
         try:
-            masks = _run_medsam2_segmentation(volume)
+            masks = _detect_chambers(volume)
         except Exception as e:
-            logger.warning(f"MedSAM2 segmentation failed: {e}")
+            logger.warning(f"Chamber detection failed: {e}")
             raise ValueError(
-                f"MedSAM2 segmentation failed: {e}. "
+                f"Chamber detection failed: {e}. "
                 "Try --method classical as fallback."
             )
 
@@ -91,13 +75,13 @@ class MedSAM2Method(ConversionMethod):
 
         if not meshes:
             raise ValueError(
-                "MedSAM2 found no segmentable structures. "
+                "Chamber detection found no segmentable structures. "
                 "Try --method classical as fallback."
             )
 
         return ConversionResult(
             meshes=meshes,
-            method_name="medsam2",
+            method_name="chamber-detect",
             processing_time=time.time() - start,
             warnings=warnings,
         )
@@ -106,22 +90,17 @@ class MedSAM2Method(ConversionMethod):
         return True
 
 
-def _run_medsam2_segmentation(volume: DicomVolume) -> dict[str, np.ndarray]:
-    """Run MedSAM2 segmentation on a volume.
+def _detect_chambers(volume: DicomVolume) -> dict[str, np.ndarray]:
+    """Detect cardiac chambers using intensity-based heuristics.
 
     Returns dict mapping structure_name -> binary mask [Z, Y, X].
 
-    This is a placeholder implementation. The actual MedSAM2 integration
-    requires downloading the model weights and setting up the inference
-    pipeline. See: https://github.com/bowang-lab/MedSAM
-
-    Current approach:
+    Approach:
     1. Normalize volume to [0, 255]
-    2. Run SAM2 with automatic point prompts from intensity peaks
-    3. Label resulting masks based on anatomical heuristics
+    2. Otsu threshold to separate blood pool from tissue
+    3. Morphological cleanup and connected component labeling
+    4. Assign largest components to heart chambers by size
     """
-    import torch
-
     # Normalize volume
     voxels = volume.voxels.copy()
     vmin, vmax = voxels.min(), voxels.max()
@@ -130,28 +109,22 @@ def _run_medsam2_segmentation(volume: DicomVolume) -> dict[str, np.ndarray]:
     else:
         raise ValueError("Volume has uniform intensity — cannot segment")
 
-    # Attempt to load and run MedSAM2
-    # For now, use a simplified approach: threshold-based pseudo-segmentation
-    # that produces structure-labeled masks
-    logger.info("Running MedSAM2 segmentation...")
+    logger.info("Running chamber detection...")
 
-    masks = _pseudo_segment_echo(voxels, volume)
+    masks = _segment_echo_heuristic(voxels, volume)
 
     return masks
 
 
-def _pseudo_segment_echo(
+def _segment_echo_heuristic(
     voxels: np.ndarray, volume: DicomVolume
 ) -> dict[str, np.ndarray]:
-    """Pseudo-segmentation for echo data using intensity-based heuristics.
+    """Segment echo data using intensity-based heuristics.
 
-    This provides reasonable results for echo data where:
+    Produces reasonable results for echo data where:
     - Blood pool appears as high-intensity regions
     - Myocardium appears as medium-intensity tissue
     - Background is low intensity
-
-    Will be replaced by actual MedSAM2 inference when model weights
-    are available.
     """
     from scipy import ndimage
     from skimage.filters import threshold_otsu

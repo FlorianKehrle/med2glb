@@ -774,9 +774,9 @@ def run_dicom_wizard(
     elif interactive:
         # Check which AI methods are available
         ai_available = _check_ai_available()
-        choices = ["classical", "marching-cubes"]
+        choices = ["classical", "marching-cubes", "chamber-detect"]
         if ai_available:
-            choices.extend(["totalseg", "medsam2"])
+            choices.append("totalseg")
         choices.append("compare")
         rec_label = f" (recommended: {recommended})" if recommended in choices else ""
         method = Prompt.ask(

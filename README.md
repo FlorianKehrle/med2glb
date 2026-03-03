@@ -14,7 +14,7 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 - **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring overlay; animated LAT streamline vectors showing conduction direction; Loop subdivision with IDW interpolation for smooth color maps
 - **Animated cardiac output** -- 2D cine clips become animated GLB with per-frame texture planes; 3D temporal volumes use morph targets; CARTO excitation ring animation
 - **Gallery mode** -- convert every slice to textured quads with three layouts: individual GLBs, lightbox grid, and spatial fan positioned using DICOM metadata
-- **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and MedSAM2 (echo/general)
+- **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and chamber-detect (echo/general)
 - **Automatic series detection** -- multi-series DICOM folders are analyzed and classified (3D volume, 2D cine, still image) with per-series conversion recommendations
 - **GLB output** -- with animation and PBR materials
 - **AR-optimized meshes** -- Taubin smoothing (volume-preserving), decimation to configurable triangle count, and configurable transparency
@@ -27,7 +27,7 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 pip install med2glb
 ```
 
-For AI-powered segmentation (TotalSegmentator, MedSAM2):
+For AI-powered segmentation (TotalSegmentator):
 
 ```bash
 pip install med2glb[ai]
@@ -276,7 +276,7 @@ med2glb ./data/ --max-size 0
 | `classical` (default) | 3D echo, noisy data | No | Yes |
 | `marching-cubes` | Quick preview, any modality | No | Yes |
 | `totalseg` | Cardiac CT with contrast | Yes | No |
-| `medsam2` | 3D echo, general cardiac | Yes | Yes |
+| `chamber-detect` | 3D echo, cardiac volumes with contrast | No | Yes |
 | `compare` | Method comparison | No* | No |
 
 \* `compare` runs all non-AI methods by default; AI methods are included if installed.
@@ -316,11 +316,9 @@ Uses TotalSegmentator's `heartchambers_highres` task to segment 7 cardiac struct
 
 Requires a contrast-enhanced cardiac CT for best results. The `heartchambers_highres` model may require a TotalSegmentator license for commercial use.
 
-### MedSAM2
+### Chamber Detect
 
-AI segmentation for 3D echo and general cardiac imaging. Produces multi-structure output with per-structure colors. Currently uses a heuristic pseudo-segmentation; full MedSAM2 model integration is planned.
-
-Requires AI dependencies: `pip install med2glb[ai]`
+Multi-structure cardiac chamber detection using intensity heuristics (Otsu thresholding, morphological operations, connected component labeling). Produces multi-structure output with per-structure colors — myocardium plus up to four blood pool chambers assigned by size. Best for 3D echo and cardiac volumes with contrast.
 
 ### Compare
 
@@ -340,7 +338,7 @@ Arguments:
 
 Options:
   -o, --output PATH       Output file path (default: <input>/glb/<name>_<type>.glb)
-  -m, --method TEXT        Conversion method: classical, marching-cubes, totalseg, medsam2, compare
+  -m, --method TEXT        Conversion method: classical, marching-cubes, totalseg, chamber-detect, compare
   --coloring TEXT         CARTO coloring: lat, bipolar, unipolar (default: lat)
   --subdivide INTEGER     CARTO mesh subdivision level 0-3 (default: 2)
   --vectors               Add animated LAT streamline arrows (CARTO LAT maps)
@@ -383,7 +381,7 @@ src/med2glb/
 │   ├── classical.py    # Gaussian smoothing + adaptive threshold
 │   ├── marching_cubes.py  # Basic isosurface extraction
 │   ├── totalseg.py     # TotalSegmentator AI segmentation
-│   └── medsam2.py      # MedSAM2 AI segmentation
+│   └── chamber_detect.py  # Cardiac chamber detection (intensity heuristic)
 ├── gallery/            # Gallery mode (individual, lightbox, spatial)
 ├── mesh/               # Taubin smoothing, decimation, temporal processing, LAT vectors
 └── glb/                # GLB builder, morph target animation, CARTO animation, arrow builder, textures, compression

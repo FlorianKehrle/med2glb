@@ -66,7 +66,7 @@ def main(
         "classical",
         "-m",
         "--method",
-        help="Conversion method: marching-cubes, classical, totalseg, medsam2, compare.",
+        help="Conversion method: marching-cubes, classical, totalseg, chamber-detect, compare.",
     ),
     format: str = typer.Option(
         "glb",
@@ -444,9 +444,7 @@ def main(
                         animate=animate,
                         vectors="yes" if vectors else "no",
                         max_size_mb=max_size,
-                        compress_strategy=compress,
                         target_faces=faces,
-                        verbose=verbose,
                     )
             return
 
@@ -470,9 +468,7 @@ def main(
                             animate=animate,
                             vectors="yes" if vectors else "no",
                             max_size_mb=max_size,
-                            compress_strategy=compress,
                             target_faces=faces,
-                            verbose=verbose,
                         )
                     return
                 run_carto_pipeline(
@@ -483,9 +479,7 @@ def main(
                     animate=animate,
                     vectors="yes" if vectors else "no",
                     max_size_mb=max_size,
-                    compress_strategy=compress,
                     target_faces=faces,
-                    verbose=verbose,
                 )
                 return
 

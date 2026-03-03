@@ -60,6 +60,6 @@ def _ensure_methods_loaded():
     except ImportError:
         pass
     try:
-        import med2glb.methods.medsam2  # noqa: F401
+        import med2glb.methods.chamber_detect  # noqa: F401
     except ImportError:
         pass
