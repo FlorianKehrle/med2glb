@@ -94,8 +94,8 @@ def render_legend_wrap_image(
 
     # Opaque label strips at U=0.25 and U=0.75 (front & back of cylinder)
     draw = ImageDraw.Draw(img)
-    font = ImageFont.load_default(size=14)
-    font_sm = ImageFont.load_default(size=12)
+    font = ImageFont.load_default(size=16)
+    font_sm = ImageFont.load_default(size=14)
 
     strip_width = 80
     strip_centers = [width // 4, 3 * width // 4]  # U=0.25 and U=0.75
@@ -105,8 +105,10 @@ def render_legend_wrap_image(
         x1 = cx + strip_width // 2
         draw.rectangle([(x0, 0), (x1, height - 1)], fill=(20, 20, 20, 255))
 
-        # Title at top
+        # Title at top (faux-bold via double draw)
         draw.text((cx, 8), title, fill=(255, 255, 255, 255),
+                  font=font, anchor="mt")
+        draw.text((cx + 1, 8), title, fill=(255, 255, 255, 255),
                   font=font, anchor="mt")
 
         # 5 tick labels along gradient height
@@ -125,7 +127,10 @@ def render_legend_wrap_image(
             else:
                 label = f"{val:.2f}"
 
+            # Faux-bold via double draw
             draw.text((cx, int(y)), label,
+                      fill=(220, 220, 220, 255), font=font_sm, anchor="mm")
+            draw.text((cx + 1, int(y)), label,
                       fill=(220, 220, 220, 255), font=font_sm, anchor="mm")
 
     buf = io.BytesIO()
