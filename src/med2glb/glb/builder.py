@@ -14,6 +14,13 @@ from med2glb.core.types import MeshData
 logger = logging.getLogger("med2glb")
 
 
+def _center_vertices(vertices: np.ndarray) -> tuple[np.ndarray, list[float]]:
+    """Subtract centroid from vertices, return (centered, translation)."""
+    centroid = vertices.mean(axis=0).astype(np.float64)
+    centered = (vertices - centroid).astype(np.float32)
+    return centered, centroid.tolist()
+
+
 def build_glb(
     meshes: list[MeshData],
     output_path: Path,
@@ -43,14 +50,20 @@ def build_glb(
     all_binary_data = bytearray()
     child_nodes: list[int] = []
 
+    centroid = None
     for i, mesh_data in enumerate(meshes):
-        node_idx = _add_mesh_to_gltf(gltf, mesh_data, all_binary_data, i)
+        node_idx, mesh_centroid = _add_mesh_to_gltf(
+            gltf, mesh_data, all_binary_data, i, centroid_override=centroid,
+        )
+        if centroid is None:
+            centroid = mesh_centroid
         child_nodes.append(node_idx)
 
     if extra_meshes:
         for i, mesh_data in enumerate(extra_meshes):
-            node_idx = _add_mesh_to_gltf(
+            node_idx, _ = _add_mesh_to_gltf(
                 gltf, mesh_data, all_binary_data, len(meshes) + i,
+                centroid_override=centroid,
             )
             child_nodes.append(node_idx)
 
@@ -85,7 +98,8 @@ def _add_mesh_to_gltf(
     mesh_data: MeshData,
     binary_data: bytearray,
     index: int,
-) -> int:
+    centroid_override: list[float] | None = None,
+) -> tuple[int, list[float]]:
     """Add a single mesh with material to the glTF document. Returns node index.
 
     When vertex colors are present, they are baked into a baseColorTexture
@@ -169,6 +183,13 @@ def _add_mesh_to_gltf(
         uvs = None
         alpha_mode = pygltflib.BLEND if mat.alpha < 1.0 else pygltflib.OPAQUE
         alpha_cutoff = None
+
+    # --- Center vertices at origin ---
+    if centroid_override is not None:
+        centroid = centroid_override
+        vertices = (vertices - np.array(centroid, dtype=np.float32)).astype(np.float32)
+    else:
+        vertices, centroid = _center_vertices(vertices)
 
     # --- Create material ---
     material_idx = len(gltf.materials)
@@ -314,9 +335,10 @@ def _add_mesh_to_gltf(
     gltf.nodes.append(pygltflib.Node(
         name=mesh_data.structure_name,
         mesh=mesh_idx,
+        translation=centroid,
     ))
 
-    return node_idx
+    return node_idx, centroid
 
 
 def write_accessor(

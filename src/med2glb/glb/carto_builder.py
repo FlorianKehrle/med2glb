@@ -17,7 +17,7 @@ import numpy as np
 import pygltflib
 
 from med2glb.core.types import MeshData
-from med2glb.glb.builder import _pad_to_4, write_accessor
+from med2glb.glb.builder import _center_vertices, _pad_to_4, write_accessor
 
 logger = logging.getLogger("med2glb")
 
@@ -193,7 +193,9 @@ def build_carto_animated_glb(
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
         mesh_data.vertices, mesh_data.faces, mesh_data.normals,
     )
-    unwelded_verts = mesh_data.vertices[vmapping].astype(np.float32)
+    unwelded_verts, centroid = _center_vertices(
+        mesh_data.vertices[vmapping].astype(np.float32),
+    )
     unwelded_normals = None
     if mesh_data.normals is not None:
         unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
@@ -320,6 +322,7 @@ def build_carto_animated_glb(
         scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]
         gltf.nodes.append(pygltflib.Node(
             name=f"wavefront_{fi}", mesh=mesh_idx, scale=scale,
+            translation=centroid,
         ))
 
     # Collect all child node indices for the root node
@@ -336,6 +339,7 @@ def build_carto_animated_glb(
             gltf, binary_data, n_frames,
             speed_factors=arrow_speed_factors,
             unlit=mesh_data.material.unlit,
+            centroid_offset=centroid,
         )
         child_node_indices.extend(arrow_node_indices)
 

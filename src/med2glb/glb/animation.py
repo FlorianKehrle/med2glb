@@ -9,7 +9,7 @@ import numpy as np
 import pygltflib
 
 from med2glb.core.types import AnimatedResult, MeshData
-from med2glb.glb.builder import _add_mesh_to_gltf, _pad_to_4
+from med2glb.glb.builder import _center_vertices, _pad_to_4
 
 
 def build_animated_glb(result: AnimatedResult, output_path: Path) -> None:
@@ -32,7 +32,7 @@ def build_animated_glb(result: AnimatedResult, output_path: Path) -> None:
     for mesh_idx, mesh_data in enumerate(result.base_meshes):
         morph_targets = result.morph_targets[mesh_idx] if mesh_idx < len(result.morph_targets) else []
 
-        node_idx = _add_animated_mesh_to_gltf(
+        node_idx, _centroid = _add_animated_mesh_to_gltf(
             gltf, mesh_data, morph_targets, all_binary_data, mesh_idx
         )
         gltf.scenes[0].nodes.append(node_idx)
@@ -88,8 +88,8 @@ def _add_animated_mesh_to_gltf(
         )
     )
 
-    # Add base vertex positions
-    vertices = mesh_data.vertices.astype(np.float32)
+    # Add base vertex positions (centered at origin)
+    vertices, centroid = _center_vertices(mesh_data.vertices)
     pos_data = vertices.tobytes()
     pos_offset = len(binary_data)
     binary_data.extend(pos_data)
@@ -237,10 +237,11 @@ def _add_animated_mesh_to_gltf(
         pygltflib.Node(
             name=mesh_data.structure_name,
             mesh=mesh_idx,
+            translation=centroid,
         )
     )
 
-    return node_idx
+    return node_idx, centroid
 
 
 def _add_morph_animation(

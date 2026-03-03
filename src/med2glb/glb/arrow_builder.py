@@ -229,6 +229,7 @@ def build_animated_arrow_nodes(
     params: ArrowParams | None = None,
     speed_factors: list[list[float]] | None = None,
     unlit: bool = False,
+    centroid_offset: list[float] | None = None,
 ) -> list[int]:
     """Build per-frame arrow nodes in the glTF.
 
@@ -295,8 +296,10 @@ def build_animated_arrow_nodes(
                 structure_name="lat_vectors_empty",
             )
 
-        # Write geometry
+        # Write geometry (centered to match primary mesh)
         verts = mesh_data.vertices.astype(np.float32)
+        if centroid_offset is not None:
+            verts = (verts - np.array(centroid_offset, dtype=np.float32)).astype(np.float32)
         pos_acc = write_accessor(
             gltf, binary_data, verts, pygltflib.ARRAY_BUFFER,
             pygltflib.FLOAT, pygltflib.VEC3, with_minmax=True,
@@ -335,11 +338,14 @@ def build_animated_arrow_nodes(
         # Node: first frame visible, rest hidden
         scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]
         node_idx = len(gltf.nodes)
-        gltf.nodes.append(pygltflib.Node(
+        node_kwargs: dict = dict(
             name=f"lat_vectors_{fi}",
             mesh=mesh_idx,
             scale=scale,
-        ))
+        )
+        if centroid_offset is not None:
+            node_kwargs["translation"] = centroid_offset
+        gltf.nodes.append(pygltflib.Node(**node_kwargs))
         node_indices.append(node_idx)
 
     logger.info(f"Built {len(node_indices)} arrow animation frames")
