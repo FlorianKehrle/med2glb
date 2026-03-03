@@ -26,6 +26,7 @@ def build_glb(
     output_path: Path,
     extra_meshes: list[MeshData] | None = None,
     source_units: str = "m",
+    legend_info: dict | None = None,
 ) -> None:
     """Build a GLB file from one or more meshes with PBR materials.
 
@@ -35,6 +36,8 @@ def build_glb(
         extra_meshes: Additional meshes (e.g. vector arrows) added as separate nodes.
         source_units: Unit of vertex coordinates. ``"mm"`` adds a root node
             with scale 0.001 so the GLB is in glTF-standard metres.
+        legend_info: Optional dict with ``coloring``, ``clamp_range``, and
+            ``metadata`` keys to add color legend + info panel nodes.
     """
     gltf = pygltflib.GLTF2(
         scene=0,
@@ -66,6 +69,17 @@ def build_glb(
                 centroid_override=centroid,
             )
             child_nodes.append(node_idx)
+
+    if legend_info and centroid is not None:
+        from med2glb.glb.legend_builder import add_legend_nodes
+        legend_nodes = add_legend_nodes(
+            gltf, all_binary_data, meshes[0].vertices,
+            coloring=legend_info["coloring"],
+            clamp_range=tuple(legend_info["clamp_range"]),
+            centroid=centroid,
+            metadata=legend_info.get("metadata"),
+        )
+        child_nodes.extend(legend_nodes)
 
     # Wrap in a root node that converts mm → m when needed.
     # 10x real-world scale so cardiac structures (~12cm) render at ~120cm

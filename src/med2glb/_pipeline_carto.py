@@ -490,6 +490,39 @@ def _convert_carto_meshes(
 
             progress.remove_task(task)
 
+        # === Assemble legend metadata ===
+        _UNITS = {"lat": "ms", "bipolar": "mV", "unipolar": "mV"}
+        _DEFAULT_RANGES: dict[str, tuple[float, float]] = {
+            "bipolar": (0.05, 1.5),
+            "unipolar": (3.0, 10.0),
+        }
+        unit = _UNITS.get(config.coloring, "")
+        if config.coloring in _DEFAULT_RANGES:
+            clamp_range = _DEFAULT_RANGES[config.coloring]
+        elif active_lat is not None:
+            clamp_range = (
+                float(np.nanmin(active_lat)),
+                float(np.nanmax(active_lat)),
+            )
+        else:
+            clamp_range = (0.0, 1.0)
+
+        from datetime import date
+        legend_info: dict = {
+            "coloring": config.coloring,
+            "clamp_range": list(clamp_range),
+            "metadata": {
+                "study_name": study.study_name or "",
+                "carto_version": _carto_version_label(study.version),
+                "structure": mesh.structure_name,
+                "coloring": config.coloring,
+                "clamp_range": list(clamp_range),
+                "unit": unit,
+                "mapping_points": len(points) if points else 0,
+                "export_date": date.today().isoformat(),
+            },
+        }
+
         # === Emit each variant from cached state ===
         _n_frames = 30
         for do_animate, do_vectors in variants:
@@ -533,12 +566,16 @@ def _convert_carto_meshes(
                         max_size_mb=config.max_size_mb,
                         vectors=do_vectors,
                         progress=_anim_progress,
+                        legend_info=legend_info,
                     )
                     progress.update(task, completed=_total_steps)
                 else:
                     extra = static_extra if do_vectors else None
                     progress.update(task, description="Building GLB...")
-                    build_glb([mesh_data], out_path, extra_meshes=extra, source_units="mm")
+                    build_glb(
+                        [mesh_data], out_path, extra_meshes=extra,
+                        source_units="mm", legend_info=legend_info,
+                    )
                     progress.update(task, completed=_total_steps)
 
                 # Produce a _compressed variant if the file exceeds the size limit

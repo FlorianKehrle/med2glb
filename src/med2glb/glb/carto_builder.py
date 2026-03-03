@@ -53,6 +53,7 @@ def build_carto_animated_glb(
     max_size_mb: float = 50.0,
     vectors: bool = False,
     progress: Callable[[str, int, int], None] | None = None,
+    legend_info: dict | None = None,
 ) -> None:
     """Build animated GLB with CARTO-style highlight ring over static colormap.
 
@@ -342,6 +343,17 @@ def build_carto_animated_glb(
             centroid_offset=centroid,
         )
         child_node_indices.extend(arrow_node_indices)
+
+    if legend_info:
+        from med2glb.glb.legend_builder import add_legend_nodes
+        legend_nodes = add_legend_nodes(
+            gltf, binary_data, mesh_data.vertices,
+            coloring=legend_info["coloring"],
+            clamp_range=tuple(legend_info["clamp_range"]),
+            centroid=centroid,
+            metadata=legend_info.get("metadata"),
+        )
+        child_node_indices.extend(legend_nodes)
 
     # Animation: switch visible frame via scale keyframes
     dt = loop_duration_s / n_frames
