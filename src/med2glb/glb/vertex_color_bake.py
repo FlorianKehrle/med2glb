@@ -368,12 +368,12 @@ def _bleed_gutter(
 ) -> None:
     """Expand filled pixels into empty neighbors (in-place).
 
-    8 iterations provides enough padding for mipmap sampling at lower
+    10 iterations provides enough padding for mipmap sampling at lower
     resolution levels (distant viewing in AR). With fewer iterations,
     UV chart boundaries bleed into unfilled black pixels at lower mip
     levels, causing visible dark spots on distant meshes.
     """
-    for _ in range(8):
+    for _ in range(10):
         empty = ~mask
         if not np.any(empty):
             break
