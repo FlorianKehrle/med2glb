@@ -16,7 +16,7 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 - **Gallery mode** -- convert every slice to textured quads with three layouts: individual GLBs, lightbox grid, and spatial fan positioned using DICOM metadata
 - **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and MedSAM2 (echo/general)
 - **Automatic series detection** -- multi-series DICOM folders are analyzed and classified (3D volume, 2D cine, still image) with per-series conversion recommendations
-- **GLB output** -- with animation, PBR materials, and `KHR_materials_unlit` AR variants
+- **GLB output** -- with animation and PBR materials
 - **AR-optimized meshes** -- Taubin smoothing (volume-preserving), decimation to configurable triangle count, and configurable transparency
 - **GLB size constraint** -- automatic compression to fit AR viewer limits (default 99 MB) with three strategies: Draco mesh compression, texture downscaling, or JPEG re-encoding
 - **Multi-threshold layered output** -- extract multiple structures at different intensity thresholds with per-layer colors and transparency
@@ -133,7 +133,6 @@ Subdivision level [2]:
 
 === Dataset 1/3: Export_Study_AF ===
 → ./Export_Study_AF/glb/1-LA_lat.glb
-→ ./Export_Study_AF/glb/1-LA_lat_AR.glb
 ...
 
 === Dataset 2/3: Export_Study_VT ===
@@ -195,14 +194,6 @@ By default, CARTO meshes are Loop-subdivided twice (`--subdivide 2`) before mapp
 | `lat` (default) | Local activation time | Red (early) → yellow → green → cyan → blue → purple (late) |
 | `bipolar` | Substrate/scar mapping | Red (scar, <0.5 mV) → yellow → green → cyan → purple (normal, >1.5 mV) |
 | `unipolar` | Voltage mapping | Red (low) → yellow → green → blue (high) |
-
-**Dual output (standard + AR):**
-
-Every CARTO conversion produces two variants of each GLB:
-- **Standard** (`_lat.glb`) -- PBR metallic-roughness material with scene lighting, suitable for desktop/web viewers
-- **AR-optimized** (`_lat_AR.glb`) -- uses `KHR_materials_unlit` extension for lighting-independent rendering on AR headsets (HoloLens 2, etc.)
-
-Both variants are always generated automatically.
 
 **What gets parsed:**
 - `.mesh` files: 3D surface geometry with per-vertex group IDs (inactive vertices filtered out)

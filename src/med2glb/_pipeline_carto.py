@@ -279,34 +279,6 @@ def _decimate_with_colors(mesh_data: "MeshData", target_faces: int) -> "MeshData
     return compute_normals(result)
 
 
-def _build_ar_variant(standard_path: Path) -> Path:
-    """Produce AR variant by patching KHR_materials_unlit into an existing GLB.
-
-    Copies the binary blob (geometry + textures) unchanged and only modifies
-    JSON-level material extensions, avoiding expensive xatlas UV unwrap and
-    texture bake operations.
-    """
-    import pygltflib
-
-    ar_path = standard_path.with_name(
-        standard_path.stem + "_AR" + standard_path.suffix
-    )
-
-    gltf = pygltflib.GLTF2.load(str(standard_path))
-
-    for mat in gltf.materials:
-        if mat.extensions is None:
-            mat.extensions = {}
-        mat.extensions["KHR_materials_unlit"] = {}
-
-    if gltf.extensionsUsed is None:
-        gltf.extensionsUsed = []
-    if "KHR_materials_unlit" not in gltf.extensionsUsed:
-        gltf.extensionsUsed.append("KHR_materials_unlit")
-
-    gltf.save(str(ar_path))
-    return ar_path
-
 
 def _build_compressed_carto_variant(
     original_path: Path,
@@ -580,11 +552,6 @@ def run_carto_from_config(config: "CartoConfig") -> None:
                         static_extra if do_vectors else None, progress,
                     )
 
-                # Produce AR-optimized (unlit) variant via GLB patching
-                progress.add_task("Building AR variant (unlit)...", total=None)
-                ar_path = _build_ar_variant(out_path)
-                console.print(f"  [dim]AR variant: {ar_path.name}[/dim]")
-
             _print_carto_summary(
                 study, mesh, mesh_data, points, config.coloring,
                 config.subdivide, do_animate, do_vectors, out_path, start_time,
@@ -796,11 +763,6 @@ def run_carto_pipeline(
                     active_lat if (animate and points) else None,
                     extra, progress,
                 )
-
-            # Produce AR-optimized (unlit) variant via GLB patching
-            progress.add_task("Building AR variant (unlit)...", total=None)
-            ar_path = _build_ar_variant(out_path)
-            console.print(f"  [dim]AR variant: {ar_path.name}[/dim]")
 
         _print_carto_summary(
             study, mesh, mesh_data, points, coloring,

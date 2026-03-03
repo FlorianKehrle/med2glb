@@ -112,7 +112,7 @@ class TestCartoAnimatedGlb:
             assert prim.attributes.TEXCOORD_0 is not None
             assert prim.attributes.COLOR_0 is None
 
-        # Standard output should NOT have unlit (AR variant gets unlit separately)
+        # Output should NOT have unlit
         assert "KHR_materials_unlit" not in (gltf.extensionsUsed or [])
         for mat in gltf.materials:
             assert "KHR_materials_unlit" not in (mat.extensions or {})
