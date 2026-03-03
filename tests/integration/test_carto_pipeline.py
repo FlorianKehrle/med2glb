@@ -23,7 +23,7 @@ _GLB_OUTPUT = _REPO / "test_data" / "Output" / "carto"
 # v7.1 — single mesh (1-Map), sparse points, low vector quality
 CARTO_V71 = TEST_DATA / "Version_7.1.80.33" / "Study 1" / "Export_Study"
 
-# v7.2 O — 2 meshes (1-1-1-Rp-ReLA, 2-RA)
+# v7.2 O — single mesh (1-1-1-Rp-ReLA)
 CARTO_V72_O = TEST_DATA / "Version_7.2.10.423" / "O"
 
 
@@ -243,80 +243,66 @@ class TestRealCartoV72O:
         from med2glb.io.carto_reader import load_carto_study
 
         study = load_carto_study(CARTO_V72_O)
-        assert len(study.meshes) == 2
+        assert len(study.meshes) == 1
         assert study.version == "6.0"
+        assert study.meshes[0].structure_name == "1-1-1-Rp-ReLA"
 
-        # Verify all expected mesh names are present
-        names = {m.structure_name for m in study.meshes}
-        for expected in ["1-1-1-Rp-ReLA", "2-RA"]:
-            assert expected in names, f"Expected mesh '{expected}' not found in {names}"
-
-    def test_static_all_meshes_all_colorings(self, v72_o_output):
-        """Full static pipeline: all meshes x all colorings."""
+    def test_static_all_colorings(self, v72_o_output):
+        """Static pipeline: single mesh x all colorings."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
         from med2glb.glb.builder import build_glb
 
         study = load_carto_study(CARTO_V72_O)
+        mesh = study.meshes[0]
+        points = study.points.get(mesh.structure_name)
 
-        for mesh in study.meshes:
-            points = study.points.get(mesh.structure_name)
-            for coloring in ["lat", "bipolar", "unipolar"]:
-                mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring)
-                output = v72_o_output / f"{mesh.structure_name}_{coloring}.glb"
-                build_glb([mesh_data], output)
-                assert output.exists()
-                assert output.stat().st_size > 100
+        for coloring in ["lat", "bipolar", "unipolar"]:
+            mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring)
+            output = v72_o_output / f"{mesh.structure_name}_{coloring}.glb"
+            build_glb([mesh_data], output)
+            assert output.exists()
+            assert output.stat().st_size > 100
 
-    def test_animated_all_meshes(self, v72_o_output):
-        """Animated GLB for each mesh (low frame count for test speed)."""
+    def test_animated(self, v72_o_output):
+        """Animated GLB (low frame count for test speed)."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
         from med2glb.glb.carto_builder import build_carto_animated_glb
 
         study = load_carto_study(CARTO_V72_O)
+        mesh = study.meshes[0]
+        points = study.points.get(mesh.structure_name)
 
-        for mesh in study.meshes:
-            points = study.points.get(mesh.structure_name)
-            if not points:
-                continue
+        mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat", subdivide=0)
+        active_lat = _extract_active_lat(mesh, points, mesh_data)
 
-            mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring="lat", subdivide=0)
-            active_lat = _extract_active_lat(mesh, points, mesh_data)
+        output = v72_o_output / f"{mesh.structure_name}_lat_animated.glb"
+        build_carto_animated_glb(
+            mesh_data, active_lat, output,
+            n_frames=5, target_faces=10000,
+        )
 
-            # Skip if no valid LAT data
-            if np.all(np.isnan(active_lat)):
-                continue
+        assert output.exists()
+        gltf = pygltflib.GLTF2.load(str(output))
+        assert len(gltf.animations) == 1
+        assert len(gltf.meshes) >= 5  # 5 wavefront frames + possible arrow frames
 
-            output = v72_o_output / f"{mesh.structure_name}_lat_animated.glb"
-            build_carto_animated_glb(
-                mesh_data, active_lat, output,
-                n_frames=5, target_faces=10000,
-            )
-
-            assert output.exists()
-            gltf = pygltflib.GLTF2.load(str(output))
-            assert len(gltf.animations) == 1
-            assert len(gltf.meshes) >= 5  # 5 wavefront frames + possible arrow frames
-
-    def test_vector_quality_per_mesh(self):
-        """Test per-mesh vector assessment on multi-mesh study."""
+    def test_vector_quality(self):
+        """Test vector quality assessment."""
         from med2glb.io.carto_reader import load_carto_study
         from med2glb.cli_wizard import _assess_vector_quality, _assess_single_mesh
 
         study = load_carto_study(CARTO_V72_O)
 
-        # Overall assessment
         quality = _assess_vector_quality(study, selected_indices=None)
         assert quality.valid_points > 0
 
-        # Per-mesh assessment
-        for i, mesh in enumerate(study.meshes):
-            pts = study.points.get(mesh.structure_name, [])
-            single = _assess_single_mesh(mesh, pts)
-            # Each mesh should have some diagnostic info
-            assert single.valid_points >= 0
-            assert single.lat_range_ms >= 0.0
+        mesh = study.meshes[0]
+        pts = study.points.get(mesh.structure_name, [])
+        single = _assess_single_mesh(mesh, pts)
+        assert single.valid_points >= 0
+        assert single.lat_range_ms >= 0.0
 
     def test_animated_with_vectors(self, v72_o_output):
         """Animated GLB with vectors on a suitable mesh."""
