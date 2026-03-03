@@ -1,16 +1,17 @@
 """Color legend and metadata panel nodes for CARTO GLB exports.
 
-Renders a color scale legend and a metadata info card as PNG images using
-Pillow, then embeds them as textured quad nodes (children of root) positioned
-next to the mesh.  Uses ``KHR_materials_unlit`` so panels are always readable
-regardless of scene lighting.
+Renders a color scale legend and a metadata info card as PNG textures using
+Pillow, then embeds them as textured geometry nodes (children of root)
+positioned next to the mesh.  The legend uses a cylinder with a wrap-around
+gradient texture and opaque label strips; the info card uses a double-sided
+flat panel readable from both directions.  Uses ``KHR_materials_unlit``
+so panels are always readable regardless of scene lighting.
 """
 
 from __future__ import annotations
 
 import io
 import logging
-import struct
 
 import numpy as np
 import pygltflib
@@ -63,13 +64,18 @@ def _interpolate_color(
     return int(r * 255), int(g * 255), int(b * 255)
 
 
-def render_legend_image(
+def render_legend_wrap_image(
     coloring: str,
     clamp_range: tuple[float, float],
-    width: int = 128,
+    width: int = 512,
     height: int = 256,
 ) -> bytes:
-    """Render a vertical color scale legend as a PNG image.
+    """Render a cylinder wrap-around color scale legend as a PNG image.
+
+    The entire texture is the vertical gradient (top = max, bottom = min).
+    Opaque dark label strips at U=0.25 and U=0.75 show the title and 5 tick
+    values — these map to opposite sides of the cylinder so the scale is
+    readable from any viewing angle.  The UV seam (U=0/1) is label-free.
 
     Returns PNG bytes.
     """
@@ -77,55 +83,50 @@ def render_legend_image(
     title = _TITLES.get(coloring, coloring)
     vmin, vmax = clamp_range
 
-    img = Image.new("RGBA", (width, height), (30, 30, 30, 200))
+    img = Image.new("RGBA", (width, height))
+
+    # Fill every pixel column with the same vertical gradient
+    for y in range(height):
+        t = 1.0 - y / (height - 1)
+        color = _interpolate_color(t, stops)
+        for x in range(width):
+            img.putpixel((x, y), color + (255,))
+
+    # Opaque label strips at U=0.25 and U=0.75 (front & back of cylinder)
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default(size=14)
     font_sm = ImageFont.load_default(size=12)
 
-    # Title
-    draw.text((width // 2, 8), title, fill=(255, 255, 255, 255),
-              font=font, anchor="mt")
+    strip_width = 80
+    strip_centers = [width // 4, 3 * width // 4]  # U=0.25 and U=0.75
 
-    # Gradient bar area
-    bar_left = 14
-    bar_right = 38
-    bar_top = 32
-    bar_bottom = height - 16
+    for cx in strip_centers:
+        x0 = cx - strip_width // 2
+        x1 = cx + strip_width // 2
+        draw.rectangle([(x0, 0), (x1, height - 1)], fill=(20, 20, 20, 255))
 
-    # Draw vertical gradient (top = max, bottom = min)
-    for y in range(bar_top, bar_bottom):
-        t = 1.0 - (y - bar_top) / (bar_bottom - bar_top)
-        color = _interpolate_color(t, stops)
-        draw.line([(bar_left, y), (bar_right, y)], fill=color + (255,))
+        # Title at top
+        draw.text((cx, 8), title, fill=(255, 255, 255, 255),
+                  font=font, anchor="mt")
 
-    # Border around gradient bar
-    draw.rectangle(
-        [(bar_left - 1, bar_top - 1), (bar_right + 1, bar_bottom + 1)],
-        outline=(200, 200, 200, 255),
-    )
+        # 5 tick labels along gradient height
+        n_ticks = 5
+        margin_top = 28
+        margin_bottom = 8
+        for i in range(n_ticks):
+            frac = i / (n_ticks - 1)
+            y = (height - margin_bottom) - frac * (height - margin_top - margin_bottom)
+            val = vmin + frac * (vmax - vmin)
 
-    # Tick marks and labels (5 ticks: min, 25%, 50%, 75%, max)
-    n_ticks = 5
-    tick_x = bar_right + 4
-    for i in range(n_ticks):
-        frac = i / (n_ticks - 1)
-        y = bar_bottom - frac * (bar_bottom - bar_top)
-        val = vmin + frac * (vmax - vmin)
+            if abs(val) >= 100:
+                label = f"{val:.0f}"
+            elif abs(val) >= 1:
+                label = f"{val:.1f}"
+            else:
+                label = f"{val:.2f}"
 
-        # Format value
-        if abs(val) >= 100:
-            label = f"{val:.0f}"
-        elif abs(val) >= 1:
-            label = f"{val:.1f}"
-        else:
-            label = f"{val:.2f}"
-
-        # Tick line
-        draw.line([(bar_right + 1, int(y)), (tick_x, int(y))],
-                  fill=(200, 200, 200, 255))
-        # Label
-        draw.text((tick_x + 3, int(y)), label,
-                  fill=(220, 220, 220, 255), font=font_sm, anchor="lm")
+            draw.text((cx, int(y)), label,
+                      fill=(220, 220, 220, 255), font=font_sm, anchor="mm")
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -137,11 +138,11 @@ def render_info_image(
     width: int = 256,
     height: int = 256,
 ) -> bytes:
-    """Render a metadata info card as a PNG image.
+    """Render an opaque metadata info card as a PNG image.
 
     Returns PNG bytes.
     """
-    img = Image.new("RGBA", (width, height), (30, 30, 30, 200))
+    img = Image.new("RGBA", (width, height), (30, 30, 30, 255))
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default(size=13)
     font_title = ImageFont.load_default(size=15)
@@ -178,9 +179,20 @@ def render_info_image(
         elif key == "clamp_range":
             unit = metadata.get("unit", "")
             if isinstance(val, (list, tuple)) and len(val) == 2:
-                lines.append((label, f"{val[0]} \u2013 {val[1]} {unit}".strip()))
+                v0 = round(val[0], 1)
+                v1 = round(val[1], 1)
+                lines.append((label, f"{v0} \u2013 {v1} {unit}".strip()))
             else:
                 lines.append((label, str(val)))
+        elif key == "carto_version":
+            # Split "(file format ...)" onto its own line
+            s = str(val)
+            paren_idx = s.find(" (")
+            if paren_idx >= 0:
+                lines.append((label, s[:paren_idx]))
+                lines.append(("", s[paren_idx + 1:]))
+            else:
+                lines.append((label, s))
         elif key == "mapping_points":
             lines.append((label, f"{val:,}" if isinstance(val, int) else str(val)))
         else:
@@ -192,8 +204,12 @@ def render_info_image(
     for label, value in lines:
         if y + line_height > height - 8:
             break
-        draw.text((12, y), f"{label}:", fill=(180, 180, 180, 255), font=font)
-        draw.text((12 + 80, y), value, fill=(240, 240, 240, 255), font=font)
+        if label:
+            draw.text((12, y), f"{label}:", fill=(180, 180, 180, 255), font=font)
+            draw.text((92, y), value, fill=(240, 240, 240, 255), font=font)
+        else:
+            # Continuation line (e.g. "(file format v5)")
+            draw.text((92, y), value, fill=(240, 240, 240, 255), font=font)
         y += line_height
 
     buf = io.BytesIO()
@@ -201,17 +217,15 @@ def render_info_image(
     return buf.getvalue()
 
 
-def _create_quad(
+def _setup_texture_material(
     gltf: pygltflib.GLTF2,
     binary_data: bytearray,
     name: str,
     png_bytes: bytes,
-    translation: list[float],
-    quad_width: float,
-    quad_height: float,
+    *,
+    double_sided: bool = True,
 ) -> int:
-    """Create a textured quad node with an unlit material. Returns node index."""
-    # Ensure lists exist
+    """Embed a PNG texture and create an unlit material. Returns material index."""
     if not hasattr(gltf, "images") or gltf.images is None:
         gltf.images = []
     if not hasattr(gltf, "textures") or gltf.textures is None:
@@ -234,7 +248,6 @@ def _create_quad(
         bufferView=img_bv_idx, mimeType="image/png",
     ))
 
-    # Sampler (add if none exist yet)
     if len(gltf.samplers) == 0:
         gltf.samplers.append(pygltflib.Sampler(
             magFilter=pygltflib.LINEAR,
@@ -246,7 +259,6 @@ def _create_quad(
     tex_idx = len(gltf.textures)
     gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
 
-    # Material: unlit, alpha blend, double-sided
     mat_idx = len(gltf.materials)
     gltf.materials.append(pygltflib.Material(
         name=name,
@@ -257,40 +269,37 @@ def _create_quad(
             roughnessFactor=1.0,
         ),
         alphaMode=pygltflib.BLEND,
-        doubleSided=True,
+        doubleSided=double_sided,
         extensions={"KHR_materials_unlit": {}},
     ))
 
-    # Ensure KHR_materials_unlit is registered
     if not hasattr(gltf, "extensionsUsed") or gltf.extensionsUsed is None:
         gltf.extensionsUsed = []
     if "KHR_materials_unlit" not in gltf.extensionsUsed:
         gltf.extensionsUsed.append("KHR_materials_unlit")
 
-    # Quad geometry: 4 vertices, 2 triangles
-    # Centered at origin, extends in X and Y
-    hw = quad_width / 2.0
-    hh = quad_height / 2.0
-    vertices = np.array([
-        [-hw, -hh, 0.0],
-        [hw, -hh, 0.0],
-        [hw, hh, 0.0],
-        [-hw, hh, 0.0],
-    ], dtype=np.float32)
+    return mat_idx
 
-    uvs = np.array([
-        [0.0, 1.0],
-        [1.0, 1.0],
-        [1.0, 0.0],
-        [0.0, 0.0],
-    ], dtype=np.float32)
 
-    faces = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
-
-    # Write geometry
+def _create_mesh_node(
+    gltf: pygltflib.GLTF2,
+    binary_data: bytearray,
+    name: str,
+    vertices: np.ndarray,
+    normals: np.ndarray,
+    uvs: np.ndarray,
+    faces: np.ndarray,
+    mat_idx: int,
+    translation: list[float],
+) -> int:
+    """Write geometry arrays and create a mesh node. Returns node index."""
     pos_acc = write_accessor(
         gltf, binary_data, vertices, pygltflib.ARRAY_BUFFER,
         pygltflib.FLOAT, pygltflib.VEC3, with_minmax=True,
+    )
+    norm_acc = write_accessor(
+        gltf, binary_data, normals, pygltflib.ARRAY_BUFFER,
+        pygltflib.FLOAT, pygltflib.VEC3,
     )
     uv_acc = write_accessor(
         gltf, binary_data, uvs, pygltflib.ARRAY_BUFFER,
@@ -301,13 +310,13 @@ def _create_quad(
         pygltflib.UNSIGNED_INT, pygltflib.SCALAR, with_minmax=True,
     )
 
-    # Mesh + node
     mesh_idx = len(gltf.meshes)
     gltf.meshes.append(pygltflib.Mesh(
         name=name,
         primitives=[pygltflib.Primitive(
             attributes=pygltflib.Attributes(
                 POSITION=pos_acc,
+                NORMAL=norm_acc,
                 TEXCOORD_0=uv_acc,
             ),
             indices=idx_acc,
@@ -321,8 +330,141 @@ def _create_quad(
         mesh=mesh_idx,
         translation=translation,
     ))
-
     return node_idx
+
+
+def _create_cylinder(
+    gltf: pygltflib.GLTF2,
+    binary_data: bytearray,
+    name: str,
+    png_bytes: bytes,
+    translation: list[float],
+    radius: float,
+    height: float,
+) -> int:
+    """Create a 32-segment open-ended textured cylinder. Returns node index.
+
+    The texture wraps around the cylinder horizontally (U = angle / 2pi)
+    and spans top-to-bottom vertically (V = 0 at top, V = 1 at bottom).
+    An extra vertex column at the seam ensures UV continuity.
+    """
+    segments = 32
+    cols = segments + 1  # extra column for UV seam
+    hh = height / 2.0
+
+    # Build vertices, normals, UVs: 2 rows (top, bottom) × cols
+    n_verts = cols * 2
+    vertices = np.empty((n_verts, 3), dtype=np.float32)
+    normals = np.empty((n_verts, 3), dtype=np.float32)
+    uvs = np.empty((n_verts, 2), dtype=np.float32)
+
+    for col in range(cols):
+        u = col / segments
+        angle = u * 2.0 * np.pi
+        nx = np.cos(angle)
+        nz = np.sin(angle)
+        x = radius * nx
+        z = radius * nz
+
+        # Top row (V=0)
+        top = col
+        vertices[top] = [x, hh, z]
+        normals[top] = [nx, 0.0, nz]
+        uvs[top] = [u, 0.0]
+
+        # Bottom row (V=1)
+        bot = col + cols
+        vertices[bot] = [x, -hh, z]
+        normals[bot] = [nx, 0.0, nz]
+        uvs[bot] = [u, 1.0]
+
+    # Triangle indices: 2 triangles per segment
+    faces_list: list[int] = []
+    for col in range(segments):
+        tl = col
+        tr = col + 1
+        bl = col + cols
+        br = col + 1 + cols
+        faces_list.extend([tl, bl, tr, tr, bl, br])
+
+    faces = np.array(faces_list, dtype=np.uint32)
+
+    mat_idx = _setup_texture_material(
+        gltf, binary_data, name, png_bytes, double_sided=False,
+    )
+    return _create_mesh_node(
+        gltf, binary_data, name,
+        vertices, normals, uvs, faces, mat_idx, translation,
+    )
+
+
+def _create_panel(
+    gltf: pygltflib.GLTF2,
+    binary_data: bytearray,
+    name: str,
+    png_bytes: bytes,
+    translation: list[float],
+    width: float,
+    height: float,
+) -> int:
+    """Create a double-sided flat panel readable from both sides. Returns node index.
+
+    Front face faces +Z with normal UVs.  Back face faces -Z with
+    horizontally mirrored UVs so text reads correctly from behind.
+    Uses ``doubleSided=False`` since both faces are explicit geometry.
+    """
+    hw = width / 2.0
+    hh = height / 2.0
+
+    vertices = np.array([
+        # Front face (+Z)
+        [-hw, -hh, 0.0],
+        [ hw, -hh, 0.0],
+        [ hw,  hh, 0.0],
+        [-hw,  hh, 0.0],
+        # Back face (-Z) — mirrored X for opposite winding
+        [ hw, -hh, 0.0],
+        [-hw, -hh, 0.0],
+        [-hw,  hh, 0.0],
+        [ hw,  hh, 0.0],
+    ], dtype=np.float32)
+
+    normals = np.array([
+        [0.0, 0.0,  1.0],
+        [0.0, 0.0,  1.0],
+        [0.0, 0.0,  1.0],
+        [0.0, 0.0,  1.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 0.0, -1.0],
+    ], dtype=np.float32)
+
+    uvs = np.array([
+        # Front UVs (normal)
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 0.0],
+        [0.0, 0.0],
+        # Back UVs (same mapping — vertex positions are already mirrored)
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 0.0],
+        [0.0, 0.0],
+    ], dtype=np.float32)
+
+    faces = np.array([
+        0, 1, 2, 0, 2, 3,  # Front
+        4, 5, 6, 4, 6, 7,  # Back
+    ], dtype=np.uint32)
+
+    mat_idx = _setup_texture_material(
+        gltf, binary_data, name, png_bytes, double_sided=False,
+    )
+    return _create_mesh_node(
+        gltf, binary_data, name,
+        vertices, normals, uvs, faces, mat_idx, translation,
+    )
 
 
 def add_legend_nodes(
@@ -350,45 +492,40 @@ def add_legend_nodes(
     """
     node_indices: list[int] = []
 
-    # Compute bounding box from centered mesh vertices
+    # Compute bounding box and bounding sphere from centered mesh vertices
     bbox_min = mesh_vertices.min(axis=0)
     bbox_max = mesh_vertices.max(axis=0)
     bbox_size = bbox_max - bbox_min
     mesh_height = float(bbox_size[1])
+
+    # Bounding-sphere radius — robust across varying patient anatomies
+    half_extents = bbox_size / 2.0
+    bsphere_radius = float(np.linalg.norm(half_extents))
+    panel_gap = bsphere_radius * 0.35
+
     panel_height = mesh_height * 0.30
-    panel_gap = mesh_height * 0.08
+    cylinder_radius = panel_height * 0.5 / np.pi  # circumference ≈ legend_width
+    info_height = panel_height * 0.75
+    info_width = info_height  # square aspect matching 256×256 texture
 
-    # Legend quad dimensions (narrower than info card)
-    legend_width = panel_height * 0.5  # 128:256 aspect ratio
-    info_width = panel_height * 1.0     # 256:256 aspect ratio
-
-    # Position: right of mesh, vertically centered
-    x_base = float(bbox_max[0]) + panel_gap + centroid[0]
-
-    # Legend panel: upper position
-    legend_png = render_legend_image(coloring, clamp_range)
-    legend_translation = [
-        x_base + legend_width / 2.0,
-        centroid[1] + mesh_height * 0.12,
-        centroid[2],
-    ]
-    legend_idx = _create_quad(
+    # Legend cylinder: right of mesh, centered at Y=0, Z=0
+    legend_png = render_legend_wrap_image(coloring, clamp_range)
+    legend_x = float(bbox_max[0]) + panel_gap + cylinder_radius
+    legend_translation = [legend_x, 0.0, 0.0]
+    legend_idx = _create_cylinder(
         gltf, binary_data, "legend", legend_png,
-        legend_translation, legend_width, panel_height,
+        legend_translation, cylinder_radius, panel_height,
     )
     node_indices.append(legend_idx)
 
-    # Info panel: lower position (only if metadata provided)
+    # Info panel: flat double-sided quad, next to legend
     if metadata:
         info_png = render_info_image(metadata)
-        info_translation = [
-            x_base + info_width / 2.0,
-            centroid[1] - mesh_height * 0.20,
-            centroid[2],
-        ]
-        info_idx = _create_quad(
+        info_x = legend_x + cylinder_radius + info_width / 2.0 + panel_gap * 0.3
+        info_translation = [info_x, 0.0, 0.0]
+        info_idx = _create_panel(
             gltf, binary_data, "info", info_png,
-            info_translation, info_width, panel_height,
+            info_translation, info_width, info_height,
         )
         node_indices.append(info_idx)
 

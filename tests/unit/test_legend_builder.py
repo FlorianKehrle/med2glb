@@ -11,7 +11,7 @@ import io
 from med2glb.core.types import MaterialConfig, MeshData
 from med2glb.glb.legend_builder import (
     add_legend_nodes,
-    render_legend_image,
+    render_legend_wrap_image,
     render_info_image,
     _interpolate_color,
 )
@@ -22,25 +22,25 @@ from med2glb.glb.legend_builder import (
 # ---------------------------------------------------------------------------
 
 
-def test_render_legend_image_returns_valid_png():
-    png = render_legend_image("lat", (0.0, 100.0))
+def test_render_legend_wrap_image_returns_valid_png():
+    png = render_legend_wrap_image("lat", (0.0, 100.0))
     assert isinstance(png, bytes)
     assert len(png) > 100
     img = Image.open(io.BytesIO(png))
-    assert img.size == (128, 256)
+    assert img.size == (512, 256)
     assert img.mode == "RGBA"
 
 
-def test_render_legend_image_bipolar():
-    png = render_legend_image("bipolar", (0.05, 1.5))
+def test_render_legend_wrap_image_bipolar():
+    png = render_legend_wrap_image("bipolar", (0.05, 1.5))
     img = Image.open(io.BytesIO(png))
-    assert img.size == (128, 256)
+    assert img.size == (512, 256)
 
 
-def test_render_legend_image_custom_size():
-    png = render_legend_image("unipolar", (3.0, 10.0), width=64, height=128)
+def test_render_legend_wrap_image_custom_size():
+    png = render_legend_wrap_image("unipolar", (3.0, 10.0), width=256, height=128)
     img = Image.open(io.BytesIO(png))
-    assert img.size == (64, 128)
+    assert img.size == (256, 128)
 
 
 def test_render_info_image_returns_valid_png():
@@ -186,7 +186,7 @@ def test_add_legend_nodes_uses_unlit_material():
     mat = gltf.materials[0]
     assert "KHR_materials_unlit" in (mat.extensions or {})
     assert mat.alphaMode == pygltflib.BLEND
-    assert mat.doubleSided is True
+    assert mat.doubleSided is False
 
     # Extension registered
     assert "KHR_materials_unlit" in (gltf.extensionsUsed or [])
@@ -231,8 +231,8 @@ def test_add_legend_nodes_positions_right_of_mesh():
     assert legend_node.translation[0] > 50.0
 
 
-def test_add_legend_nodes_quad_geometry():
-    """Each panel should have a mesh with 4 vertices and 2 triangles."""
+def test_add_legend_nodes_cylinder_geometry():
+    """Legend should be a 32-segment cylinder: 66 vertices, 192 indices."""
     gltf, binary_data = _make_test_gltf()
     vertices = np.array([[-10, -10, 0], [10, 10, 0]], dtype=np.float32)
 
@@ -247,17 +247,48 @@ def test_add_legend_nodes_quad_geometry():
     mesh = gltf.meshes[legend_node.mesh]
     prim = mesh.primitives[0]
 
-    # Should have POSITION and TEXCOORD_0
     assert prim.attributes.POSITION is not None
+    assert prim.attributes.NORMAL is not None
     assert prim.attributes.TEXCOORD_0 is not None
 
-    # 4 vertices
+    # 33 columns × 2 rows = 66 vertices
     pos_acc = gltf.accessors[prim.attributes.POSITION]
-    assert pos_acc.count == 4
+    assert pos_acc.count == 66
 
-    # 6 indices (2 triangles)
+    # 32 segments × 2 triangles × 3 indices = 192 indices
     idx_acc = gltf.accessors[prim.indices]
-    assert idx_acc.count == 6
+    assert idx_acc.count == 192
+
+
+def test_add_legend_nodes_info_panel_geometry():
+    """Info panel should be a double-sided quad: 8 vertices, 12 indices."""
+    gltf, binary_data = _make_test_gltf()
+    vertices = np.array([[-10, -10, 0], [10, 10, 0]], dtype=np.float32)
+
+    metadata = {"study_name": "Test", "coloring": "lat"}
+    node_indices = add_legend_nodes(
+        gltf, binary_data, vertices,
+        coloring="lat",
+        clamp_range=(0.0, 100.0),
+        centroid=[0.0, 0.0, 0.0],
+        metadata=metadata,
+    )
+
+    info_node = gltf.nodes[node_indices[1]]
+    mesh = gltf.meshes[info_node.mesh]
+    prim = mesh.primitives[0]
+
+    assert prim.attributes.POSITION is not None
+    assert prim.attributes.NORMAL is not None
+    assert prim.attributes.TEXCOORD_0 is not None
+
+    # 2 faces × 4 vertices = 8 vertices
+    pos_acc = gltf.accessors[prim.attributes.POSITION]
+    assert pos_acc.count == 8
+
+    # 2 faces × 2 triangles × 3 indices = 12 indices
+    idx_acc = gltf.accessors[prim.indices]
+    assert idx_acc.count == 12
 
 
 # ---------------------------------------------------------------------------
