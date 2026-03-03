@@ -47,10 +47,13 @@ def run_gallery_mode(
     start_time = time.time()
 
     # Determine which series to process
+    series_list: list[SeriesInfo] = []
+    if input_path.is_dir():
+        series_list = analyze_series(input_path)
+
     if series:
         target_uids = [series]
-    elif input_path.is_dir():
-        series_list = analyze_series(input_path)
+    elif series_list:
         if len(series_list) > 1 and sys.stdin.isatty():
             print_series_table(series_list, input_path)
             selected = _interactive_select_series(series_list)
@@ -60,11 +63,10 @@ def run_gallery_mode(
     else:
         target_uids = [None]
 
-    # Build a lookup for series descriptions
-    series_info_map: dict[str, SeriesInfo] = {}
-    if input_path.is_dir():
-        for info in analyze_series(input_path):
-            series_info_map[info.series_uid] = info
+    # Build a lookup for series descriptions (reuse the single scan)
+    series_info_map: dict[str, SeriesInfo] = {
+        info.series_uid: info for info in series_list
+    }
 
     output_dir = Path(output) if output.suffix == "" else output.parent
     output_dir.mkdir(parents=True, exist_ok=True)

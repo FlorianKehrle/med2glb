@@ -77,7 +77,7 @@ def list_series(input_path: Path) -> list[dict]:
     if not input_path.is_dir():
         raise ValueError(f"Not a directory: {input_path}")
 
-    dcm_files = _scan_dicom_files(input_path)
+    dcm_files = _scan_dicom_files(input_path, metadata_only=True)
     series_groups = _group_by_series(dcm_files)
 
     result = []
@@ -114,7 +114,7 @@ def analyze_series(input_path: Path) -> list[SeriesInfo]:
     if not input_path.is_dir():
         raise ValueError(f"Not a directory: {input_path}")
 
-    dcm_files = _scan_dicom_files(input_path)
+    dcm_files = _scan_dicom_files(input_path, metadata_only=True)
     if not dcm_files:
         raise ValueError(f"No valid DICOM files found in {input_path}")
 
@@ -281,13 +281,21 @@ def _series_sort_key(info: SeriesInfo) -> tuple:
     return (priority, -count)
 
 
-def _scan_dicom_files(directory: Path) -> list[pydicom.Dataset]:
-    """Scan directory recursively for valid DICOM files."""
+def _scan_dicom_files(
+    directory: Path, metadata_only: bool = False
+) -> list[pydicom.Dataset]:
+    """Scan directory recursively for valid DICOM files.
+
+    When *metadata_only* is True, pixel data is not loaded (much faster
+    and lower memory for series listing, classification, and auto-naming).
+    """
     datasets = []
     for path in directory.rglob("*"):
         if path.is_file():
             try:
-                ds = pydicom.dcmread(str(path), stop_before_pixels=False)
+                ds = pydicom.dcmread(
+                    str(path), stop_before_pixels=metadata_only
+                )
                 ds.filename = str(path)
                 datasets.append(ds)
             except (InvalidDicomError, Exception):
