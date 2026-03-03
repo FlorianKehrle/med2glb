@@ -77,6 +77,7 @@ def _extract_active_lat(
     points: list[CartoPoint],
     mesh_data: "MeshData",
     subdivide: int,
+    subdivided_mesh: "CartoMesh | None" = None,
     progress_cb: Callable[[str], None] | None = None,
 ) -> np.ndarray:
     """Map LAT values from sparse points to mesh_data vertices via KDTree.
@@ -89,6 +90,7 @@ def _extract_active_lat(
         points: Measurement points.
         mesh_data: The MeshData produced by carto_mesh_to_mesh_data.
         subdivide: Number of Loop-subdivision iterations used.
+        subdivided_mesh: Already-subdivided mesh to reuse (skips re-subdivision).
         progress_cb: Optional callback(description) for status updates.
     """
     from med2glb.io.carto_mapper import (
@@ -98,11 +100,14 @@ def _extract_active_lat(
         subdivide_carto_mesh,
     )
 
-    anim_mesh = mesh
-    if subdivide > 0:
+    if subdivided_mesh is not None:
+        anim_mesh = subdivided_mesh
+    elif subdivide > 0:
         if progress_cb:
             progress_cb("Subdividing mesh for LAT extraction...")
         anim_mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
+    else:
+        anim_mesh = mesh
 
     if progress_cb:
         progress_cb("Mapping LAT values...")
@@ -124,11 +129,16 @@ def _build_static_vectors(
     points: list[CartoPoint],
     mesh_data: "MeshData",
     subdivide: int,
+    active_lat: "np.ndarray | None" = None,
 ) -> list["MeshData"] | None:
     """Build static LAT vector arrow meshes for a single frame.
 
     Returns a list containing one MeshData (the merged arrow mesh),
     or None if no suitable streamlines were found.
+
+    Args:
+        active_lat: Pre-computed LAT values aligned to mesh_data vertices.
+            If None, will be extracted internally.
     """
     from med2glb.mesh.lat_vectors import (
         trace_all_streamlines, compute_animated_dashes,
@@ -137,10 +147,11 @@ def _build_static_vectors(
     from med2glb.glb.arrow_builder import build_frame_dashes, _auto_scale_params
 
     # Extract LAT values aligned to mesh_data vertices
-    vec_lat_active = _extract_active_lat(mesh, points, mesh_data, subdivide)
+    if active_lat is None:
+        active_lat = _extract_active_lat(mesh, points, mesh_data, subdivide)
 
     streamlines = trace_all_streamlines(
-        mesh_data.vertices, mesh_data.faces, vec_lat_active,
+        mesh_data.vertices, mesh_data.faces, active_lat,
         mesh_data.normals, target_count=300,
     )
     if not streamlines:
@@ -155,7 +166,7 @@ def _build_static_vectors(
     max_r = params.max_radius if params.max_radius is not None else params.head_radius
 
     face_grads, face_centers, _ = compute_face_gradients(
-        mesh_data.vertices, mesh_data.faces, vec_lat_active,
+        mesh_data.vertices, mesh_data.faces, active_lat,
     )
     speed_factors = compute_dash_speed_factors(dashes, face_grads, face_centers)
     sf = speed_factors[0] if speed_factors and speed_factors[0] else None
@@ -268,52 +279,32 @@ def _decimate_with_colors(mesh_data: "MeshData", target_faces: int) -> "MeshData
     return compute_normals(result)
 
 
-def _build_ar_variant(
-    standard_path: Path,
-    mesh_data: "MeshData",
-    is_animated: bool,
-    active_lat: "np.ndarray | None",
-    extra_meshes: "list[MeshData] | None",
-    target_faces: int = 80000,
-    max_size_mb: int = 99,
-    vectors: bool = False,
-    progress_cb: "Callable[[str, int, int], None] | None" = None,
-) -> Path:
-    """Re-export the same mesh as an AR-optimized (unlit) GLB with ``_AR`` suffix.
+def _build_ar_variant(standard_path: Path) -> Path:
+    """Produce AR variant by patching KHR_materials_unlit into an existing GLB.
 
-    Flips ``material.unlit`` to True, writes the AR variant, then restores
-    the original material state so the caller's mesh_data is unchanged.
+    Copies the binary blob (geometry + textures) unchanged and only modifies
+    JSON-level material extensions, avoiding expensive xatlas UV unwrap and
+    texture bake operations.
     """
+    import pygltflib
+
     ar_path = standard_path.with_name(
         standard_path.stem + "_AR" + standard_path.suffix
     )
 
-    # Temporarily enable unlit
-    mesh_data.material.unlit = True
-    if extra_meshes:
-        for em in extra_meshes:
-            em.material.unlit = True
+    gltf = pygltflib.GLTF2.load(str(standard_path))
 
-    try:
-        if is_animated and active_lat is not None:
-            from med2glb.glb.carto_builder import build_carto_animated_glb
-            build_carto_animated_glb(
-                mesh_data, active_lat, ar_path,
-                target_faces=target_faces,
-                max_size_mb=max_size_mb,
-                vectors=vectors,
-                progress=progress_cb,
-            )
-        else:
-            from med2glb.glb.builder import build_glb
-            build_glb([mesh_data], ar_path, extra_meshes=extra_meshes, source_units="mm")
-    finally:
-        # Restore standard (lit) material
-        mesh_data.material.unlit = False
-        if extra_meshes:
-            for em in extra_meshes:
-                em.material.unlit = False
+    for mat in gltf.materials:
+        if mat.extensions is None:
+            mat.extensions = {}
+        mat.extensions["KHR_materials_unlit"] = {}
 
+    if gltf.extensionsUsed is None:
+        gltf.extensionsUsed = []
+    if "KHR_materials_unlit" not in gltf.extensionsUsed:
+        gltf.extensionsUsed.append("KHR_materials_unlit")
+
+    gltf.save(str(ar_path))
     return ar_path
 
 
@@ -462,29 +453,22 @@ def run_carto_from_config(config: "CartoConfig") -> None:
                 if mesh_has_vec:
                     jobs.append((mesh_idx, True, True))
 
+    # Group jobs by mesh_idx so shared intermediates are computed once per mesh
+    from med2glb.io.carto_mapper import subdivide_carto_mesh
+
+    grouped: dict[int, list[tuple[bool, bool]]] = {}
     for mesh_idx, do_animate, do_vectors in jobs:
+        grouped.setdefault(mesh_idx, []).append((do_animate, do_vectors))
+
+    for mesh_idx, variants in grouped.items():
         mesh = study.meshes[mesh_idx]
         points = study.points.get(mesh.structure_name)
 
-        anim_suffix = "_animated" if (do_animate and points) else ""
-        vec_suffix = "_vectors" if do_vectors else ""
-        glb_name = f"{mesh.structure_name}_{config.coloring}{anim_suffix}{vec_suffix}.glb"
-        out_path = carto_output_dir / glb_name
-
+        # === Shared intermediates — computed ONCE per mesh ===
         console.print(
-            f"\n[bold]Converting: {mesh.structure_name}[/bold] "
-            f"({config.coloring} coloring"
-            f"{', animated' if do_animate else ', static'}"
-            f"{', vectors' if do_vectors else ''})"
+            f"\n[bold]Preparing: {mesh.structure_name}[/bold] "
+            f"({len(variants)} variant(s))"
         )
-
-        _n_frames = 30
-        if do_animate and points:
-            _total_steps = 3 + _n_frames + 1
-        elif do_vectors and points:
-            _total_steps = 3
-        else:
-            _total_steps = 2
 
         with Progress(
             SpinnerColumn(),
@@ -493,78 +477,118 @@ def run_carto_from_config(config: "CartoConfig") -> None:
             MofNCompleteColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("Subdividing & mapping vertices...", total=_total_steps)
+            task = progress.add_task("Subdividing mesh...", total=None)
+
+            # 1. Subdivide once
+            subdivided = None
+            if config.subdivide > 0:
+                subdivided = subdivide_carto_mesh(mesh, iterations=config.subdivide)
+            progress.update(task, description="Mapping vertices...")
+
+            # 2. Mesh data (colors, active filtering) once
             mesh_data = carto_mesh_to_mesh_data(
-                mesh, points, coloring=config.coloring, subdivide=config.subdivide,
+                mesh, points, coloring=config.coloring,
+                subdivide=config.subdivide, pre_subdivided=subdivided,
             )
-            progress.update(task, advance=1,
+            progress.update(
+                task,
                 description=f"Mapped {len(mesh_data.vertices):,} verts, "
-                f"{len(mesh_data.faces):,} faces")
+                f"{len(mesh_data.faces):,} faces",
+            )
 
+            # 3. LAT values once (if any variant needs animation or vectors)
+            needs_lat = any(
+                (anim and points) or vec for anim, vec in variants
+            )
             active_lat = None
-            extra = None
-
-            if do_animate and points:
-                from med2glb.glb.carto_builder import build_carto_animated_glb
-
-                def _lat_progress(desc: str) -> None:
-                    progress.update(task, description=desc, advance=1)
-
+            if needs_lat and points:
+                progress.update(task, description="Extracting LAT values...")
                 active_lat = _extract_active_lat(
                     mesh, points, mesh_data, config.subdivide,
-                    progress_cb=_lat_progress,
+                    subdivided_mesh=subdivided,
                 )
 
-                def _anim_progress(desc: str, current: int, _total: int) -> None:
-                    progress.update(task, description=desc,
-                                    completed=3 + current + 1)
-
-                progress.update(task, description="Building excitation ring animation...")
-                build_carto_animated_glb(
-                    mesh_data, active_lat, out_path,
-                    target_faces=config.target_faces,
-                    max_size_mb=config.max_size_mb,
-                    vectors=do_vectors,
-                    progress=_anim_progress,
+            # 4. Static vectors once (if any variant needs them)
+            needs_static_vec = any(not anim and vec for anim, vec in variants)
+            static_extra = None
+            if needs_static_vec and points:
+                progress.update(task, description="Generating static LAT vectors...")
+                static_extra = _build_static_vectors(
+                    mesh, points, mesh_data, config.subdivide,
+                    active_lat=active_lat,
                 )
-                progress.update(task, completed=_total_steps)
+
+            progress.remove_task(task)
+
+        # === Emit each variant from cached state ===
+        _n_frames = 30
+        for do_animate, do_vectors in variants:
+            anim_suffix = "_animated" if (do_animate and points) else ""
+            vec_suffix = "_vectors" if do_vectors else ""
+            glb_name = f"{mesh.structure_name}_{config.coloring}{anim_suffix}{vec_suffix}.glb"
+            out_path = carto_output_dir / glb_name
+
+            console.print(
+                f"\n[bold]  Variant: {mesh.structure_name}[/bold] "
+                f"({config.coloring} coloring"
+                f"{', animated' if do_animate else ', static'}"
+                f"{', vectors' if do_vectors else ''})"
+            )
+
+            if do_animate and points:
+                _total_steps = _n_frames + 1
             else:
-                if do_vectors and points:
-                    progress.update(task, description="Generating static LAT vectors...")
-                    extra = _build_static_vectors(
-                        mesh, points, mesh_data, config.subdivide,
+                _total_steps = 1
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(bar_width=20),
+                MofNCompleteColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Building GLB...", total=_total_steps)
+
+                if do_animate and points:
+                    from med2glb.glb.carto_builder import build_carto_animated_glb
+
+                    def _anim_progress(desc: str, current: int, _total: int) -> None:
+                        progress.update(task, description=desc,
+                                        completed=current + 1)
+
+                    progress.update(task, description="Building excitation ring animation...")
+                    build_carto_animated_glb(
+                        mesh_data, active_lat, out_path,
+                        target_faces=config.target_faces,
+                        max_size_mb=config.max_size_mb,
+                        vectors=do_vectors,
+                        progress=_anim_progress,
+                    )
+                    progress.update(task, completed=_total_steps)
+                else:
+                    extra = static_extra if do_vectors else None
+                    progress.update(task, description="Building GLB...")
+                    build_glb([mesh_data], out_path, extra_meshes=extra, source_units="mm")
+                    progress.update(task, completed=_total_steps)
+
+                # Produce a _compressed variant if the file exceeds the size limit
+                if config.max_size_mb > 0:
+                    _build_compressed_carto_variant(
+                        out_path, config.max_size_mb, mesh_data,
+                        do_animate and bool(points), _n_frames, do_vectors,
+                        active_lat if (do_animate and points) else None,
+                        static_extra if do_vectors else None, progress,
                     )
 
-                progress.update(task, description="Building GLB...")
-                build_glb([mesh_data], out_path, extra_meshes=extra, source_units="mm")
-                progress.update(task, completed=_total_steps)
+                # Produce AR-optimized (unlit) variant via GLB patching
+                progress.add_task("Building AR variant (unlit)...", total=None)
+                ar_path = _build_ar_variant(out_path)
+                console.print(f"  [dim]AR variant: {ar_path.name}[/dim]")
 
-            # Produce a _compressed variant if the file exceeds the size limit
-            if config.max_size_mb > 0:
-                _build_compressed_carto_variant(
-                    out_path, config.max_size_mb, mesh_data,
-                    do_animate and bool(points), _n_frames, do_vectors,
-                    active_lat if (do_animate and points) else None,
-                    extra, progress,
-                )
-
-            # Produce AR-optimized (unlit) variant
-            progress.add_task("Building AR variant (unlit)...", total=None)
-            ar_path = _build_ar_variant(
-                out_path, mesh_data,
-                is_animated=do_animate and bool(points),
-                active_lat=active_lat if (do_animate and points) else None,
-                extra_meshes=extra,
-                target_faces=config.target_faces,
-                max_size_mb=config.max_size_mb,
-                vectors=do_vectors,
+            _print_carto_summary(
+                study, mesh, mesh_data, points, config.coloring,
+                config.subdivide, do_animate, do_vectors, out_path, start_time,
             )
-            console.print(f"  [dim]AR variant: {ar_path.name}[/dim]")
-
-        _print_carto_summary(
-            study, mesh, mesh_data, points, config.coloring,
-            config.subdivide, do_animate, do_vectors, out_path, start_time,
-        )
 
 
 def run_carto_pipeline(
@@ -675,6 +699,8 @@ def run_carto_pipeline(
     carto_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Convert each selected mesh
+    from med2glb.io.carto_mapper import subdivide_carto_mesh as _subdiv_fn
+
     for mesh_idx in selected:
         mesh = study.meshes[mesh_idx]
         points = study.points.get(mesh.structure_name)
@@ -696,8 +722,8 @@ def run_carto_pipeline(
         # Determine total steps upfront so progress bar never shows "?"
         _n_frames = 30  # must match build_carto_animated_glb default
         if animate and points:
-            # Steps: map vertices + subdivide LAT + map LAT + N frames + assemble
-            _total_steps = 3 + _n_frames + 1
+            # Steps: map vertices + N frames + assemble
+            _total_steps = 1 + _n_frames + 1
         elif mesh_has_vec and points:
             # Steps: map vertices + vectors + build GLB
             _total_steps = 3
@@ -713,7 +739,16 @@ def run_carto_pipeline(
             console=console,
         ) as progress:
             task = progress.add_task("Subdividing & mapping vertices...", total=_total_steps)
-            mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring, subdivide=subdivide)
+
+            # Subdivide once, reuse for mesh_data and LAT extraction
+            subdivided = None
+            if subdivide > 0:
+                subdivided = _subdiv_fn(mesh, iterations=subdivide)
+
+            mesh_data = carto_mesh_to_mesh_data(
+                mesh, points, coloring=coloring,
+                subdivide=subdivide, pre_subdivided=subdivided,
+            )
             progress.update(task, advance=1,
                 description=f"Mapped {len(mesh_data.vertices):,} verts, "
                 f"{len(mesh_data.faces):,} faces")
@@ -724,17 +759,14 @@ def run_carto_pipeline(
             if animate and points:
                 from med2glb.glb.carto_builder import build_carto_animated_glb
 
-                def _lat_progress(desc: str) -> None:
-                    progress.update(task, description=desc, advance=1)
-
                 active_lat = _extract_active_lat(
                     mesh, points, mesh_data, subdivide,
-                    progress_cb=_lat_progress,
+                    subdivided_mesh=subdivided,
                 )
 
                 def _anim_progress(desc: str, current: int, _total: int) -> None:
                     progress.update(task, description=desc,
-                                    completed=3 + current + 1)
+                                    completed=1 + current + 1)
 
                 progress.update(task, description="Building excitation ring animation...")
                 build_carto_animated_glb(
@@ -765,17 +797,9 @@ def run_carto_pipeline(
                     extra, progress,
                 )
 
-            # Produce AR-optimized (unlit) variant
+            # Produce AR-optimized (unlit) variant via GLB patching
             progress.add_task("Building AR variant (unlit)...", total=None)
-            ar_path = _build_ar_variant(
-                out_path, mesh_data,
-                is_animated=animate and bool(points),
-                active_lat=active_lat if (animate and points) else None,
-                extra_meshes=extra,
-                target_faces=target_faces,
-                max_size_mb=max_size_mb,
-                vectors=mesh_has_vec,
-            )
+            ar_path = _build_ar_variant(out_path)
             console.print(f"  [dim]AR variant: {ar_path.name}[/dim]")
 
         _print_carto_summary(

@@ -366,6 +366,7 @@ def carto_mesh_to_mesh_data(
     coloring: str = "lat",
     clamp_range: tuple[float, float] | None = None,
     subdivide: int = 1,
+    pre_subdivided: CartoMesh | None = None,
 ) -> MeshData:
     """Convert a CartoMesh + points into a MeshData with vertex colors.
 
@@ -377,12 +378,16 @@ def carto_mesh_to_mesh_data(
         coloring: Color scheme — "lat", "bipolar", or "unipolar".
         clamp_range: Optional value range for colormap normalization.
         subdivide: Loop-subdivision iterations (0 = no subdivision, NN mapping).
+        pre_subdivided: Already-subdivided mesh to reuse (skips subdivision).
 
     Returns:
         MeshData with vertex_colors set.
     """
     actually_subdivided = False
-    if subdivide > 0:
+    if pre_subdivided is not None:
+        mesh = pre_subdivided
+        actually_subdivided = True
+    elif subdivide > 0:
         original_mesh = mesh
         mesh = subdivide_carto_mesh(mesh, iterations=subdivide)
         actually_subdivided = mesh is not original_mesh
