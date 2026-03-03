@@ -181,8 +181,6 @@ class CartoConfig:
     vector_mesh_indices: list[int] | None = None  # meshes suitable for vectors; None = all
     target_faces: int = 80000
     max_size_mb: int = 99
-    compress_strategy: str = "draco"
-    verbose: bool = False
 
 
 @dataclass

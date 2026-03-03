@@ -345,20 +345,11 @@ def _build_compressed_carto_variant(
     progress.remove_task(task)
 
 
-def run_carto_from_config(config: "CartoConfig") -> None:
-    """Execute the CARTO pipeline from a wizard-produced config.
-
-    Loads the CARTO study once and produces all requested outputs (static
-    and/or animated) for each selected mesh without re-prompting.
-    """
-    from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
+def _load_carto_study(input_path: Path) -> "CartoStudy":
+    """Load a CARTO study with a Rich progress bar."""
     from med2glb.io.carto_reader import load_carto_study, _find_export_dir
-    from med2glb.glb.builder import build_glb
 
-    start_time = time.time()
-
-    # Pre-count mesh files for progress
-    _export_dir = _find_export_dir(config.input_path)
+    _export_dir = _find_export_dir(input_path)
     _n_mesh_files = len(list(_export_dir.glob("*.mesh")))
 
     with Progress(
@@ -373,7 +364,7 @@ def run_carto_from_config(config: "CartoConfig") -> None:
         def _load_progress(desc: str, current: int, total: int) -> None:
             progress.update(task, description=desc, completed=current, total=total)
 
-        study = load_carto_study(config.input_path, progress=_load_progress)
+        study = load_carto_study(input_path, progress=_load_progress)
         progress.update(
             task,
             description=f"Loaded {_carto_version_label(study.version)}: "
@@ -383,11 +374,20 @@ def run_carto_from_config(config: "CartoConfig") -> None:
         )
         progress.remove_task(task)
 
-    if not study.meshes:
-        err_console.print("[red]No meshes found in CARTO export.[/red]")
-        raise typer.Exit(code=1)
+    return study
 
-    # Use wizard's mesh selection directly — no re-prompting
+
+def _convert_carto_meshes(
+    config: "CartoConfig", study: "CartoStudy", start_time: float,
+) -> None:
+    """Core CARTO processing: build and export GLB variants for selected meshes.
+
+    Handles mesh selection, subdivision, coloring, animation, vectors,
+    compression, and summary printing for all requested variants.
+    """
+    from med2glb.io.carto_mapper import carto_mesh_to_mesh_data, subdivide_carto_mesh
+    from med2glb.glb.builder import build_glb
+
     selected = config.selected_mesh_indices
     if selected is None:
         selected = list(range(len(study.meshes)))
@@ -426,8 +426,6 @@ def run_carto_from_config(config: "CartoConfig") -> None:
                     jobs.append((mesh_idx, True, True))
 
     # Group jobs by mesh_idx so shared intermediates are computed once per mesh
-    from med2glb.io.carto_mapper import subdivide_carto_mesh
-
     grouped: dict[int, list[tuple[bool, bool]]] = {}
     for mesh_idx, do_animate, do_vectors in jobs:
         grouped.setdefault(mesh_idx, []).append((do_animate, do_vectors))
@@ -558,6 +556,22 @@ def run_carto_from_config(config: "CartoConfig") -> None:
             )
 
 
+def run_carto_from_config(config: "CartoConfig") -> None:
+    """Execute the CARTO pipeline from a wizard-produced config.
+
+    Loads the CARTO study once and produces all requested outputs (static
+    and/or animated) for each selected mesh without re-prompting.
+    """
+    start_time = time.time()
+    study = _load_carto_study(config.input_path)
+
+    if not study.meshes:
+        err_console.print("[red]No meshes found in CARTO export.[/red]")
+        raise typer.Exit(code=1)
+
+    _convert_carto_meshes(config, study, start_time)
+
+
 def run_carto_pipeline(
     input_path: Path,
     output: Path,
@@ -566,44 +580,13 @@ def run_carto_pipeline(
     animate: bool,
     vectors: str,
     max_size_mb: int,
-    compress_strategy: str,
     target_faces: int,
-    verbose: bool,
 ) -> None:
     """Execute the CARTO conversion pipeline."""
-    from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
-    from med2glb.io.carto_reader import load_carto_study
-    from med2glb.glb.builder import build_glb
+    from med2glb.core.types import CartoConfig
 
     start_time = time.time()
-
-    # Pre-count mesh files so progress bar has a total from the start
-    from med2glb.io.carto_reader import _find_export_dir
-    _export_dir = _find_export_dir(input_path)
-    _n_mesh_files = len(list(_export_dir.glob("*.mesh")))
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=20),
-        MofNCompleteColumn(),
-        console=console,
-    ) as progress:
-        # Step 1: Load CARTO study
-        task = progress.add_task("Loading CARTO data...", total=_n_mesh_files)
-
-        def _load_progress(desc: str, current: int, total: int) -> None:
-            progress.update(task, description=desc, completed=current, total=total)
-
-        study = load_carto_study(input_path, progress=_load_progress)
-        progress.update(
-            task,
-            description=f"Loaded {_carto_version_label(study.version)}: "
-            f"{len(study.meshes)} mesh(es), "
-            f"{sum(len(p) for p in study.points.values())} points",
-            completed=_n_mesh_files,
-        )
-        progress.remove_task(task)
+    study = _load_carto_study(input_path)
 
     if not study.meshes:
         err_console.print("[red]No meshes found in CARTO export.[/red]")
@@ -649,122 +632,32 @@ def run_carto_pipeline(
 
     # Per-mesh vector quality assessment (same logic the wizard uses)
     _has_vectors = vectors in ("yes", "only")
-    vec_suitable: set[int] | None = None
+    vec_suitable_list: list[int] | None = None
+    effective_vectors = vectors
     if _has_vectors and coloring == "lat":
         from med2glb.cli_wizard import _assess_vector_quality
         vec_quality = _assess_vector_quality(study, selected)
         vec_suitable = set(vec_quality.suitable_indices) if vec_quality.suitable_indices else set()
         if not vec_quality.suitable:
             console.print(f"[yellow]Skipping vectors: {vec_quality.reason}[/yellow]")
-            _has_vectors = False
-        elif len(vec_suitable) < len(selected):
-            skip_names = [study.meshes[i].structure_name for i in selected if i not in vec_suitable]
-            console.print(f"[yellow]Vectors skipped for: {', '.join(skip_names)} (insufficient data)[/yellow]")
-
-    # Use output's parent directory for per-mesh files
-    carto_output_dir = output.parent
-    carto_output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Convert each selected mesh
-    from med2glb.io.carto_mapper import subdivide_carto_mesh as _subdiv_fn
-
-    for mesh_idx in selected:
-        mesh = study.meshes[mesh_idx]
-        points = study.points.get(mesh.structure_name)
-
-        # Gate vectors per mesh based on quality assessment
-        mesh_has_vec = _has_vectors and (vec_suitable is None or mesh_idx in vec_suitable)
-
-        # Build descriptive filename: <structure>_<coloring>[_animated][_vectors].glb
-        anim_suffix = "_animated" if (animate and points) else ""
-        vec_suffix = "_vectors" if mesh_has_vec else ""
-        glb_name = f"{mesh.structure_name}_{coloring}{anim_suffix}{vec_suffix}.glb"
-        out_path = carto_output_dir / glb_name
-
-        console.print(
-            f"\n[bold]Converting: {mesh.structure_name}[/bold] "
-            f"({coloring} coloring)"
-        )
-
-        # Determine total steps upfront so progress bar never shows "?"
-        _n_frames = 30  # must match build_carto_animated_glb default
-        if animate and points:
-            # Steps: map vertices + N frames + assemble
-            _total_steps = 1 + _n_frames + 1
-        elif mesh_has_vec and points:
-            # Steps: map vertices + vectors + build GLB
-            _total_steps = 3
+            effective_vectors = "no"
         else:
-            # Steps: map vertices + build GLB
-            _total_steps = 2
+            if len(vec_suitable) < len(selected):
+                skip_names = [study.meshes[i].structure_name for i in selected if i not in vec_suitable]
+                console.print(f"[yellow]Vectors skipped for: {', '.join(skip_names)} (insufficient data)[/yellow]")
+            vec_suitable_list = list(vec_suitable)
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=20),
-            MofNCompleteColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Subdividing & mapping vertices...", total=_total_steps)
-
-            # Subdivide once, reuse for mesh_data and LAT extraction
-            subdivided = None
-            if subdivide > 0:
-                subdivided = _subdiv_fn(mesh, iterations=subdivide)
-
-            mesh_data = carto_mesh_to_mesh_data(
-                mesh, points, coloring=coloring,
-                subdivide=subdivide, pre_subdivided=subdivided,
-            )
-            progress.update(task, advance=1,
-                description=f"Mapped {len(mesh_data.vertices):,} verts, "
-                f"{len(mesh_data.faces):,} faces")
-
-            active_lat = None
-            extra = None
-
-            if animate and points:
-                from med2glb.glb.carto_builder import build_carto_animated_glb
-
-                active_lat = _extract_active_lat(
-                    mesh, points, mesh_data, subdivide,
-                    subdivided_mesh=subdivided,
-                )
-
-                def _anim_progress(desc: str, current: int, _total: int) -> None:
-                    progress.update(task, description=desc,
-                                    completed=1 + current + 1)
-
-                progress.update(task, description="Building excitation ring animation...")
-                build_carto_animated_glb(
-                    mesh_data, active_lat, out_path,
-                    target_faces=target_faces,
-                    max_size_mb=max_size_mb,
-                    vectors=mesh_has_vec,
-                    progress=_anim_progress,
-                )
-                progress.update(task, completed=_total_steps)
-            else:
-                if mesh_has_vec and points:
-                    progress.update(task, description="Generating static LAT vectors...")
-                    extra = _build_static_vectors(
-                        mesh, points, mesh_data, subdivide,
-                    )
-
-                progress.update(task, description="Building GLB...")
-                build_glb([mesh_data], out_path, extra_meshes=extra, source_units="mm")
-                progress.update(task, completed=_total_steps)
-
-            # Produce a _compressed variant if the file exceeds the size limit
-            if max_size_mb > 0:
-                _build_compressed_carto_variant(
-                    out_path, max_size_mb, mesh_data,
-                    animate and bool(points), _n_frames, mesh_has_vec,
-                    active_lat if (animate and points) else None,
-                    extra, progress,
-                )
-
-        _print_carto_summary(
-            study, mesh, mesh_data, points, coloring,
-            subdivide, animate, mesh_has_vec, out_path, start_time,
-        )
+    config = CartoConfig(
+        input_path=input_path,
+        output_dir=output.parent,
+        selected_mesh_indices=selected,
+        coloring=coloring,
+        subdivide=subdivide,
+        animate=animate,
+        static=not animate,
+        vectors=effective_vectors,
+        vector_mesh_indices=vec_suitable_list,
+        target_faces=target_faces,
+        max_size_mb=max_size_mb,
+    )
+    _convert_carto_meshes(config, study, start_time)
