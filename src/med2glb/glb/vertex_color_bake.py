@@ -366,8 +366,14 @@ def _apply_and_encode(
 def _bleed_gutter(
     texture: np.ndarray, mask: np.ndarray, tex_h: int, tex_w: int,
 ) -> None:
-    """Expand filled pixels into empty neighbors (3 iterations, in-place)."""
-    for _ in range(3):
+    """Expand filled pixels into empty neighbors (in-place).
+
+    8 iterations provides enough padding for mipmap sampling at lower
+    resolution levels (distant viewing in AR). With fewer iterations,
+    UV chart boundaries bleed into unfilled black pixels at lower mip
+    levels, causing visible dark spots on distant meshes.
+    """
+    for _ in range(8):
         empty = ~mask
         if not np.any(empty):
             break
