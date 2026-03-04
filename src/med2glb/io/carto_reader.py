@@ -14,13 +14,19 @@ from pathlib import Path
 
 import numpy as np
 
-from med2glb.core.types import CartoMesh, CartoPoint, CartoStudy
+from med2glb.core.types import (
+    CARTO_INACTIVE_GROUP_ID,
+    CARTO_LAT_SENTINEL,
+    CartoMesh,
+    CartoPoint,
+    CartoStudy,
+)
 
 logger = logging.getLogger("med2glb")
 
-# Sentinel values in CARTO data
-_LAT_SENTINEL = -10000
-_INACTIVE_GROUP_ID = -1000000
+# Back-compat aliases (used by other modules that imported from here)
+_LAT_SENTINEL = CARTO_LAT_SENTINEL
+_INACTIVE_GROUP_ID = CARTO_INACTIVE_GROUP_ID
 
 
 def detect_carto_directory(path: Path) -> bool:

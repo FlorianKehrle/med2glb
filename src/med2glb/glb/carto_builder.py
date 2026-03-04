@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +44,146 @@ def _compute_anim_target_faces(
     return max(10000, min(max_faces, n_faces))
 
 
+@dataclass
+class AnimatedBakeCache:
+    """Pre-computed intermediates shared between animated CARTO variants."""
+
+    mesh_data: MeshData
+    lat_values: np.ndarray
+    unwelded_verts: np.ndarray
+    unwelded_normals: np.ndarray | None
+    unwelded_faces: np.ndarray
+    shared_uvs: np.ndarray
+    centroid: list[float]
+    frame_textures: list[bytes]
+    n_frames: int
+
+
+def prepare_animated_cache(
+    mesh_data: MeshData,
+    lat_values: np.ndarray,
+    n_frames: int = 30,
+    target_faces: int = 20000,
+    max_size_mb: float = 50.0,
+    progress: Callable[[str, int, int], None] | None = None,
+) -> AnimatedBakeCache | None:
+    """Compute expensive intermediates for animated CARTO GLB variants.
+
+    Performs decimation, frame color generation, xatlas UV unwrap,
+    rasterization map precomputation, and frame texture baking.
+    Returns None if LAT values are invalid (all-NaN or zero range),
+    indicating the caller should fall back to static export.
+    """
+    def _report(desc: str, current: int = 0, total: int = 0) -> None:
+        if progress:
+            progress(desc, current, total)
+
+    # Use whichever limit allows more faces (better quality)
+    size_based_target = _compute_anim_target_faces(
+        len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
+    )
+    effective_target = max(target_faces, size_based_target)
+
+    # Decimate if mesh is large (animation duplicates mesh N times)
+    if len(mesh_data.faces) > effective_target:
+        _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
+        from med2glb.mesh.processing import decimate, compute_normals
+
+        decimated = decimate(mesh_data, target_faces=effective_target)
+        decimated = compute_normals(decimated)
+        # Resample LAT values to decimated mesh via nearest neighbor
+        from scipy.spatial import KDTree
+        tree = KDTree(mesh_data.vertices)
+        _, idx = tree.query(decimated.vertices)
+        lat_values = lat_values[idx]
+        mesh_data = decimated
+
+    valid_lat = ~np.isnan(lat_values)
+    if not np.any(valid_lat):
+        return None
+
+    lat_min = float(np.nanmin(lat_values))
+    lat_max = float(np.nanmax(lat_values))
+    lat_range = lat_max - lat_min
+    if lat_range < 1e-6:
+        return None
+
+    # Normalize LAT to [0, 1]
+    lat_norm = (lat_values - lat_min) / lat_range
+    lat_norm[~valid_lat] = np.nan
+
+    # Base colors from static coloring (mesh_data.vertex_colors)
+    n_verts = len(mesh_data.vertices)
+    if mesh_data.vertex_colors is not None:
+        base_colors = mesh_data.vertex_colors.astype(np.float32)
+    else:
+        base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
+
+    # Generate per-frame vertex colors with highlight ring (store as uint8
+    # immediately to cut memory from 16 bytes/vert to 4 bytes/vert per frame)
+    frame_colors_u8: list[np.ndarray] = []
+    for fi in range(n_frames):
+        _report(f"Generating frame {fi + 1}/{n_frames}...", fi, n_frames)
+        t = fi / max(n_frames - 1, 1)  # ring position in normalized LAT space
+        colors = base_colors.copy()
+
+        # Gaussian ring: bright band centered at current wavefront position
+        ring = np.exp(-((lat_norm - t) ** 2) / (2 * _RING_WIDTH ** 2))
+        ring[~valid_lat] = 0.0
+
+        # Additive brightening: preserves base hue, adds white light
+        add = ring.reshape(-1, 1) * _HIGHLIGHT_ADD
+        colors[:, :3] = np.minimum(colors[:, :3] + add, 1.0)
+        colors[:, 3] = 1.0
+
+        frame_colors_u8.append(np.clip(colors * 255 + 0.5, 0, 255).astype(np.uint8))
+
+    # UV unwrap ONCE with xatlas, precompute raster map, apply per frame
+    from med2glb.glb.vertex_color_bake import (
+        xatlas_unwrap,
+        precompute_rasterization_map,
+        apply_rasterization_map,
+        compute_texture_size,
+    )
+
+    tex_size = compute_texture_size(len(mesh_data.faces))
+
+    _report("UV unwrapping with xatlas...", 0, n_frames)
+    vmapping, new_faces, shared_uvs = xatlas_unwrap(
+        mesh_data.vertices, mesh_data.faces, mesh_data.normals,
+    )
+    unwelded_verts, centroid = _center_vertices(
+        mesh_data.vertices[vmapping].astype(np.float32),
+    )
+    unwelded_normals = None
+    if mesh_data.normals is not None:
+        unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
+
+    # Precompute pixel→triangle mapping once (expensive), then apply per frame
+    _report("Precomputing rasterization map...", 0, n_frames)
+    raster_map = precompute_rasterization_map(new_faces, shared_uvs, tex_size)
+
+    _report("Baking frame textures...", 0, n_frames)
+    frame_textures: list[bytes] = []
+    for fi in range(n_frames):
+        _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
+        colors_remapped = frame_colors_u8[fi][vmapping].astype(np.float32) / 255.0
+        png_bytes = apply_rasterization_map(raster_map, colors_remapped)
+        frame_textures.append(png_bytes)
+
+    return AnimatedBakeCache(
+        mesh_data=mesh_data,
+        lat_values=lat_values,
+        unwelded_verts=unwelded_verts,
+        unwelded_normals=unwelded_normals,
+        unwelded_faces=new_faces,
+        shared_uvs=shared_uvs,
+        centroid=centroid,
+        frame_textures=frame_textures,
+        n_frames=n_frames,
+    )
+
+
 def build_carto_animated_glb(
     mesh_data: MeshData,
     lat_values: np.ndarray,
@@ -54,6 +195,7 @@ def build_carto_animated_glb(
     vectors: bool = False,
     progress: Callable[[str, int, int], None] | None = None,
     legend_info: dict | None = None,
+    cache: AnimatedBakeCache | None = None,
 ) -> bool:
     """Build animated GLB with CARTO-style highlight ring over static colormap.
 
@@ -83,73 +225,122 @@ def build_carto_animated_glb(
         if progress:
             progress(desc, current, total)
 
-    # Use whichever limit allows more faces (better quality)
-    size_based_target = _compute_anim_target_faces(
-        len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
-    )
-    effective_target = max(target_faces, size_based_target)
-
-    # Decimate if mesh is large (animation duplicates mesh N times)
-    if len(mesh_data.faces) > effective_target:
-        _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
-        from med2glb.mesh.processing import decimate, compute_normals
-
-        decimated = decimate(mesh_data, target_faces=effective_target)
-        decimated = compute_normals(decimated)
-        # Resample LAT values to decimated mesh via nearest neighbor
-        # (vertex_colors are already preserved inside decimate())
-        from scipy.spatial import KDTree
-        tree = KDTree(mesh_data.vertices)
-        _, idx = tree.query(decimated.vertices)
-        lat_values = lat_values[idx]
-        mesh_data = decimated
-
-    valid_lat = ~np.isnan(lat_values)
-    if not np.any(valid_lat):
-        # No valid LAT — fall back to static export
-        from med2glb.glb.builder import build_glb
-        build_glb([mesh_data], output_path, source_units="mm")
-        return True
-
-    lat_min = float(np.nanmin(lat_values))
-    lat_max = float(np.nanmax(lat_values))
-    lat_range = lat_max - lat_min
-    if lat_range < 1e-6:
-        from med2glb.glb.builder import build_glb
-        build_glb([mesh_data], output_path, source_units="mm")
-        return True
-
-    # Normalize LAT to [0, 1]
-    lat_norm = (lat_values - lat_min) / lat_range
-    lat_norm[~valid_lat] = np.nan
-
-    # Base colors from static coloring (mesh_data.vertex_colors)
-    n_verts = len(mesh_data.vertices)
-    if mesh_data.vertex_colors is not None:
-        base_colors = mesh_data.vertex_colors.astype(np.float32)
+    if cache is not None:
+        # Fast path: use pre-computed intermediates
+        mesh_data = cache.mesh_data
+        lat_values = cache.lat_values
+        n_frames = cache.n_frames
+        unwelded_verts = cache.unwelded_verts
+        unwelded_normals = cache.unwelded_normals
+        unwelded_faces = cache.unwelded_faces
+        shared_uvs = cache.shared_uvs
+        centroid = cache.centroid
+        frame_textures = cache.frame_textures
     else:
-        # Fallback: neutral light gray if no colormap was applied
-        base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
+        # Use whichever limit allows more faces (better quality)
+        size_based_target = _compute_anim_target_faces(
+            len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
+        )
+        effective_target = max(target_faces, size_based_target)
 
-    # Generate per-frame vertex colors with highlight ring (store as uint8
-    # immediately to cut memory from 16 bytes/vert to 4 bytes/vert per frame)
-    frame_colors_u8: list[np.ndarray] = []
-    for fi in range(n_frames):
-        _report(f"Generating frame {fi + 1}/{n_frames}...", fi, n_frames)
-        t = fi / max(n_frames - 1, 1)  # ring position in normalized LAT space
-        colors = base_colors.copy()
+        # Decimate if mesh is large (animation duplicates mesh N times)
+        if len(mesh_data.faces) > effective_target:
+            _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
+            from med2glb.mesh.processing import decimate, compute_normals
 
-        # Gaussian ring: bright band centered at current wavefront position
-        ring = np.exp(-((lat_norm - t) ** 2) / (2 * _RING_WIDTH ** 2))
-        ring[~valid_lat] = 0.0
+            decimated = decimate(mesh_data, target_faces=effective_target)
+            decimated = compute_normals(decimated)
+            # Resample LAT values to decimated mesh via nearest neighbor
+            # (vertex_colors are already preserved inside decimate())
+            from scipy.spatial import KDTree
+            tree = KDTree(mesh_data.vertices)
+            _, idx = tree.query(decimated.vertices)
+            lat_values = lat_values[idx]
+            mesh_data = decimated
 
-        # Additive brightening: preserves base hue, adds white light
-        # (red→yellow, green→bright green, blue→cyan — matches real CARTO)
-        add = ring.reshape(-1, 1) * _HIGHLIGHT_ADD
-        colors[:, :3] = np.minimum(colors[:, :3] + add, 1.0)
-        colors[:, 3] = 1.0
+        valid_lat = ~np.isnan(lat_values)
+        if not np.any(valid_lat):
+            # No valid LAT — fall back to static export
+            from med2glb.glb.builder import build_glb
+            build_glb([mesh_data], output_path, source_units="mm")
+            return True
 
-        frame_colors_u8.append(np.clip(colors * 255 + 0.5, 0, 255).astype(np.uint8))
+        lat_min = float(np.nanmin(lat_values))
+        lat_max = float(np.nanmax(lat_values))
+        lat_range = lat_max - lat_min
+        if lat_range < 1e-6:
+            from med2glb.glb.builder import build_glb
+            build_glb([mesh_data], output_path, source_units="mm")
+            return True
+
+        # Normalize LAT to [0, 1]
+        lat_norm = (lat_values - lat_min) / lat_range
+        lat_norm[~valid_lat] = np.nan
+
+        # Base colors from static coloring (mesh_data.vertex_colors)
+        n_verts = len(mesh_data.vertices)
+        if mesh_data.vertex_colors is not None:
+            base_colors = mesh_data.vertex_colors.astype(np.float32)
+        else:
+            # Fallback: neutral light gray if no colormap was applied
+            base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
+
+        # Generate per-frame vertex colors with highlight ring (store as uint8
+        # immediately to cut memory from 16 bytes/vert to 4 bytes/vert per frame)
+        frame_colors_u8: list[np.ndarray] = []
+        for fi in range(n_frames):
+            _report(f"Generating frame {fi + 1}/{n_frames}...", fi, n_frames)
+            t = fi / max(n_frames - 1, 1)  # ring position in normalized LAT space
+            colors = base_colors.copy()
+
+            # Gaussian ring: bright band centered at current wavefront position
+            ring = np.exp(-((lat_norm - t) ** 2) / (2 * _RING_WIDTH ** 2))
+            ring[~valid_lat] = 0.0
+
+            # Additive brightening: preserves base hue, adds white light
+            # (red→yellow, green→bright green, blue→cyan — matches real CARTO)
+            add = ring.reshape(-1, 1) * _HIGHLIGHT_ADD
+            colors[:, :3] = np.minimum(colors[:, :3] + add, 1.0)
+            colors[:, 3] = 1.0
+
+            frame_colors_u8.append(np.clip(colors * 255 + 0.5, 0, 255).astype(np.uint8))
+
+        # UV unwrap ONCE with xatlas, precompute raster map, apply per frame
+        from med2glb.glb.vertex_color_bake import (
+            xatlas_unwrap,
+            precompute_rasterization_map,
+            apply_rasterization_map,
+            compute_texture_size,
+        )
+
+        tex_size = compute_texture_size(len(mesh_data.faces))
+
+        _report("UV unwrapping with xatlas...", 0, n_frames)
+        vmapping, new_faces, shared_uvs = xatlas_unwrap(
+            mesh_data.vertices, mesh_data.faces, mesh_data.normals,
+        )
+        unwelded_verts, centroid = _center_vertices(
+            mesh_data.vertices[vmapping].astype(np.float32),
+        )
+        unwelded_normals = None
+        if mesh_data.normals is not None:
+            unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
+        unwelded_faces = new_faces
+
+        # Precompute pixel→triangle mapping once (expensive), then apply per frame (cheap)
+        _report("Precomputing rasterization map...", 0, n_frames)
+        raster_map = precompute_rasterization_map(new_faces, shared_uvs, tex_size)
+
+        _report("Baking frame textures...", 0, n_frames)
+        frame_textures: list[bytes] = []
+        for fi in range(n_frames):
+            _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
+            colors_remapped = frame_colors_u8[fi][vmapping].astype(np.float32) / 255.0
+            png_bytes = apply_rasterization_map(raster_map, colors_remapped)
+            frame_textures.append(png_bytes)
+
+        # Free per-frame color arrays and raster map (textures are baked now)
+        del frame_colors_u8, raster_map
 
     # Compute animated arrow dashes if vectors enabled
     arrow_frame_dashes = None
@@ -186,43 +377,6 @@ def build_carto_animated_glb(
             arrow_speed_factors = compute_dash_speed_factors(
                 arrow_frame_dashes, face_grads, face_centers,
             )
-
-    # UV unwrap ONCE with xatlas, precompute raster map, apply per frame
-    from med2glb.glb.vertex_color_bake import (
-        xatlas_unwrap,
-        precompute_rasterization_map,
-        apply_rasterization_map,
-        compute_texture_size,
-    )
-
-    tex_size = compute_texture_size(len(mesh_data.faces))
-
-    _report("UV unwrapping with xatlas...", 0, n_frames)
-    vmapping, new_faces, shared_uvs = xatlas_unwrap(
-        mesh_data.vertices, mesh_data.faces, mesh_data.normals,
-    )
-    unwelded_verts, centroid = _center_vertices(
-        mesh_data.vertices[vmapping].astype(np.float32),
-    )
-    unwelded_normals = None
-    if mesh_data.normals is not None:
-        unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
-    unwelded_faces = new_faces
-
-    # Precompute pixel→triangle mapping once (expensive), then apply per frame (cheap)
-    _report("Precomputing rasterization map...", 0, n_frames)
-    raster_map = precompute_rasterization_map(new_faces, shared_uvs, tex_size)
-
-    _report("Baking frame textures...", 0, n_frames)
-    frame_textures: list[bytes] = []
-    for fi in range(n_frames):
-        _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
-        colors_remapped = frame_colors_u8[fi][vmapping].astype(np.float32) / 255.0
-        png_bytes = apply_rasterization_map(raster_map, colors_remapped)
-        frame_textures.append(png_bytes)
-
-    # Free per-frame color arrays and raster map (textures are baked now)
-    del frame_colors_u8, raster_map
 
     # Build glTF with N frame nodes under a root mm→m scale node
     gltf = pygltflib.GLTF2(

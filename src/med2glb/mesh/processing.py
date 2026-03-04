@@ -24,6 +24,7 @@ def taubin_smooth(mesh: MeshData, iterations: int = 15) -> MeshData:
         vertices=np.array(tri.vertices, dtype=np.float32),
         faces=np.array(tri.faces, dtype=np.int32),
         normals=None,
+        vertex_colors=mesh.vertex_colors,
         structure_name=mesh.structure_name,
         material=mesh.material,
     )
@@ -81,10 +82,23 @@ def fill_holes(mesh: MeshData) -> MeshData:
     tri = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces, process=False)
     trimesh.repair.fill_holes(tri)
 
+    new_verts = np.array(tri.vertices, dtype=np.float32)
+
+    # Preserve vertex colors via nearest-neighbour resampling
+    # (fill_holes can add new vertices for the patch geometry)
+    new_colors = None
+    if mesh.vertex_colors is not None:
+        from scipy.spatial import KDTree
+
+        tree = KDTree(mesh.vertices)
+        _, idx = tree.query(new_verts)
+        new_colors = mesh.vertex_colors[idx]
+
     return MeshData(
-        vertices=np.array(tri.vertices, dtype=np.float32),
+        vertices=new_verts,
         faces=np.array(tri.faces, dtype=np.int32),
         normals=None,
+        vertex_colors=new_colors,
         structure_name=mesh.structure_name,
         material=mesh.material,
     )
@@ -128,10 +142,23 @@ def remove_degenerate(mesh: MeshData) -> MeshData:
             tri.update_faces(mask)
             tri.remove_unreferenced_vertices()
 
+    new_verts = np.array(tri.vertices, dtype=np.float32)
+
+    # Preserve vertex colors via nearest-neighbour resampling
+    # (face/vertex removal changes vertex indices)
+    new_colors = None
+    if mesh.vertex_colors is not None:
+        from scipy.spatial import KDTree
+
+        tree = KDTree(mesh.vertices)
+        _, idx = tree.query(new_verts)
+        new_colors = mesh.vertex_colors[idx]
+
     return MeshData(
-        vertices=np.array(tri.vertices, dtype=np.float32),
+        vertices=new_verts,
         faces=np.array(tri.faces, dtype=np.int32),
         normals=None,
+        vertex_colors=new_colors,
         structure_name=mesh.structure_name,
         material=mesh.material,
     )

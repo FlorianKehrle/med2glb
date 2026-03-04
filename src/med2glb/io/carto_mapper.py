@@ -12,9 +12,9 @@ import numpy as np
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import KDTree
 
+from med2glb.core.types import CARTO_INACTIVE_GROUP_ID as _INACTIVE_GROUP_ID
 from med2glb.core.types import CartoMesh, CartoPoint, MeshData
 from med2glb.io.carto_colormaps import COLORMAPS
-from med2glb.io.carto_reader import _INACTIVE_GROUP_ID
 
 logger = logging.getLogger("med2glb")
 

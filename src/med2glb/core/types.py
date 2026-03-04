@@ -140,6 +140,14 @@ class CartoPoint:
     lat: float  # ms, NaN if sentinel -10000
 
 
+# CARTO sentinel / marker constants
+CARTO_LAT_SENTINEL = -10000
+"""LAT values equal to this in _car.txt files indicate 'no measurement'."""
+
+CARTO_INACTIVE_GROUP_ID = -1000000
+"""Vertex/face group ID marking inactive (fill) geometry in .mesh files."""
+
+
 @dataclass
 class CartoMesh:
     """Surface mesh from a CARTO .mesh file."""

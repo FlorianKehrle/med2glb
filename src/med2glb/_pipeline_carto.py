@@ -449,8 +449,36 @@ def _convert_carto_meshes(
             },
         }
 
-        # === Emit each variant from cached state ===
+        # === Pre-compute animated cache if multiple animated variants ===
         _n_frames = 30
+        animated_variants = [
+            (a, v) for a, v in variants if a and points
+        ]
+        anim_cache = None
+        if len(animated_variants) > 1 and active_lat is not None:
+            from med2glb.glb.carto_builder import prepare_animated_cache
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(bar_width=20),
+                MofNCompleteColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Pre-computing animated cache...", total=None)
+
+                def _cache_progress(desc: str, current: int, _total: int) -> None:
+                    progress.update(task, description=desc)
+
+                anim_cache = prepare_animated_cache(
+                    mesh_data, active_lat, n_frames=_n_frames,
+                    target_faces=config.target_faces,
+                    max_size_mb=config.max_size_mb,
+                    progress=_cache_progress,
+                )
+                progress.remove_task(task)
+
+        # === Emit each variant from cached state ===
         for do_animate, do_vectors in variants:
             anim_suffix = "_animated" if (do_animate and points) else ""
             vec_suffix = "_vectors" if do_vectors else ""
@@ -493,6 +521,7 @@ def _convert_carto_meshes(
                         vectors=do_vectors,
                         progress=_anim_progress,
                         legend_info=legend_info,
+                        cache=anim_cache,
                     )
                     if not written:
                         console.print(
