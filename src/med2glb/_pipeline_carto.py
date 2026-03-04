@@ -263,11 +263,14 @@ def _build_compressed_carto_variant(
         tree = KDTree(mesh_data.vertices)
         _, idx = tree.query(decimated.vertices)
         decimated_lat = active_lat[idx]
-        build_carto_animated_glb(
+        written = build_carto_animated_glb(
             decimated, decimated_lat, compressed_path,
             target_faces=target_faces,
             vectors=vectors,
         )
+        if not written:
+            progress.remove_task(task)
+            return
     else:
         from med2glb.glb.builder import build_glb
         build_glb([decimated], compressed_path, extra_meshes=extra_meshes, source_units="mm")
@@ -483,7 +486,7 @@ def _convert_carto_meshes(
                                         completed=current + 1)
 
                     progress.update(task, description="Building excitation ring animation...")
-                    build_carto_animated_glb(
+                    written = build_carto_animated_glb(
                         mesh_data, active_lat, out_path,
                         target_faces=config.target_faces,
                         max_size_mb=config.max_size_mb,
@@ -491,6 +494,12 @@ def _convert_carto_meshes(
                         progress=_anim_progress,
                         legend_info=legend_info,
                     )
+                    if not written:
+                        console.print(
+                            f"[yellow]  Skipped {out_path.name}: vectors not viable, "
+                            f"non-vector variant already covers this.[/yellow]"
+                        )
+                        continue
                     progress.update(task, completed=_total_steps)
                 else:
                     progress.update(task, description="Building GLB...")

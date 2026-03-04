@@ -54,7 +54,7 @@ def build_carto_animated_glb(
     vectors: bool = False,
     progress: Callable[[str, int, int], None] | None = None,
     legend_info: dict | None = None,
-) -> None:
+) -> bool:
     """Build animated GLB with CARTO-style highlight ring over static colormap.
 
     The static vertex colors (from any coloring mode) remain visible at all
@@ -73,6 +73,11 @@ def build_carto_animated_glb(
             face count that balances quality and file size.
         vectors: If True, add animated LAT streamline arrows.
         progress: Optional callback(description, current, total) for progress.
+
+    Returns:
+        True if the GLB was written, False if skipped (vectors requested but
+        streamline quality was insufficient — the non-vectors variant already
+        covers this case).
     """
     def _report(desc: str, current: int = 0, total: int = 0) -> None:
         if progress:
@@ -104,7 +109,7 @@ def build_carto_animated_glb(
         # No valid LAT — fall back to static export
         from med2glb.glb.builder import build_glb
         build_glb([mesh_data], output_path, source_units="mm")
-        return
+        return True
 
     lat_min = float(np.nanmin(lat_values))
     lat_max = float(np.nanmax(lat_values))
@@ -112,7 +117,7 @@ def build_carto_animated_glb(
     if lat_range < 1e-6:
         from med2glb.glb.builder import build_glb
         build_glb([mesh_data], output_path, source_units="mm")
-        return
+        return True
 
     # Normalize LAT to [0, 1]
     lat_norm = (lat_values - lat_min) / lat_range
@@ -160,13 +165,15 @@ def build_carto_animated_glb(
             mesh_data.vertices, mesh_data.faces, lat_values,
             mesh_data.normals, target_count=300,
         )
-        if streamlines:
-            bbox_diag = float(np.linalg.norm(
-                mesh_data.vertices.max(0) - mesh_data.vertices.min(0)))
-            good, reason = assess_streamline_quality(streamlines, bbox_diag)
-            if not good:
-                logger.warning("Vectors skipped: %s", reason)
-                streamlines = []
+        if not streamlines:
+            logger.warning("Vectors skipped: no streamlines traced")
+            return False
+        bbox_diag = float(np.linalg.norm(
+            mesh_data.vertices.max(0) - mesh_data.vertices.min(0)))
+        good, reason = assess_streamline_quality(streamlines, bbox_diag)
+        if not good:
+            logger.warning("Vectors skipped: %s", reason)
+            return False
         if streamlines:
             _report(f"Generating dash animation for {len(streamlines)} streamlines...")
             arrow_frame_dashes = compute_animated_dashes(
@@ -440,3 +447,4 @@ def build_carto_animated_glb(
         f"{len(mesh_data.vertices)} verts, "
         f"{output_path.stat().st_size / 1024:.0f} KB"
     )
+    return True
