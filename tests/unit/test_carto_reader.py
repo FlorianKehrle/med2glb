@@ -110,6 +110,39 @@ class TestParseMeshFile:
         assert "LAT" in mesh.color_names
 
 
+class TestTransparentGroupsIDs:
+    def test_parsed_when_present(self, tmp_path):
+        """TransparentGroupsIDs header is parsed into a list of ints."""
+        mesh_text = """\
+#TriangulatedMeshVersion2.0
+[GeneralAttributes]
+MeshID = 1
+NumVertex = 3
+NumTriangle = 1
+MeshColor = 0 1 0 1
+ColorsNames = LAT
+NumTransparentGroups = 5
+TransparentGroupsIDs = 0 1 2 3 4
+
+[VerticesSection]
+0 = 0 0 0 0 0 1 0
+1 = 10 0 0 0 0 1 0
+2 = 5 10 0 0 0 1 0
+
+[TrianglesSection]
+0 = 0 1 2 0 0 1 0
+"""
+        mesh_file = tmp_path / "1-Test.mesh"
+        mesh_file.write_text(mesh_text, encoding="utf-8")
+        mesh = parse_mesh_file(mesh_file)
+        assert mesh.transparent_group_ids == [0, 1, 2, 3, 4]
+
+    def test_empty_when_absent(self, carto_mesh_dir):
+        """When no TransparentGroupsIDs header exists, list is empty."""
+        mesh = parse_mesh_file(carto_mesh_dir / "1-TestMap.mesh")
+        assert mesh.transparent_group_ids == []
+
+
 class TestParseCarFile:
     def test_synthetic_car(self, carto_mesh_dir):
         version, points = parse_car_file(carto_mesh_dir / "1-TestMap_car.txt")

@@ -20,7 +20,7 @@ _REPO = Path(__file__).parent.parent.parent
 DICOM_DATA = _REPO / "test_data" / "DICOM"
 
 # Persistent output directory for inspecting GLBs after test runs
-_GLB_OUTPUT = _REPO / "integration_test_output" / "dicom"
+_GLB_OUTPUT = _REPO / "test_data" / "integration_test_output" / "dicom"
 
 # Transplant patient — 97-slice CT volume (512x512, 1.27mm spacing, 3mm thickness)
 TRANSPLANT_CT = DICOM_DATA / "Transplant" / "BPL-CT"
@@ -32,6 +32,30 @@ SEHNE_DIR = DICOM_DATA / "Sehnenfadenabriss" / "GEMS_IMG"
 @pytest.fixture(autouse=True)
 def _load_methods():
     _ensure_methods_loaded()
+
+
+# ---------------------------------------------------------------------------
+# Module-scoped fixtures for expensive data loading (loaded once, reused)
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def transplant_loaded():
+    """Load Transplant CT volume once for the entire module."""
+    if not TRANSPLANT_CT.exists() or not list(TRANSPLANT_CT.glob("*.dcm")):
+        pytest.skip("Transplant CT data not available")
+    _ensure_methods_loaded()
+    from med2glb.io.dicom_reader import load_dicom_directory
+
+    return load_dicom_directory(TRANSPLANT_CT)
+
+
+@pytest.fixture(scope="module")
+def sehne_loaded():
+    """Load Sehnenfadenabriss US data once for the entire module."""
+    if not SEHNE_DIR.exists():
+        pytest.skip("Sehnenfadenabriss ultrasound data not available")
+    from med2glb.io.dicom_reader import load_dicom_directory
+
+    return load_dicom_directory(SEHNE_DIR)
 
 
 @pytest.fixture
@@ -70,22 +94,18 @@ class TestTransplantCT:
         assert len(vol_series) >= 1, f"Expected 3D volume, got: {[s.data_type for s in series]}"
         assert vol_series[0].modality == "CT"
 
-    def test_load_volume(self):
+    def test_load_volume(self, transplant_loaded):
         """Loading should produce a valid 3D volume."""
-        from med2glb.io.dicom_reader import InputType, load_dicom_directory
-
-        input_type, volume = load_dicom_directory(TRANSPLANT_CT)
+        input_type, volume = transplant_loaded
         assert input_type == InputType.VOLUME
         assert volume.voxels.ndim == 3
         assert volume.voxels.shape[0] >= 90  # ~97 slices
         assert volume.voxels.shape[1] == 512
         assert volume.voxels.shape[2] == 512
 
-    def test_classical_method(self, transplant_output):
+    def test_classical_method(self, transplant_loaded, transplant_output):
         """Classical method (Gaussian + adaptive threshold) on real CT."""
-        from med2glb.io.dicom_reader import load_dicom_directory
-
-        _, volume = load_dicom_directory(TRANSPLANT_CT)
+        _, volume = transplant_loaded
         method = get_method("classical")
         params = MethodParams(smoothing_iterations=5, target_faces=20000)
         result = method.convert(volume, params)
@@ -99,12 +119,11 @@ class TestTransplantCT:
         assert output.exists()
         assert output.stat().st_size > 1000
 
-    def test_marching_cubes_method(self, transplant_output):
+    def test_marching_cubes_method(self, transplant_loaded, transplant_output):
         """Marching cubes method on real CT."""
-        from med2glb.io.dicom_reader import load_dicom_directory
         from med2glb.mesh.processing import process_mesh
 
-        _, volume = load_dicom_directory(TRANSPLANT_CT)
+        _, volume = transplant_loaded
         method = get_method("marching-cubes")
         params = MethodParams(threshold=200.0, smoothing_iterations=5, target_faces=20000)
         result = method.convert(volume, params)
@@ -121,12 +140,9 @@ class TestTransplantCT:
         gltf = pygltflib.GLTF2.load(str(output))
         assert len(gltf.meshes) >= 1
 
-    def test_marching_cubes_multi_threshold(self, transplant_output):
+    def test_marching_cubes_multi_threshold(self, transplant_loaded, transplant_output):
         """Multi-threshold marching cubes on real CT (bone + tissue)."""
-        from med2glb.io.dicom_reader import load_dicom_directory
-        from med2glb.mesh.processing import process_mesh
-
-        _, volume = load_dicom_directory(TRANSPLANT_CT)
+        _, volume = transplant_loaded
         method = get_method("marching-cubes")
 
         # Two thresholds: soft tissue and bone
@@ -175,19 +191,15 @@ class TestSehnenfadenabrissUS:
         cine = [s for s in us_series if s.is_multiframe and s.number_of_frames > 1]
         assert len(cine) >= 1, f"Expected multi-frame US, got frames: {[s.number_of_frames for s in us_series]}"
 
-    def test_load_multiframe(self):
+    def test_load_multiframe(self, sehne_loaded):
         """Loading should produce temporal or single-slice data from multi-frame US."""
-        from med2glb.io.dicom_reader import load_dicom_directory
-
-        input_type, data = load_dicom_directory(SEHNE_DIR)
+        input_type, data = sehne_loaded
         # Multi-frame US detected as temporal (3D+T) or single slice (2D cine)
         assert input_type in (InputType.TEMPORAL, InputType.SINGLE_SLICE)
 
-    def test_textured_plane_glb(self, sehne_output):
+    def test_textured_plane_glb(self, sehne_loaded, sehne_output):
         """Build a textured plane GLB from ultrasound data."""
-        from med2glb.io.dicom_reader import load_dicom_directory
-
-        input_type, data = load_dicom_directory(SEHNE_DIR)
+        input_type, data = sehne_loaded
         if input_type == InputType.SINGLE_SLICE:
             from med2glb.glb.texture import build_textured_plane_glb
             output = sehne_output / "sehnenfadenabriss_us_textured-plane.glb"

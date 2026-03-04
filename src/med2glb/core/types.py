@@ -152,6 +152,7 @@ class CartoMesh:
     face_group_ids: np.ndarray  # int32 [M] — face group IDs
     mesh_color: tuple[float, float, float, float]  # RGBA default color
     color_names: list[str]  # names of per-vertex color channels
+    transparent_group_ids: list[int] = field(default_factory=list)
     structure_name: str = ""
 
 

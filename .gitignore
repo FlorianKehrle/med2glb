@@ -36,7 +36,6 @@ htmlcov/
 
 # Test data (large CARTO exports, DICOM files, generated GLBs, etc.)
 test_data/
-integration_test_output/
 
 # Windows artifacts
 nul

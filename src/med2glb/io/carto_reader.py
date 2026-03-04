@@ -134,6 +134,15 @@ def parse_mesh_file(path: Path) -> CartoMesh:
     color_names_str = attrs.get("ColorsNames", "")
     color_names = color_names_str.split() if color_names_str else []
 
+    # Parse TransparentGroupsIDs (space-separated ints, e.g. "0 1 2 3 4")
+    transparent_str = attrs.get("TransparentGroupsIDs", "")
+    transparent_group_ids: list[int] = []
+    if transparent_str.strip():
+        try:
+            transparent_group_ids = [int(x) for x in transparent_str.split()]
+        except ValueError:
+            logger.debug("Could not parse TransparentGroupsIDs: %s", transparent_str)
+
     # Parse vertices
     vertices, normals, group_ids = _parse_vertices_section(text, num_vertex)
 
@@ -151,6 +160,7 @@ def parse_mesh_file(path: Path) -> CartoMesh:
         face_group_ids=face_group_ids,
         mesh_color=mesh_color,
         color_names=color_names,
+        transparent_group_ids=transparent_group_ids,
         structure_name=structure_name,
     )
 

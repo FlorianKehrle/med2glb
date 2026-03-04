@@ -7,6 +7,7 @@ import pytest
 
 from med2glb.io.carto_colormaps import bipolar_colormap, lat_colormap, unipolar_colormap
 from med2glb.io.carto_mapper import (
+    _find_dominant_face_group,
     build_inactive_mask,
     carto_mesh_to_mesh_data,
     interpolate_sparse_values,
@@ -82,6 +83,33 @@ class TestBuildInactiveMask:
         assert mask[0] is np.True_
         assert mask[3] is np.True_
         assert np.sum(mask) == 2
+
+
+class TestFindDominantFaceGroup:
+    def test_excludes_transparent_groups(self):
+        """Dominant group should skip transparent fill groups even if they have more faces."""
+        # Group 0 (transparent fill): 100 faces, Group 5 (visible): 80 faces
+        face_group_ids = np.array([0] * 100 + [5] * 80, dtype=np.int32)
+        result = _find_dominant_face_group(face_group_ids, transparent_group_ids=[0, 1, 2, 3, 4])
+        assert result == 5
+
+    def test_no_transparent_list(self):
+        """Without transparent list, falls back to overall argmax."""
+        face_group_ids = np.array([0] * 100 + [5] * 80, dtype=np.int32)
+        result = _find_dominant_face_group(face_group_ids, transparent_group_ids=None)
+        assert result == 0
+
+    def test_all_transparent_fallback(self):
+        """If all groups are transparent, falls back to argmax."""
+        face_group_ids = np.array([0] * 100 + [1] * 80, dtype=np.int32)
+        result = _find_dominant_face_group(face_group_ids, transparent_group_ids=[0, 1])
+        assert result == 0
+
+    def test_empty_transparent_list(self):
+        """Empty transparent list behaves like None."""
+        face_group_ids = np.array([0] * 100 + [5] * 80, dtype=np.int32)
+        result = _find_dominant_face_group(face_group_ids, transparent_group_ids=[])
+        assert result == 0
 
 
 class TestCartoMeshToMeshData:

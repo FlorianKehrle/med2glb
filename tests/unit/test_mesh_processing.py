@@ -11,6 +11,7 @@ from med2glb.mesh.processing import (
     decimate,
     fill_holes,
     process_mesh,
+    remove_small_components,
     taubin_smooth,
 )
 
@@ -77,3 +78,89 @@ def test_process_mesh_full_pipeline(sphere_mesh):
     )
     assert result.normals is not None
     assert len(result.faces) <= 120  # Rough target
+
+
+def test_compute_normals_preserves_vertex_colors(sphere_mesh):
+    """compute_normals must forward vertex_colors (Issue A fix)."""
+    colors = np.random.rand(len(sphere_mesh.vertices), 4).astype(np.float32)
+    sphere_mesh.vertex_colors = colors
+    result = compute_normals(sphere_mesh)
+    assert result.vertex_colors is not None
+    np.testing.assert_array_equal(result.vertex_colors, colors)
+
+
+def test_compute_normals_none_colors(sphere_mesh):
+    """compute_normals with no vertex_colors keeps None."""
+    assert sphere_mesh.vertex_colors is None
+    result = compute_normals(sphere_mesh)
+    assert result.vertex_colors is None
+
+
+class TestRemoveSmallComponents:
+    def test_removes_tiny_fragment(self):
+        """A small disconnected triangle should be removed."""
+        import trimesh
+
+        # Main component: icosphere (~1280 faces)
+        sphere = trimesh.creation.icosphere(subdivisions=3, radius=5.0)
+        main_verts = np.array(sphere.vertices, dtype=np.float32)
+        main_faces = np.array(sphere.faces, dtype=np.int32)
+
+        # Tiny fragment: one triangle far away
+        frag_verts = np.array([[100, 0, 0], [101, 0, 0], [100, 1, 0]], dtype=np.float32)
+        frag_faces = np.array([[len(main_verts), len(main_verts) + 1, len(main_verts) + 2]], dtype=np.int32)
+
+        all_verts = np.vstack([main_verts, frag_verts])
+        all_faces = np.vstack([main_faces, frag_faces])
+
+        mesh = MeshData(
+            vertices=all_verts, faces=all_faces,
+            structure_name="test", material=MaterialConfig(),
+        )
+        result = remove_small_components(mesh)
+        # Fragment (1 face) is <1% of total → removed
+        assert len(result.faces) == len(main_faces)
+
+    def test_preserves_vertex_colors(self):
+        """vertex_colors should survive small component removal."""
+        import trimesh
+
+        sphere = trimesh.creation.icosphere(subdivisions=3, radius=5.0)
+        n = len(sphere.vertices)
+        colors = np.random.rand(n + 3, 4).astype(np.float32)
+
+        frag_verts = np.array([[100, 0, 0], [101, 0, 0], [100, 1, 0]], dtype=np.float32)
+        frag_faces = np.array([[n, n + 1, n + 2]], dtype=np.int32)
+
+        mesh = MeshData(
+            vertices=np.vstack([np.array(sphere.vertices, dtype=np.float32), frag_verts]),
+            faces=np.vstack([np.array(sphere.faces, dtype=np.int32), frag_faces]),
+            vertex_colors=colors,
+            structure_name="test", material=MaterialConfig(),
+        )
+        result = remove_small_components(mesh)
+        assert result.vertex_colors is not None
+        assert result.vertex_colors.shape == (n, 4)
+
+    def test_no_colors_ok(self):
+        """Works fine when vertex_colors is None."""
+        import trimesh
+
+        sphere = trimesh.creation.icosphere(subdivisions=3, radius=5.0)
+        n = len(sphere.vertices)
+
+        frag_verts = np.array([[100, 0, 0], [101, 0, 0], [100, 1, 0]], dtype=np.float32)
+        frag_faces = np.array([[n, n + 1, n + 2]], dtype=np.int32)
+
+        mesh = MeshData(
+            vertices=np.vstack([np.array(sphere.vertices, dtype=np.float32), frag_verts]),
+            faces=np.vstack([np.array(sphere.faces, dtype=np.int32), frag_faces]),
+            structure_name="test", material=MaterialConfig(),
+        )
+        result = remove_small_components(mesh)
+        assert result.vertex_colors is None
+
+    def test_single_component_noop(self, sphere_mesh):
+        """Single-component mesh is returned unchanged."""
+        result = remove_small_components(sphere_mesh)
+        assert result is sphere_mesh

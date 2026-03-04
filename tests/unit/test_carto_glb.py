@@ -66,7 +66,12 @@ class TestCartoAnimatedGlb:
     def test_build_animated_glb(self, synthetic_carto_mesh, synthetic_carto_points, tmp_path):
         """Test animated GLB creation from CARTO data."""
         from med2glb.glb.carto_builder import build_carto_animated_glb
-        from med2glb.io.carto_mapper import carto_mesh_to_mesh_data, map_points_to_vertices
+        from med2glb.io.carto_mapper import (
+            carto_mesh_to_mesh_data,
+            map_points_to_vertices,
+            interpolate_sparse_values,
+        )
+        from scipy.spatial import KDTree
 
         mesh_data = carto_mesh_to_mesh_data(
             synthetic_carto_mesh, synthetic_carto_points, coloring="lat", subdivide=0
@@ -74,9 +79,11 @@ class TestCartoAnimatedGlb:
         lat_values = map_points_to_vertices(
             synthetic_carto_mesh, synthetic_carto_points, field="lat"
         )
-        # Filter to active vertices (all active in synthetic mesh)
-        active_mask = synthetic_carto_mesh.group_ids != -1000000
-        active_lat = lat_values[active_mask]
+        lat_values = interpolate_sparse_values(synthetic_carto_mesh, lat_values)
+        # Resample to mesh_data vertices (may differ from raw mesh vertex count)
+        tree = KDTree(synthetic_carto_mesh.vertices)
+        _, idx = tree.query(mesh_data.vertices)
+        active_lat = lat_values[idx]
 
         output = tmp_path / "animated_carto.glb"
         build_carto_animated_glb(
@@ -120,7 +127,11 @@ class TestCartoAnimatedGlb:
     def test_single_frame_no_division_error(self, synthetic_carto_mesh, synthetic_carto_points, tmp_path):
         """n_frames=1 must not raise ZeroDivisionError."""
         from med2glb.glb.carto_builder import build_carto_animated_glb
-        from med2glb.io.carto_mapper import carto_mesh_to_mesh_data, map_points_to_vertices
+        from med2glb.io.carto_mapper import (
+            carto_mesh_to_mesh_data, map_points_to_vertices,
+            interpolate_sparse_values,
+        )
+        from scipy.spatial import KDTree
 
         mesh_data = carto_mesh_to_mesh_data(
             synthetic_carto_mesh, synthetic_carto_points, coloring="lat", subdivide=0
@@ -128,8 +139,10 @@ class TestCartoAnimatedGlb:
         lat_values = map_points_to_vertices(
             synthetic_carto_mesh, synthetic_carto_points, field="lat"
         )
-        active_mask = synthetic_carto_mesh.group_ids != -1000000
-        active_lat = lat_values[active_mask]
+        lat_values = interpolate_sparse_values(synthetic_carto_mesh, lat_values)
+        tree = KDTree(synthetic_carto_mesh.vertices)
+        _, idx = tree.query(mesh_data.vertices)
+        active_lat = lat_values[idx]
 
         output = tmp_path / "single_frame.glb"
         build_carto_animated_glb(

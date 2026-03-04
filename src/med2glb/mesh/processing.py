@@ -137,6 +137,72 @@ def remove_degenerate(mesh: MeshData) -> MeshData:
     )
 
 
+def remove_small_components(
+    mesh: MeshData, min_face_fraction: float = 0.01,
+) -> MeshData:
+    """Remove connected components with fewer than *min_face_fraction* of total faces.
+
+    Preserves vertex_colors via direct vertex indexing (no KDTree).
+
+    Args:
+        mesh: Input mesh.
+        min_face_fraction: Minimum fraction of total faces a component must
+            have to be kept (default 1%).
+
+    Returns:
+        MeshData with small components removed, or the original if only one
+        component exists.
+    """
+    tri = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces, process=False)
+
+    if len(tri.faces) < 3:
+        return mesh
+
+    components = trimesh.graph.connected_components(tri.face_adjacency, min_len=1)
+
+    # face_adjacency omits isolated faces (no shared edges). Treat each as
+    # its own 1-face component so they can be filtered by the size threshold.
+    covered = np.zeros(len(tri.faces), dtype=bool)
+    for comp in components:
+        covered[comp] = True
+    for idx in np.where(~covered)[0]:
+        components.append(np.array([idx]))
+
+    if len(components) <= 1:
+        return mesh
+
+    min_faces = max(1, int(len(tri.faces) * min_face_fraction))
+    keep_face_mask = np.zeros(len(tri.faces), dtype=bool)
+    for comp in components:
+        if len(comp) >= min_faces:
+            keep_face_mask[comp] = True
+
+    if keep_face_mask.all():
+        return mesh
+
+    kept_faces = mesh.faces[keep_face_mask]
+    used_verts = np.unique(kept_faces.ravel())
+    old_to_new = np.full(len(mesh.vertices), -1, dtype=np.int32)
+    old_to_new[used_verts] = np.arange(len(used_verts), dtype=np.int32)
+
+    new_colors = None
+    if mesh.vertex_colors is not None:
+        new_colors = mesh.vertex_colors[used_verts]
+
+    new_normals = None
+    if mesh.normals is not None:
+        new_normals = mesh.normals[used_verts]
+
+    return MeshData(
+        vertices=mesh.vertices[used_verts],
+        faces=old_to_new[kept_faces],
+        normals=new_normals,
+        vertex_colors=new_colors,
+        structure_name=mesh.structure_name,
+        material=mesh.material,
+    )
+
+
 def compute_normals(mesh: MeshData) -> MeshData:
     """Recalculate vertex normals."""
     tri = trimesh.Trimesh(vertices=mesh.vertices, faces=mesh.faces, process=False)
@@ -146,6 +212,7 @@ def compute_normals(mesh: MeshData) -> MeshData:
         vertices=mesh.vertices,
         faces=mesh.faces,
         normals=normals,
+        vertex_colors=mesh.vertex_colors,
         structure_name=mesh.structure_name,
         material=mesh.material,
     )
