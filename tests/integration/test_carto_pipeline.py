@@ -18,7 +18,7 @@ from med2glb.cli_wizard import _MIN_LAT_RANGE_MS
 # Real test data paths (relative to repo root)
 _REPO = Path(__file__).parent.parent.parent
 TEST_DATA = _REPO / "test_data" / "CARTO"
-_GLB_OUTPUT = _REPO / "test_data" / "Output" / "carto"
+_GLB_OUTPUT = _REPO / "integration_test_output" / "carto"
 
 # v7.1 — single mesh (1-Map), sparse points, low vector quality
 CARTO_V71 = TEST_DATA / "Version_7.1.80.33" / "Study 1" / "Export_Study"
