@@ -451,6 +451,10 @@ def _convert_carto_meshes(
 
         # === Pre-compute animated cache if multiple animated variants ===
         _n_frames = 30
+        # Animated GLBs decompress 30 textures into GPU memory — cap file size
+        # to prevent HoloLens 2 crashes (30 frames × 4 MB/texture = 120 MB+ GPU).
+        _ANIMATED_MAX_SIZE_MB = 25
+        _anim_max_size = min(config.max_size_mb, _ANIMATED_MAX_SIZE_MB)
         animated_variants = [
             (a, v) for a, v in variants if a and points
         ]
@@ -473,7 +477,7 @@ def _convert_carto_meshes(
                 anim_cache = prepare_animated_cache(
                     mesh_data, active_lat, n_frames=_n_frames,
                     target_faces=config.target_faces,
-                    max_size_mb=config.max_size_mb,
+                    max_size_mb=_anim_max_size,
                     progress=_cache_progress,
                 )
                 progress.remove_task(task)
@@ -517,7 +521,7 @@ def _convert_carto_meshes(
                     written = build_carto_animated_glb(
                         mesh_data, active_lat, out_path,
                         target_faces=config.target_faces,
-                        max_size_mb=config.max_size_mb,
+                        max_size_mb=_anim_max_size,
                         vectors=do_vectors,
                         progress=_anim_progress,
                         legend_info=legend_info,
