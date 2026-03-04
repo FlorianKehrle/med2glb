@@ -156,7 +156,7 @@ def main(
     compress: str = typer.Option(
         "draco",
         "--compress",
-        help="Compression strategy: draco (default), downscale, jpeg.",
+        help="Compression strategy: draco (default), downscale, jpeg, ktx2.",
     ),
     do_list_series: bool = typer.Option(
         False,

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pygltflib
@@ -22,6 +26,7 @@ def constrain_glb_size(
       - draco: Draco mesh compression, then texture downscaling if needed.
       - downscale: Progressively reduce texture resolution (lossless PNG).
       - jpeg: Re-encode textures as JPEG with decreasing quality.
+      - ktx2: GPU-compressed textures via KTX2/Basis Universal (requires toktx).
 
     Returns True if any compression was applied.
     """
@@ -35,6 +40,8 @@ def constrain_glb_size(
         return _strategy_downscale(path, max_bytes)
     elif strategy == "jpeg":
         return _strategy_jpeg(path, max_bytes)
+    elif strategy == "ktx2":
+        return _strategy_ktx2(path, max_bytes)
     else:
         raise ValueError(f"Unknown compression strategy: {strategy}")
 
@@ -192,6 +199,220 @@ def _strategy_jpeg(path: Path, max_bytes: int) -> bool:
     logger.warning(
         f"JPEG compression applied (q={q}, scale={s}) but still "
         f"exceeds {_fmt(max_bytes)} ({_fmt(path.stat().st_size)})"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Strategy: KTX2 / Basis Universal (GPU-compressed textures)
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=1)
+def _has_toktx() -> bool:
+    """Check if the Khronos ``toktx`` CLI tool is on PATH."""
+    return shutil.which("toktx") is not None
+
+
+def _png_to_ktx2(png_bytes: bytes) -> bytes | None:
+    """Convert PNG bytes to KTX2 (UASTC + Zstandard) via ``toktx``.
+
+    Returns the KTX2 file bytes, or None on failure.
+    """
+    if not _has_toktx():
+        return None
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path = Path(td) / "input.png"
+            out_path = Path(td) / "output.ktx2"
+            in_path.write_bytes(png_bytes)
+
+            subprocess.run(
+                [
+                    "toktx",
+                    "--t2",
+                    "--encode", "uastc",
+                    "--uastc_quality", "2",
+                    "--zcmp", "5",
+                    str(out_path),
+                    str(in_path),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+
+            if out_path.exists():
+                return out_path.read_bytes()
+    except Exception as e:
+        logger.debug(f"toktx encoding failed: {e}")
+
+    return None
+
+
+def _try_ktx2_compress(
+    gltf: pygltflib.GLTF2,
+    blob: bytes,
+    image_bv_set: set[int],
+    scale: float = 1.0,
+) -> tuple[bytearray, bool]:
+    """Convert all PNG images in the GLB to KTX2.
+
+    If *scale* < 1.0, downscale images before KTX2 encoding.
+    Returns (new_blob, converted) where *converted* is True if any
+    image was successfully converted.
+    """
+    new_blob = bytearray()
+    new_offsets: dict[int, tuple[int, int]] = {}
+    converted_bvs: set[int] = set()
+
+    bv_order = sorted(
+        range(len(gltf.bufferViews)),
+        key=lambda i: gltf.bufferViews[i].byteOffset,
+    )
+
+    for bv_idx in bv_order:
+        bv = gltf.bufferViews[bv_idx]
+        old_data = blob[bv.byteOffset : bv.byteOffset + bv.byteLength]
+        new_offset = len(new_blob)
+
+        if bv_idx in image_bv_set:
+            # Optionally downscale before KTX2 encoding
+            src_data = old_data
+            if scale < 1.0:
+                src_data = _reencode_image(old_data, "PNG", 0, scale)
+
+            ktx2_data = _png_to_ktx2(src_data)
+            if ktx2_data is not None:
+                new_data = ktx2_data
+                converted_bvs.add(bv_idx)
+            else:
+                new_data = bytes(old_data)
+        else:
+            new_data = bytes(old_data)
+
+        new_offsets[bv_idx] = (new_offset, len(new_data))
+        new_blob.extend(new_data)
+
+        # 4-byte alignment
+        remainder = len(new_blob) % 4
+        if remainder:
+            new_blob.extend(b"\x00" * (4 - remainder))
+
+    if not converted_bvs:
+        return bytearray(blob), False
+
+    # Update bufferView offsets/lengths
+    for bv_idx, (offset, length) in new_offsets.items():
+        gltf.bufferViews[bv_idx].byteOffset = offset
+        gltf.bufferViews[bv_idx].byteLength = length
+
+    # Update image mimeTypes and add KHR_texture_basisu extension
+    img_idx_by_bv: dict[int, int] = {}
+    for idx, img in enumerate(gltf.images):
+        if img.bufferView in converted_bvs:
+            img.mimeType = "image/ktx2"
+            img_idx_by_bv[img.bufferView] = idx
+
+    # Add extension to textures referencing converted images
+    converted_img_indices = set(img_idx_by_bv.values())
+    for tex in gltf.textures:
+        if tex.source in converted_img_indices:
+            if tex.extensions is None:
+                tex.extensions = {}
+            tex.extensions["KHR_texture_basisu"] = {"source": tex.source}
+
+    # Register extension
+    ext_name = "KHR_texture_basisu"
+    if gltf.extensionsUsed is None:
+        gltf.extensionsUsed = []
+    if ext_name not in gltf.extensionsUsed:
+        gltf.extensionsUsed.append(ext_name)
+    if gltf.extensionsRequired is None:
+        gltf.extensionsRequired = []
+    if ext_name not in gltf.extensionsRequired:
+        gltf.extensionsRequired.append(ext_name)
+
+    gltf.buffers[0].byteLength = len(new_blob)
+
+    return new_blob, True
+
+
+def _strategy_ktx2(path: Path, max_bytes: int) -> bool:
+    """KTX2 GPU-compressed textures, with progressive downscale fallback."""
+    if not _has_toktx():
+        logger.warning("toktx not found on PATH — cannot apply KTX2 compression")
+        return False
+
+    gltf, blob, image_bv_set = _load_and_identify_images(path)
+    if not image_bv_set:
+        return False
+
+    original_size = path.stat().st_size
+
+    # Try KTX2 at full resolution first
+    new_blob, converted = _try_ktx2_compress(gltf, blob, image_bv_set)
+    if converted and _estimate_file_size(gltf, new_blob) <= max_bytes:
+        gltf.set_binary_blob(bytes(new_blob))
+        gltf.save(str(path))
+        logger.info(
+            f"KTX2 compression: {_fmt(original_size)} → {_fmt(path.stat().st_size)}"
+        )
+        return True
+
+    # Progressive downscale before KTX2 encoding
+    for scale in _DOWNSCALE_STEPS:
+        gltf, blob, image_bv_set = _load_and_identify_images(path)
+        new_blob, converted = _try_ktx2_compress(gltf, blob, image_bv_set, scale=scale)
+        if converted and _estimate_file_size(gltf, new_blob) <= max_bytes:
+            gltf.set_binary_blob(bytes(new_blob))
+            gltf.save(str(path))
+            logger.info(
+                f"KTX2 compression (scale={scale}): "
+                f"{_fmt(original_size)} → {_fmt(path.stat().st_size)}"
+            )
+            return True
+
+    # Apply best effort (smallest downscale + KTX2)
+    if converted:
+        gltf.set_binary_blob(bytes(new_blob))
+        gltf.save(str(path))
+        logger.warning(
+            f"KTX2 compression applied (scale={_DOWNSCALE_STEPS[-1]}) but still "
+            f"exceeds {_fmt(max_bytes)} ({_fmt(path.stat().st_size)})"
+        )
+        return True
+
+    return False
+
+
+def optimize_textures_ktx2(path: Path) -> bool:
+    """Apply KTX2 compression to all textures unconditionally.
+
+    Called from pipelines to ensure AR-optimized GPU-compressed textures
+    even when the file is already under the size limit.  Gracefully
+    returns False if ``toktx`` is not installed.
+    """
+    path = Path(path)
+    if not path.exists():
+        return False
+    if not _has_toktx():
+        logger.debug("toktx not available — skipping KTX2 texture optimization")
+        return False
+
+    gltf, blob, image_bv_set = _load_and_identify_images(path)
+    if not image_bv_set:
+        return False
+
+    original_size = path.stat().st_size
+    new_blob, converted = _try_ktx2_compress(gltf, blob, image_bv_set)
+    if not converted:
+        return False
+
+    gltf.set_binary_blob(bytes(new_blob))
+    gltf.save(str(path))
+    logger.info(
+        f"KTX2 texture optimization: {_fmt(original_size)} → {_fmt(path.stat().st_size)}"
     )
     return True
 

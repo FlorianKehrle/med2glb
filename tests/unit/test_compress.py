@@ -8,7 +8,13 @@ import numpy as np
 import pygltflib
 import pytest
 
-from med2glb.glb.compress import constrain_glb_size, _reencode_image
+from med2glb.glb.compress import (
+    constrain_glb_size,
+    optimize_textures_ktx2,
+    _has_toktx,
+    _png_to_ktx2,
+    _reencode_image,
+)
 
 
 def _build_textured_glb(path: Path, num_textures: int = 1, size: int = 128) -> None:
@@ -380,3 +386,105 @@ class TestReencodeImage:
         bad_data = b"not an image"
         result = _reencode_image(bad_data, "JPEG", 80, 1.0)
         assert result == bad_data
+
+
+class TestKtx2Compression:
+    """Tests for KTX2 / Basis Universal texture compression."""
+
+    def test_has_toktx_available(self, monkeypatch):
+        """_has_toktx returns True when toktx is on PATH."""
+        import shutil
+        import med2glb.glb.compress as compress_mod
+
+        # Clear the lru_cache before patching
+        compress_mod._has_toktx.cache_clear()
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/toktx" if name == "toktx" else None)
+        assert _has_toktx() is True
+        compress_mod._has_toktx.cache_clear()
+
+    def test_has_toktx_unavailable(self, monkeypatch):
+        """_has_toktx returns False when toktx is not installed."""
+        import shutil
+        import med2glb.glb.compress as compress_mod
+
+        compress_mod._has_toktx.cache_clear()
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        assert _has_toktx() is False
+        compress_mod._has_toktx.cache_clear()
+
+    def test_png_to_ktx2_fallback(self, monkeypatch):
+        """When toktx is unavailable, _png_to_ktx2 returns None gracefully."""
+        import shutil
+        import med2glb.glb.compress as compress_mod
+
+        compress_mod._has_toktx.cache_clear()
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        result = _png_to_ktx2(b"\x89PNG fake data")
+        assert result is None
+        compress_mod._has_toktx.cache_clear()
+
+    def test_strategy_ktx2_dispatch(self, tmp_path):
+        """constrain_glb_size recognizes the 'ktx2' strategy."""
+        path = tmp_path / "test.glb"
+        _build_textured_glb(path, num_textures=1, size=32)
+        # Should not raise ValueError for the ktx2 strategy
+        # (may return False if toktx is not installed, which is fine)
+        result = constrain_glb_size(path, max_bytes=1, strategy="ktx2")
+        assert isinstance(result, bool)
+
+    def test_optimize_textures_ktx2_no_toktx(self, tmp_path, monkeypatch):
+        """optimize_textures_ktx2 returns False when toktx is not installed."""
+        import shutil
+        import med2glb.glb.compress as compress_mod
+
+        compress_mod._has_toktx.cache_clear()
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+
+        path = tmp_path / "test.glb"
+        _build_textured_glb(path, num_textures=1, size=64)
+        original_size = path.stat().st_size
+
+        result = optimize_textures_ktx2(path)
+        assert result is False
+        assert path.stat().st_size == original_size
+        compress_mod._has_toktx.cache_clear()
+
+    def test_optimize_textures_ktx2_nonexistent(self):
+        """optimize_textures_ktx2 returns False for non-existent file."""
+        result = optimize_textures_ktx2(Path("/nonexistent/file.glb"))
+        assert result is False
+
+    @pytest.mark.skipif(
+        not __import__("shutil").which("toktx"),
+        reason="toktx not installed",
+    )
+    def test_png_to_ktx2_real(self):
+        """Integration: real PNG→KTX2 conversion with toktx."""
+        from med2glb.glb.texture import pixel_data_to_png
+
+        pixel_data = np.random.randint(0, 255, (64, 64), dtype=np.uint8)
+        png_bytes = pixel_data_to_png(pixel_data.astype(np.float32))
+
+        ktx2_bytes = _png_to_ktx2(png_bytes)
+        assert ktx2_bytes is not None
+        # KTX2 files start with the KTX2 identifier
+        assert ktx2_bytes[:7] == b"\xabKTX 20"
+
+    @pytest.mark.skipif(
+        not __import__("shutil").which("toktx"),
+        reason="toktx not installed",
+    )
+    def test_optimize_textures_ktx2_real(self, tmp_path):
+        """Integration: optimize_textures_ktx2 converts PNG textures to KTX2."""
+        path = tmp_path / "test.glb"
+        _build_textured_glb(path, num_textures=2, size=64)
+        original_size = path.stat().st_size
+
+        result = optimize_textures_ktx2(path)
+        assert result is True
+
+        # Verify GLB is still valid and has KTX2 textures
+        gltf = pygltflib.GLTF2.load(str(path))
+        assert "KHR_texture_basisu" in gltf.extensionsUsed
+        for img in gltf.images:
+            assert img.mimeType == "image/ktx2"

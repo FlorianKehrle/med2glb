@@ -509,6 +509,10 @@ def _convert_carto_meshes(
                     )
                     progress.update(task, completed=_total_steps)
 
+                # Apply KTX2 GPU-compressed textures when toktx is available
+                from med2glb.glb.compress import optimize_textures_ktx2
+                optimize_textures_ktx2(out_path)
+
                 # Produce a _compressed variant if the file exceeds the size limit
                 if config.max_size_mb > 0:
                     _build_compressed_carto_variant(
