@@ -140,8 +140,8 @@ def render_legend_wrap_image(
 
 def render_info_image(
     metadata: dict,
-    width: int = 256,
-    height: int = 256,
+    width: int = 320,
+    height: int = 224,
 ) -> bytes:
     """Render an opaque metadata info card as a PNG image.
 
@@ -153,7 +153,7 @@ def render_info_image(
     font_title = ImageFont.load_default(size=15)
 
     # Title
-    draw.text((width // 2, 10), "Study Info", fill=(255, 255, 255, 255),
+    draw.text((width // 2, 14), "Study Info", fill=(255, 255, 255, 255),
               font=font_title, anchor="mt")
 
     # Build lines from metadata
@@ -204,7 +204,7 @@ def render_info_image(
             lines.append((label, str(val)))
 
     # Render lines
-    y = 34
+    y = 38
     line_height = 22
     for label, value in lines:
         if y + line_height > height - 8:
@@ -510,8 +510,8 @@ def add_legend_nodes(
 
     panel_height = mesh_height * 0.30
     cylinder_radius = panel_height * 0.5 / np.pi  # circumference ≈ legend_width
-    info_height = panel_height * 0.75
-    info_width = info_height  # square aspect matching 256×256 texture
+    info_height = panel_height * 0.65
+    info_width = info_height * (320 / 224)  # match 320×224 texture aspect
 
     # Legend cylinder: right of mesh, centered at Y=0, Z=0
     legend_png = render_legend_wrap_image(coloring, clamp_range)

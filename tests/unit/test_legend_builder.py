@@ -57,7 +57,7 @@ def test_render_info_image_returns_valid_png():
     png = render_info_image(metadata)
     assert isinstance(png, bytes)
     img = Image.open(io.BytesIO(png))
-    assert img.size == (256, 256)
+    assert img.size == (320, 224)
     assert img.mode == "RGBA"
 
 
@@ -66,13 +66,13 @@ def test_render_info_image_partial_metadata():
     metadata = {"study_name": "Partial"}
     png = render_info_image(metadata)
     img = Image.open(io.BytesIO(png))
-    assert img.size == (256, 256)
+    assert img.size == (320, 224)
 
 
 def test_render_info_image_empty_metadata():
     png = render_info_image({})
     img = Image.open(io.BytesIO(png))
-    assert img.size == (256, 256)
+    assert img.size == (320, 224)
 
 
 # ---------------------------------------------------------------------------
