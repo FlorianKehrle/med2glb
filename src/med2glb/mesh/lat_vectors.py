@@ -360,7 +360,7 @@ def trace_all_streamlines(
     target_count: int = 300,
     step_size: float | None = None,
     max_steps: int = 200,
-) -> list[list[np.ndarray]]:
+) -> list[list[np.ndarray]] | tuple[list[list[np.ndarray]], np.ndarray, np.ndarray]:
     """Compute gradients, seed, and trace all streamlines.
 
     Args:
@@ -373,9 +373,14 @@ def trace_all_streamlines(
         max_steps: Maximum tracing steps per streamline.
 
     Returns:
-        List of polylines, each a list of 3D points.
+        Tuple of (streamlines, face_gradients, face_centers) where:
+        - streamlines: List of polylines, each a list of 3D points.
+        - face_gradients: [M, 3] gradient vector per face.
+        - face_centers: [M, 3] centroid of each face.
     """
-    face_grads, _, face_valid = compute_face_gradients(vertices, faces, lat_values)
+    face_grads, face_centers, face_valid = compute_face_gradients(
+        vertices, faces, lat_values,
+    )
 
     # Auto-scale step size from mesh bounding box
     if step_size is None:
@@ -390,7 +395,7 @@ def trace_all_streamlines(
 
     if not seeds:
         logger.warning("No valid streamline seeds found")
-        return []
+        return [], face_grads, face_centers
 
     adjacency = build_face_adjacency(faces)
 
@@ -405,7 +410,7 @@ def trace_all_streamlines(
             streamlines.append(path)
 
     logger.debug(f"Traced {len(streamlines)} streamlines (from {len(seeds)} seeds)")
-    return streamlines
+    return streamlines, face_grads, face_centers
 
 
 # ---------------------------------------------------------------------------

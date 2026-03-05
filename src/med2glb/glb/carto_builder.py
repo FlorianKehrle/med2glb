@@ -145,24 +145,18 @@ def prepare_animated_cache(
     else:
         base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
 
-    # Generate per-frame vertex colors with highlight ring (store as uint8
-    # immediately to cut memory from 16 bytes/vert to 4 bytes/vert per frame)
-    frame_colors_u8: list[np.ndarray] = []
-    for fi in range(n_frames):
-        _report(f"Generating frame {fi + 1}/{n_frames}...", fi, n_frames)
-        t = fi / max(n_frames - 1, 1)  # ring position in normalized LAT space
-        colors = base_colors.copy()
-
-        # Gaussian ring: bright band centered at current wavefront position
-        ring = np.exp(-((lat_norm - t) ** 2) / (2 * _RING_WIDTH ** 2))
-        ring[~valid_lat] = 0.0
-
-        # Additive brightening: preserves base hue, adds white light
-        add = ring.reshape(-1, 1) * _HIGHLIGHT_ADD
-        colors[:, :3] = np.minimum(colors[:, :3] + add, 1.0)
-        colors[:, 3] = 1.0
-
-        frame_colors_u8.append(np.clip(colors * 255 + 0.5, 0, 255).astype(np.uint8))
+    # Generate all frame vertex colors at once via batched numpy broadcast
+    _report("Generating frame colors...", 0, n_frames)
+    t_values = np.linspace(0, 1, n_frames).reshape(-1, 1)  # (F, 1)
+    sigma_sq_2 = 2 * _RING_WIDTH ** 2
+    ring_all = np.exp(-((lat_norm[np.newaxis, :] - t_values) ** 2) / sigma_sq_2)  # (F, N)
+    ring_all[:, ~valid_lat] = 0.0
+    add_all = ring_all[:, :, np.newaxis] * _HIGHLIGHT_ADD[np.newaxis, np.newaxis, :]  # (F, N, 3)
+    colors_all = np.broadcast_to(base_colors[np.newaxis, :, :], (n_frames, n_verts, 4)).copy()
+    colors_all[:, :, :3] = np.minimum(colors_all[:, :, :3] + add_all, 1.0)
+    colors_all[:, :, 3] = 1.0
+    frame_colors_u8 = np.clip(colors_all * 255 + 0.5, 0, 255).astype(np.uint8)
+    del colors_all, ring_all, add_all  # free intermediates
 
     # UV unwrap ONCE with xatlas, precompute raster map, apply per frame
     from med2glb.glb.vertex_color_bake import (
@@ -192,7 +186,7 @@ def prepare_animated_cache(
     frame_textures: list[bytes] = []
     for fi in range(n_frames):
         _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
-        colors_remapped = frame_colors_u8[fi][vmapping].astype(np.float32) / 255.0
+        colors_remapped = frame_colors_u8[fi, vmapping].astype(np.float32) / 255.0
         png_bytes = apply_rasterization_map(raster_map, colors_remapped)
         frame_textures.append(png_bytes)
 
@@ -310,25 +304,18 @@ def build_carto_animated_glb(
             # Fallback: neutral light gray if no colormap was applied
             base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
 
-        # Generate per-frame vertex colors with highlight ring (store as uint8
-        # immediately to cut memory from 16 bytes/vert to 4 bytes/vert per frame)
-        frame_colors_u8: list[np.ndarray] = []
-        for fi in range(n_frames):
-            _report(f"Generating frame {fi + 1}/{n_frames}...", fi, n_frames)
-            t = fi / max(n_frames - 1, 1)  # ring position in normalized LAT space
-            colors = base_colors.copy()
-
-            # Gaussian ring: bright band centered at current wavefront position
-            ring = np.exp(-((lat_norm - t) ** 2) / (2 * _RING_WIDTH ** 2))
-            ring[~valid_lat] = 0.0
-
-            # Additive brightening: preserves base hue, adds white light
-            # (red→yellow, green→bright green, blue→cyan — matches real CARTO)
-            add = ring.reshape(-1, 1) * _HIGHLIGHT_ADD
-            colors[:, :3] = np.minimum(colors[:, :3] + add, 1.0)
-            colors[:, 3] = 1.0
-
-            frame_colors_u8.append(np.clip(colors * 255 + 0.5, 0, 255).astype(np.uint8))
+        # Generate all frame vertex colors at once via batched numpy broadcast
+        _report("Generating frame colors...", 0, n_frames)
+        t_values = np.linspace(0, 1, n_frames).reshape(-1, 1)  # (F, 1)
+        sigma_sq_2 = 2 * _RING_WIDTH ** 2
+        ring_all = np.exp(-((lat_norm[np.newaxis, :] - t_values) ** 2) / sigma_sq_2)  # (F, N)
+        ring_all[:, ~valid_lat] = 0.0
+        add_all = ring_all[:, :, np.newaxis] * _HIGHLIGHT_ADD[np.newaxis, np.newaxis, :]  # (F, N, 3)
+        colors_all = np.broadcast_to(base_colors[np.newaxis, :, :], (n_frames, n_verts, 4)).copy()
+        colors_all[:, :, :3] = np.minimum(colors_all[:, :, :3] + add_all, 1.0)
+        colors_all[:, :, 3] = 1.0
+        frame_colors_u8 = np.clip(colors_all * 255 + 0.5, 0, 255).astype(np.uint8)
+        del colors_all, ring_all, add_all  # free intermediates
 
         # UV unwrap ONCE with xatlas, precompute raster map, apply per frame
         from med2glb.glb.vertex_color_bake import (
@@ -359,7 +346,7 @@ def build_carto_animated_glb(
         frame_textures: list[bytes] = []
         for fi in range(n_frames):
             _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
-            colors_remapped = frame_colors_u8[fi][vmapping].astype(np.float32) / 255.0
+            colors_remapped = frame_colors_u8[fi, vmapping].astype(np.float32) / 255.0
             png_bytes = apply_rasterization_map(raster_map, colors_remapped)
             frame_textures.append(png_bytes)
 
@@ -372,10 +359,10 @@ def build_carto_animated_glb(
     if vectors:
         from med2glb.mesh.lat_vectors import (
             trace_all_streamlines, compute_animated_dashes,
-            compute_face_gradients, compute_dash_speed_factors,
+            compute_dash_speed_factors,
             assess_streamline_quality,
         )
-        streamlines = trace_all_streamlines(
+        streamlines, face_grads, face_centers = trace_all_streamlines(
             mesh_data.vertices, mesh_data.faces, lat_values,
             mesh_data.normals, target_count=300,
         )
@@ -393,10 +380,7 @@ def build_carto_animated_glb(
             arrow_frame_dashes = compute_animated_dashes(
                 streamlines, n_frames=n_frames,
             )
-            # Speed-dependent sizing
-            face_grads, face_centers, _ = compute_face_gradients(
-                mesh_data.vertices, mesh_data.faces, lat_values,
-            )
+            # Speed-dependent sizing (reuse gradients from trace_all_streamlines)
             arrow_speed_factors = compute_dash_speed_factors(
                 arrow_frame_dashes, face_grads, face_centers,
             )

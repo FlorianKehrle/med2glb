@@ -193,7 +193,7 @@ class TestGenerateStreamlineSeeds:
 class TestTraceAllStreamlines:
     def test_traces_produce_polylines(self, larger_mesh):
         vertices, faces, normals, lat = larger_mesh
-        streamlines = trace_all_streamlines(
+        streamlines, *_ = trace_all_streamlines(
             vertices, faces, lat, normals, target_count=5, max_steps=50,
         )
         assert len(streamlines) > 0
@@ -206,7 +206,7 @@ class TestTraceAllStreamlines:
 class TestComputeAnimatedDashes:
     def test_frame_count(self, larger_mesh):
         vertices, faces, normals, lat = larger_mesh
-        streamlines = trace_all_streamlines(
+        streamlines, *_ = trace_all_streamlines(
             vertices, faces, lat, normals, target_count=5,
         )
         n_frames = 10
@@ -215,7 +215,7 @@ class TestComputeAnimatedDashes:
 
     def test_dashes_are_valid_segments(self, larger_mesh):
         vertices, faces, normals, lat = larger_mesh
-        streamlines = trace_all_streamlines(
+        streamlines, *_ = trace_all_streamlines(
             vertices, faces, lat, normals, target_count=5,
         )
         frames = compute_animated_dashes(streamlines, n_frames=5)
@@ -232,7 +232,7 @@ class TestComputeAnimatedDashes:
 
     def test_dashes_move_between_frames(self, larger_mesh):
         vertices, faces, normals, lat = larger_mesh
-        streamlines = trace_all_streamlines(
+        streamlines, *_ = trace_all_streamlines(
             vertices, faces, lat, normals, target_count=5,
         )
         frames = compute_animated_dashes(streamlines, n_frames=10)
@@ -287,7 +287,7 @@ class TestSmoothStreamline:
 class TestComputeDashSpeedFactors:
     def test_output_structure(self, larger_mesh):
         vertices, faces, normals, lat = larger_mesh
-        streamlines = trace_all_streamlines(
+        streamlines, *_ = trace_all_streamlines(
             vertices, faces, lat, normals, target_count=5,
         )
         frames = compute_animated_dashes(streamlines, n_frames=5)
@@ -299,7 +299,7 @@ class TestComputeDashSpeedFactors:
 
     def test_values_in_unit_range(self, larger_mesh):
         vertices, faces, normals, lat = larger_mesh
-        streamlines = trace_all_streamlines(
+        streamlines, *_ = trace_all_streamlines(
             vertices, faces, lat, normals, target_count=5,
         )
         frames = compute_animated_dashes(streamlines, n_frames=5)
@@ -319,7 +319,7 @@ class TestComputeDashSpeedFactors:
 class TestAssessStreamlineQuality:
     def test_good_streamlines_pass(self, larger_mesh):
         vertices, faces, normals, lat = larger_mesh
-        streamlines = trace_all_streamlines(
+        streamlines, *_ = trace_all_streamlines(
             vertices, faces, lat, normals, target_count=20, max_steps=100,
         )
         bbox_diag = float(np.linalg.norm(vertices.max(0) - vertices.min(0)))

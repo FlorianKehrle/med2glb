@@ -195,10 +195,7 @@ def _find_dominant_face_group(
     unique_gids, counts = np.unique(face_group_ids, return_counts=True)
 
     if transparent_group_ids:
-        transparent_set = set(transparent_group_ids)
-        non_transparent_mask = np.array(
-            [gid not in transparent_set for gid in unique_gids]
-        )
+        non_transparent_mask = ~np.isin(unique_gids, transparent_group_ids)
         if np.any(non_transparent_mask):
             filtered_idx = np.argmax(counts[non_transparent_mask])
             return int(unique_gids[non_transparent_mask][filtered_idx])
@@ -316,10 +313,7 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
     # Identify visible vertex groups from non-transparent face groups.
     # At this point clean_faces still uses original vertex indices.
     if mesh.transparent_group_ids:
-        transparent_set = set(mesh.transparent_group_ids)
-        surface_fmask = np.array(
-            [gid not in transparent_set for gid in clean_face_gids]
-        )
+        surface_fmask = ~np.isin(clean_face_gids, mesh.transparent_group_ids)
         surface_verts_idx = np.unique(clean_faces[surface_fmask].ravel())
         visible_vert_groups = (
             set(mesh.group_ids[surface_verts_idx].tolist())
@@ -372,7 +366,7 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
     # Mark fill-only vertices as inactive ONLY if the surface remains
     # connected without fill.  Multi-island remaps need fill geometry
     # for connectivity — stripping it would break the mesh into pieces.
-    fill_mask = np.array([gid not in visible_vert_groups for gid in new_group_ids])
+    fill_mask = ~np.isin(new_group_ids, list(visible_vert_groups))
     n_fill = int(np.sum(fill_mask))
     if n_fill > 0:
         # Check if surface-only faces form a single connected component
@@ -468,9 +462,8 @@ def carto_mesh_to_mesh_data(
 
     keep_fill = False
     if mesh.transparent_group_ids:
-        transparent_set = set(mesh.transparent_group_ids)
-        surface_mask = non_inactive_mask & np.array(
-            [gid not in transparent_set for gid in mesh.face_group_ids]
+        surface_mask = non_inactive_mask & ~np.isin(
+            mesh.face_group_ids, mesh.transparent_group_ids,
         )
         # Check connectivity of surface-only faces
         surface_faces_tmp = mesh.faces[surface_mask]

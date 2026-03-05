@@ -192,37 +192,57 @@ def parse_car_file(path: Path) -> tuple[str, list[CartoPoint]]:
     if header_match:
         version = f"{header_match.group(1)}.{header_match.group(2)}"
 
-    points: list[CartoPoint] = []
+    # Collect valid data lines for bulk parsing
+    valid_lines: list[str] = []
     for line in lines[1:]:
         line = line.strip()
-        if not line or not line.startswith("P"):
-            continue
+        if line and line.startswith("P"):
+            fields = line.split("\t")
+            if len(fields) >= 13:
+                valid_lines.append(line)
+            else:
+                logger.debug(f"Skipping car line with {len(fields)} fields: {line[:80]}")
 
-        fields = line.split("\t")
-        if len(fields) < 13:
-            logger.debug(f"Skipping car line with {len(fields)} fields: {line[:80]}")
-            continue
+    if not valid_lines:
+        return version, []
 
-        try:
-            point_id = int(fields[2])
-            x, y, z = float(fields[4]), float(fields[5]), float(fields[6])
-            ox, oy, oz = float(fields[7]), float(fields[8]), float(fields[9])
-            bipolar_v = float(fields[10])
-            unipolar_v = float(fields[11])
-            lat_raw = float(fields[12])
-            lat = float("nan") if lat_raw == _LAT_SENTINEL else lat_raw
+    # Bulk parse: extract columns 2,4-12 from tab-separated lines
+    try:
+        # Build numeric block from fields we need
+        rows: list[list[float]] = []
+        for line in valid_lines:
+            fields = line.split("\t")
+            # point_id(2), x(4), y(5), z(6), ox(7), oy(8), oz(9),
+            # bipolar(10), unipolar(11), lat(12)
+            rows.append([
+                float(fields[2]),
+                float(fields[4]), float(fields[5]), float(fields[6]),
+                float(fields[7]), float(fields[8]), float(fields[9]),
+                float(fields[10]), float(fields[11]), float(fields[12]),
+            ])
+        data = np.array(rows, dtype=np.float64)
+    except (ValueError, IndexError) as e:
+        logger.debug(f"Bulk car parse failed, falling back: {e}")
+        return version, []
 
-            points.append(CartoPoint(
-                point_id=point_id,
-                position=np.array([x, y, z], dtype=np.float64),
-                orientation=np.array([ox, oy, oz], dtype=np.float64),
-                bipolar_voltage=bipolar_v,
-                unipolar_voltage=unipolar_v,
-                lat=lat,
-            ))
-        except (ValueError, IndexError) as e:
-            logger.debug(f"Skipping malformed car line: {e}")
-            continue
+    point_ids = data[:, 0].astype(np.int64)
+    positions = data[:, 1:4]   # (N, 3)
+    orientations = data[:, 4:7]  # (N, 3)
+    bipolar_v = data[:, 7]
+    unipolar_v = data[:, 8]
+    lat_raw = data[:, 9]
+    lat_values = np.where(lat_raw == _LAT_SENTINEL, np.nan, lat_raw)
+
+    points: list[CartoPoint] = []
+    for i in range(len(data)):
+        points.append(CartoPoint(
+            point_id=int(point_ids[i]),
+            position=positions[i].copy(),
+            orientation=orientations[i].copy(),
+            bipolar_voltage=float(bipolar_v[i]),
+            unipolar_voltage=float(unipolar_v[i]),
+            lat=float(lat_values[i]),
+        ))
 
     return version, points
 
@@ -252,6 +272,20 @@ def _parse_general_attributes(text: str) -> dict[str, str]:
     return attrs
 
 
+def _extract_section(text: str, section_name: str) -> str:
+    """Extract the text block for a given [SectionName] from INI-style text."""
+    start_marker = f"[{section_name}]"
+    start = text.find(start_marker)
+    if start == -1:
+        return ""
+    start += len(start_marker)
+    # Find next section or end of text
+    next_section = text.find("[", start)
+    if next_section == -1:
+        return text[start:]
+    return text[start:next_section]
+
+
 def _parse_vertices_section(
     text: str, expected_count: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -259,45 +293,42 @@ def _parse_vertices_section(
 
     Returns (vertices[N,3], normals[N,3], group_ids[N]).
     """
-    vertices = np.zeros((expected_count, 3), dtype=np.float64)
-    normals = np.zeros((expected_count, 3), dtype=np.float64)
-    group_ids = np.zeros(expected_count, dtype=np.int32)
+    section = _extract_section(text, "VerticesSection")
+    if not section:
+        return (
+            np.zeros((0, 3), dtype=np.float64),
+            np.zeros((0, 3), dtype=np.float64),
+            np.zeros(0, dtype=np.int32),
+        )
 
-    in_section = False
-    count = 0
-
-    for line in text.splitlines():
+    # Strip "ID = " prefix from each data line, keep only numeric data
+    data_lines: list[str] = []
+    for line in section.splitlines():
         stripped = line.strip()
-        if stripped == "[VerticesSection]":
-            in_section = True
+        if not stripped or stripped.startswith(";"):
             continue
-        if stripped.startswith("[") and in_section:
-            break
-        if not in_section:
-            continue
-        if stripped.startswith(";") or not stripped:
-            continue
-
-        # Format: "ID = X Y Z NX NY NZ GroupID"
         parts = stripped.split("=", 1)
-        if len(parts) != 2:
-            continue
-        idx = int(parts[0].strip())
-        values = parts[1].split()
-        if len(values) < 7:
-            continue
+        if len(parts) == 2:
+            data_lines.append(parts[1])
 
-        if idx < expected_count:
-            vertices[idx] = [float(values[0]), float(values[1]), float(values[2])]
-            normals[idx] = [float(values[3]), float(values[4]), float(values[5])]
-            group_ids[idx] = int(values[6])
-            count += 1
+    if not data_lines:
+        return (
+            np.zeros((0, 3), dtype=np.float64),
+            np.zeros((0, 3), dtype=np.float64),
+            np.zeros(0, dtype=np.int32),
+        )
 
-    if count < expected_count:
-        # Trim to actual count
-        vertices = vertices[:count]
-        normals = normals[:count]
-        group_ids = group_ids[:count]
+    from io import StringIO
+    block = "\n".join(data_lines)
+    data = np.genfromtxt(StringIO(block), dtype=np.float64)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+
+    count = len(data)
+    # Columns: X Y Z NX NY NZ GroupID [possible extras]
+    vertices = data[:, :3]
+    normals = data[:, 3:6]
+    group_ids = data[:, 6].astype(np.int32)
 
     return vertices, normals, group_ids
 
@@ -309,39 +340,32 @@ def _parse_triangles_section(
 
     Returns (faces[M,3], face_group_ids[M]).
     """
-    faces = np.zeros((expected_count, 3), dtype=np.int32)
-    face_group_ids = np.zeros(expected_count, dtype=np.int32)
+    section = _extract_section(text, "TrianglesSection")
+    if not section:
+        return np.zeros((0, 3), dtype=np.int32), np.zeros(0, dtype=np.int32)
 
-    in_section = False
-    count = 0
-
-    for line in text.splitlines():
+    data_lines: list[str] = []
+    for line in section.splitlines():
         stripped = line.strip()
-        if stripped == "[TrianglesSection]":
-            in_section = True
+        if not stripped or stripped.startswith(";"):
             continue
-        if stripped.startswith("[") and in_section:
-            break
-        if not in_section:
-            continue
-        if stripped.startswith(";") or not stripped:
-            continue
-
         parts = stripped.split("=", 1)
-        if len(parts) != 2:
-            continue
-        idx = int(parts[0].strip())
-        values = parts[1].split()
-        if len(values) < 4:
-            continue
+        if len(parts) == 2:
+            data_lines.append(parts[1])
 
-        if idx < expected_count:
-            faces[idx] = [int(values[0]), int(values[1]), int(values[2])]
-            face_group_ids[idx] = int(values[6]) if len(values) >= 7 else 0
-            count += 1
+    if not data_lines:
+        return np.zeros((0, 3), dtype=np.int32), np.zeros(0, dtype=np.int32)
 
-    if count < expected_count:
-        faces = faces[:count]
-        face_group_ids = face_group_ids[:count]
+    from io import StringIO
+    block = "\n".join(data_lines)
+    data = np.genfromtxt(StringIO(block), dtype=np.float64)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+
+    faces = data[:, :3].astype(np.int32)
+    if data.shape[1] >= 7:
+        face_group_ids = data[:, 6].astype(np.int32)
+    else:
+        face_group_ids = np.zeros(len(data), dtype=np.int32)
 
     return faces, face_group_ids
