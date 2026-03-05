@@ -404,7 +404,7 @@ def trace_all_streamlines(
             path = _smooth_streamline(path)
             streamlines.append(path)
 
-    logger.info(f"Traced {len(streamlines)} streamlines (from {len(seeds)} seeds)")
+    logger.debug(f"Traced {len(streamlines)} streamlines (from {len(seeds)} seeds)")
     return streamlines
 
 

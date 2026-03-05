@@ -27,21 +27,47 @@ _RING_WIDTH = 0.025  # σ of Gaussian — narrow, sharp band like the real CARTO
 _HIGHLIGHT_ADD = np.array([0.55, 0.55, 0.55], dtype=np.float32)  # additive white brightness
 
 
-def _compute_anim_target_faces(
+def _compute_anim_budget(
     n_faces: int,
     n_frames: int,
     max_size_bytes: int,
-) -> int:
-    """Compute the max face count that keeps animated GLB under a size limit.
+) -> tuple[int, int]:
+    """Compute the optimal face count and texture size for an animated GLB.
 
-    Animated GLBs share geometry but duplicate COLOR_0 per frame.
-    Per-frame colors use uint8 RGBA (4 bytes/vert) instead of float32 (16).
-    Approximate bytes: F/2 * (60 + 4*N_frames) where F/2 ≈ vertex count.
+    Animated GLBs bake per-frame colors into PNG texture atlases.
+    File size ≈ ``n_frames × png_size + n_faces × geom_bytes``.
+
+    Strategy: try each texture resolution from highest to lowest.
+    For each, compute how many faces fit in the remaining budget.
+    Pick the combination that maximizes face count (geometry quality)
+    while using the highest affordable texture resolution.
+
+    Returns:
+        (target_faces, texture_size) — the optimal combination.
     """
-    bytes_per_face = (60 + 4 * n_frames) / 2  # ≈90 for 30 frames
-    max_faces = int(max_size_bytes / bytes_per_face)
-    # Clamp: never exceed original, never go below 10K
-    return max(10000, min(max_faces, n_faces))
+    # (texture_resolution, estimated_png_bytes) — highest quality first
+    _TEX_TIERS: list[tuple[int, int]] = [
+        (4096, 2_000_000),  # ~2 MB/PNG
+        (2048, 700_000),    # ~700 KB/PNG
+        (1024, 200_000),    # ~200 KB/PNG
+        (512, 50_000),      # ~50 KB/PNG
+    ]
+
+    geom_bytes_per_face = 80  # pos(12) + norm(12) + uv(8) + idx(12) ≈ unwelded
+
+    # Try each texture tier from highest to lowest resolution
+    for tex_size, png_size in _TEX_TIERS:
+        texture_cost = n_frames * png_size
+        if texture_cost >= max_size_bytes:
+            continue  # textures alone exceed budget
+        remaining = max_size_bytes - texture_cost
+        max_faces = int(remaining / geom_bytes_per_face)
+        max_faces = max(10000, min(max_faces, n_faces))
+        if max_faces >= 10000:
+            return max_faces, tex_size
+
+    # Fallback: smallest tier, minimum faces
+    return 10000, 512
 
 
 @dataclass
@@ -78,11 +104,11 @@ def prepare_animated_cache(
         if progress:
             progress(desc, current, total)
 
-    # Use whichever limit allows more faces (better quality)
-    size_based_target = _compute_anim_target_faces(
+    # Compute optimal face count and texture size for the budget
+    budget_faces, tex_size = _compute_anim_budget(
         len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
     )
-    effective_target = max(target_faces, size_based_target)
+    effective_target = min(target_faces, budget_faces)
 
     # Decimate if mesh is large (animation duplicates mesh N times)
     if len(mesh_data.faces) > effective_target:
@@ -143,10 +169,9 @@ def prepare_animated_cache(
         xatlas_unwrap,
         precompute_rasterization_map,
         apply_rasterization_map,
-        compute_texture_size,
     )
 
-    tex_size = compute_texture_size(len(mesh_data.faces))
+    # tex_size is from budget computation — decoupled from face count
 
     _report("UV unwrapping with xatlas...", 0, n_frames)
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
@@ -237,11 +262,11 @@ def build_carto_animated_glb(
         centroid = cache.centroid
         frame_textures = cache.frame_textures
     else:
-        # Use whichever limit allows more faces (better quality)
-        size_based_target = _compute_anim_target_faces(
+        # Compute optimal face count and texture size for the budget
+        budget_faces, tex_size = _compute_anim_budget(
             len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
         )
-        effective_target = max(target_faces, size_based_target)
+        effective_target = min(target_faces, budget_faces)
 
         # Decimate if mesh is large (animation duplicates mesh N times)
         if len(mesh_data.faces) > effective_target:
@@ -310,10 +335,9 @@ def build_carto_animated_glb(
             xatlas_unwrap,
             precompute_rasterization_map,
             apply_rasterization_map,
-            compute_texture_size,
         )
 
-        tex_size = compute_texture_size(len(mesh_data.faces))
+        # tex_size is from budget computation — decoupled from face count
 
         _report("UV unwrapping with xatlas...", 0, n_frames)
         vmapping, new_faces, shared_uvs = xatlas_unwrap(
@@ -346,7 +370,6 @@ def build_carto_animated_glb(
     arrow_frame_dashes = None
     arrow_speed_factors = None
     if vectors:
-        _report("Tracing streamlines...")
         from med2glb.mesh.lat_vectors import (
             trace_all_streamlines, compute_animated_dashes,
             compute_face_gradients, compute_dash_speed_factors,
@@ -357,13 +380,13 @@ def build_carto_animated_glb(
             mesh_data.normals, target_count=300,
         )
         if not streamlines:
-            logger.warning("Vectors skipped: no streamlines traced")
+            logger.debug("Vectors skipped: no streamlines traced")
             return False
         bbox_diag = float(np.linalg.norm(
             mesh_data.vertices.max(0) - mesh_data.vertices.min(0)))
         good, reason = assess_streamline_quality(streamlines, bbox_diag)
         if not good:
-            logger.warning("Vectors skipped: %s", reason)
+            logger.debug("Vectors skipped: %s", reason)
             return False
         if streamlines:
             _report(f"Generating dash animation for {len(streamlines)} streamlines...")
