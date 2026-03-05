@@ -35,12 +35,14 @@ def _compute_anim_budget(
     """Compute the optimal face count and texture size for an animated GLB.
 
     Animated GLBs bake per-frame colors into PNG texture atlases.
-    File size ≈ ``n_frames × png_size + n_faces × geom_bytes``.
+    File size ≈ ``n_frames × png_size + geom_bytes`` (geometry is shared
+    across all frames, so face count does not multiply with frame count).
 
-    Strategy: try each texture resolution from highest to lowest.
-    For each, compute how many faces fit in the remaining budget.
-    Pick the combination that maximizes face count (geometry quality)
-    while using the highest affordable texture resolution.
+    Strategy: prioritize geometry quality (face count) over texture
+    resolution.  CARTO color gradients are smooth, so lower-resolution
+    textures are visually acceptable, whereas aggressive decimation
+    creates obvious faceting.  Pick the highest texture resolution that
+    still allows all original faces to fit within the budget.
 
     Returns:
         (target_faces, texture_size) — the optimal combination.
@@ -55,19 +57,32 @@ def _compute_anim_budget(
 
     geom_bytes_per_face = 80  # pos(12) + norm(12) + uv(8) + idx(12) ≈ unwelded
 
-    # Try each texture tier from highest to lowest resolution
+    # Pick the highest texture tier that still allows all faces to fit.
+    # Iterate high→low; the first tier where all faces fit is the best.
+    # If no tier fits all faces, fall through to the max-faces fallback.
     for tex_size, png_size in _TEX_TIERS:
         texture_cost = n_frames * png_size
         if texture_cost >= max_size_bytes:
-            continue  # textures alone exceed budget
+            continue
         remaining = max_size_bytes - texture_cost
-        max_faces = int(remaining / geom_bytes_per_face)
-        max_faces = max(10000, min(max_faces, n_faces))
-        if max_faces >= 10000:
-            return max_faces, tex_size
+        achievable = min(n_faces, int(remaining / geom_bytes_per_face))
+        if achievable >= n_faces:
+            return n_faces, tex_size
 
-    # Fallback: smallest tier, minimum faces
-    return 10000, 512
+    # No tier can fit all faces — pick the tier that maximizes face count
+    # (lowest texture resolution = most room for geometry).
+    best_faces, best_tex = 10000, 512
+    for tex_size, png_size in reversed(_TEX_TIERS):
+        texture_cost = n_frames * png_size
+        if texture_cost >= max_size_bytes:
+            continue
+        remaining = max_size_bytes - texture_cost
+        achievable = max(10000, min(n_faces, int(remaining / geom_bytes_per_face)))
+        if achievable > best_faces:
+            best_faces = achievable
+            best_tex = tex_size
+
+    return best_faces, best_tex
 
 
 @dataclass
