@@ -18,7 +18,7 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 - **Automatic series detection** -- multi-series DICOM folders are analyzed and classified (3D volume, 2D cine, still image) with per-series conversion recommendations
 - **GLB output** -- with animation and PBR materials
 - **AR-optimized meshes** -- Taubin smoothing (volume-preserving), decimation to configurable triangle count, and configurable transparency
-- **GLB size constraint** -- automatic compression to fit AR viewer limits (default 99 MB) with three strategies: Draco mesh compression, texture downscaling, or JPEG re-encoding
+- **GLB compression** -- standalone `compress` subcommand to shrink GLB files with four strategies: KTX2 GPU textures, Draco mesh compression, texture downscaling, or JPEG re-encoding
 - **Multi-threshold layered output** -- extract multiple structures at different intensity thresholds with per-layer colors and transparency
 
 ## Installation
@@ -76,6 +76,7 @@ Coloring (lat / bipolar / unipolar) [lat]:
 Output mode (static / animated / both) [both]:
 LAT vectors (yes / no / only) [yes]:
 Subdivision level (0-3) [2]:
+Full quality animated? (y/n) [n]:
 
 → ./Export_Study/glb/ReBS_V_SR_11_lat.glb
 → ./Export_Study/glb/ReBS_V_SR_11_lat_animated.glb
@@ -246,28 +247,32 @@ med2glb ./dicom_folder/ -o output/ --gallery --series 1.2.840...
 
 The spatial layout uses `ImagePositionPatient` and `ImageOrientationPatient` from the DICOM metadata to place each quad at its real-world position. If no spatial metadata is available, the spatial output is skipped.
 
-## GLB Size Constraint
+## Compress
 
-Output GLB files are automatically constrained to 99 MB (configurable) to fit AR viewer limits. If a GLB exceeds the limit, the original file is kept and a compressed copy is saved alongside it with a `_compressed` suffix (e.g. `lightbox.glb` + `lightbox_compressed.glb`). Three compression strategies are available:
+The `compress` subcommand shrinks a GLB file to fit a target size. Animated CARTO GLBs are already budget-constrained upfront (25 MB cap for HoloLens 2 stability), so this command is primarily useful for post-hoc compression of any GLB.
+
+```bash
+# Compress in-place to 25 MB (default)
+med2glb compress model.glb
+
+# Custom target size
+med2glb compress model.glb --max-size 10
+
+# Output to a different file
+med2glb compress model.glb -o small.glb
+
+# Choose a compression strategy
+med2glb compress model.glb --strategy draco
+```
+
+Four compression strategies are available:
 
 | Strategy | Method | Quality | Speed |
 |---|---|---|---|
-| `draco` (default) | Draco mesh compression + texture downscale fallback | Best | Moderate |
+| `ktx2` (default) | KTX2 GPU-compressed textures (requires `toktx`) | Best | Moderate |
+| `draco` | Draco mesh compression + texture downscale fallback | Good | Moderate |
 | `downscale` | Progressive texture resolution reduction (lossless PNG) | High | Fast |
 | `jpeg` | JPEG re-encoding with decreasing quality | Lower | Fast |
-
-Draco compresses mesh geometry losslessly and falls back to texture downscaling if still over the limit. The downscale strategy keeps PNG format but reduces resolution in steps (75%, 50%, 37.5%, 25%). The JPEG strategy re-encodes textures with progressively lower quality (90 down to 30) and scaling.
-
-```bash
-# Custom size limit
-med2glb ./data/ --max-size 50
-
-# Use JPEG compression (smaller but lossy)
-med2glb ./data/ --compress jpeg
-
-# Disable size constraint
-med2glb ./data/ --max-size 0
-```
 
 ## Methods
 
@@ -349,8 +354,6 @@ Options:
   --faces INTEGER         Target triangle count after decimation (default: 80000)
   --alpha FLOAT           Global transparency 0.0-1.0 (default: 1.0)
   --multi-threshold TEXT   Multi-threshold config: "val:label:alpha,..."
-  --max-size INTEGER      Maximum output GLB file size in MB, 0 to disable (default: 99)
-  --compress TEXT         Compression strategy: draco, downscale, jpeg (default: draco)
   --batch                 Batch mode: find all CARTO exports in subdirectories and convert with shared settings
   --gallery               Gallery mode: individual GLBs, lightbox grid, and spatial fan
   --columns INTEGER       Lightbox grid columns in gallery mode (default: 6)
@@ -359,6 +362,18 @@ Options:
   --list-series           List DICOM series in input directory and exit
   -v, --verbose           Show detailed processing information
   --version               Show version and exit
+```
+
+```
+med2glb compress [OPTIONS] GLB_PATH
+
+Arguments:
+  GLB_PATH                GLB file to compress
+
+Options:
+  -s, --max-size INTEGER  Target size in MB (default: 25)
+  --strategy TEXT         Compression strategy: ktx2, draco, downscale, jpeg (default: ktx2)
+  -o, --output PATH       Output path (default: compress in-place)
 ```
 
 Passing any pipeline flag (`--method`, `--coloring`, `--animate`, `--vectors`, etc.) bypasses the interactive wizard and runs with the specified settings directly. The `-o` flag can be combined with the wizard to control the output location.

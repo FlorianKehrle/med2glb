@@ -119,8 +119,6 @@ def test_convert_series_single_file(dicom_directory, tmp_path):
         alpha=1.0,
         multi_threshold=None,
         series_uid=None,
-        max_size_mb=0,
-        compress_strategy="draco",
         verbose=False,
     )
     assert output.exists()
@@ -142,8 +140,6 @@ def test_convert_series_with_alpha(dicom_directory, tmp_path):
         alpha=0.5,
         multi_threshold=None,
         series_uid=None,
-        max_size_mb=0,
-        compress_strategy="draco",
         verbose=False,
     )
     assert output.exists()
@@ -169,8 +165,6 @@ def test_run_dicom_from_config(dicom_directory, tmp_path):
         target_faces=5000,
         alpha=1.0,
         series_uid=None,
-        max_size_mb=0,
-        compress_strategy="draco",
         verbose=False,
         name="test",
     )

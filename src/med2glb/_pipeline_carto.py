@@ -124,6 +124,19 @@ def _extract_active_lat(
     return lat_values[idx]
 
 
+def _format_duration(seconds: float) -> str:
+    """Format seconds as human-readable duration (e.g. '2.3s', '1m 23s', '1h 5m')."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h {mins}m"
+
+
 def _print_carto_summary(
     study: "CartoStudy",
     mesh: "CartoMesh",
@@ -177,110 +190,7 @@ def _print_carto_summary(
     console.print(f"  Animated:   {anim_desc}")
     console.print(f"  Output:     {out_path}")
     console.print(f"  Size:       {file_size:.1f} KB")
-    console.print(f"  Time:       {elapsed:.1f}s")
-
-
-def _estimate_carto_faces_for_limit(
-    max_bytes: int,
-    n_frames: int = 1,
-    animated: bool = False,
-) -> int:
-    """Estimate the maximum face count for a CARTO GLB to stay under max_bytes.
-
-    CARTO GLBs store vertex positions (12B), normals (12B), colors (16B) per
-    vertex, plus 12B per face for indices.  Animated GLBs duplicate colors for
-    each frame.  A ~10% overhead accounts for glTF JSON, buffer alignment, and
-    animation channels.
-    """
-    overhead = 1.10  # 10% for JSON + headers + animation data
-    # verts ≈ faces × 0.5 (shared vertices in a triangle mesh)
-    vert_ratio = 0.5
-    if animated:
-        # Per-vertex: pos(12) + norm(12) + color(16) × n_frames
-        bytes_per_vert = 12 + 12 + 16 * n_frames
-    else:
-        bytes_per_vert = 12 + 12 + 16  # pos + norm + color
-    bytes_per_face = 12  # 3 × uint32
-    bytes_per_face_total = bytes_per_face + bytes_per_vert * vert_ratio
-    usable = max_bytes / overhead
-    return max(1000, int(usable / bytes_per_face_total))
-
-
-def _decimate_with_colors(mesh_data: "MeshData", target_faces: int) -> "MeshData":
-    """Decimate a MeshData preserving vertex colors, then recompute normals."""
-    from med2glb.mesh.processing import decimate, compute_normals
-
-    result = decimate(mesh_data, target_faces=target_faces)
-    return compute_normals(result)
-
-
-
-def _build_compressed_carto_variant(
-    original_path: Path,
-    max_size_mb: int,
-    mesh_data: "MeshData",
-    is_animated: bool,
-    n_frames: int,
-    vectors: bool,
-    active_lat: "np.ndarray | None",
-    extra_meshes: "list[MeshData] | None",
-    progress: Progress,
-) -> None:
-    """Build a _compressed variant of a CARTO GLB if it exceeds the size limit.
-
-    The original full-quality file is kept untouched.  A second file with
-    ``_compressed`` in the name is created by rebuilding the GLB with a reduced
-    face count that should fit within *max_size_mb*.
-    """
-    max_bytes = max_size_mb * 1024 * 1024
-    if not original_path.exists() or original_path.stat().st_size <= max_bytes:
-        return
-
-    original_kb = original_path.stat().st_size / 1024
-    target_faces = _estimate_carto_faces_for_limit(
-        max_bytes, n_frames=n_frames if is_animated else 1, animated=is_animated,
-    )
-
-    # Don't bother if the target is already close to the current face count
-    if target_faces >= len(mesh_data.faces):
-        return
-
-    compressed_path = original_path.with_name(
-        original_path.stem + "_compressed" + original_path.suffix
-    )
-
-    task = progress.add_task(
-        f"Building compressed variant ({original_kb:.0f} KB > {max_size_mb} MB)...",
-        total=None,
-    )
-
-    decimated = _decimate_with_colors(mesh_data, target_faces)
-
-    if is_animated and active_lat is not None:
-        from med2glb.glb.carto_builder import build_carto_animated_glb
-        from scipy.spatial import KDTree
-        # Resample LAT values to decimated vertex positions
-        tree = KDTree(mesh_data.vertices)
-        _, idx = tree.query(decimated.vertices)
-        decimated_lat = active_lat[idx]
-        written = build_carto_animated_glb(
-            decimated, decimated_lat, compressed_path,
-            target_faces=target_faces,
-            vectors=vectors,
-        )
-        if not written:
-            progress.remove_task(task)
-            return
-    else:
-        from med2glb.glb.builder import build_glb
-        build_glb([decimated], compressed_path, extra_meshes=extra_meshes, source_units="mm")
-
-    new_kb = compressed_path.stat().st_size / 1024
-    progress.update(
-        task,
-        description=f"Compressed variant: {new_kb:.0f} KB ({compressed_path.name})",
-    )
-    progress.remove_task(task)
+    console.print(f"  Time:       {_format_duration(elapsed)}")
 
 
 def _load_carto_study(input_path: Path) -> "CartoStudy":
@@ -454,10 +364,28 @@ def _convert_carto_meshes(
         # Animated GLBs decompress 30 textures into GPU memory — cap file size
         # to prevent HoloLens 2 crashes (30 frames × 4 MB/texture = 120 MB+ GPU).
         _ANIMATED_MAX_SIZE_MB = 25
-        _anim_max_size = min(config.max_size_mb, _ANIMATED_MAX_SIZE_MB)
+        if config.full_quality:
+            _anim_max_size = 500  # effectively uncapped
+        else:
+            _anim_max_size = _ANIMATED_MAX_SIZE_MB
         animated_variants = [
             (a, v) for a, v in variants if a and points
         ]
+
+        # Show budget info when animated quality is constrained
+        if animated_variants:
+            from med2glb.glb.carto_builder import _compute_anim_budget
+            _orig_faces = len(mesh_data.faces)
+            _budget_faces, _budget_tex = _compute_anim_budget(
+                _orig_faces, _n_frames, int(_anim_max_size * 1024 * 1024),
+            )
+            _eff_faces = min(config.target_faces, _budget_faces)
+            if _orig_faces > _eff_faces:
+                console.print(
+                    f"  [dim]Budget: {_anim_max_size} MB limit → "
+                    f"{_eff_faces:,} faces, {_budget_tex}×{_budget_tex} textures "
+                    f"(reduced from {_orig_faces:,} faces)[/dim]"
+                )
         anim_cache = None
         if len(animated_variants) > 1 and active_lat is not None:
             from med2glb.glb.carto_builder import prepare_animated_cache
@@ -501,6 +429,7 @@ def _convert_carto_meshes(
             else:
                 _total_steps = 1
 
+            _variant_written = True
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -528,12 +457,9 @@ def _convert_carto_meshes(
                         cache=anim_cache,
                     )
                     if not written:
-                        console.print(
-                            f"[yellow]  Skipped {out_path.name}: vectors not viable, "
-                            f"non-vector variant already covers this.[/yellow]"
-                        )
-                        continue
-                    progress.update(task, completed=_total_steps)
+                        _variant_written = False
+                    else:
+                        progress.update(task, completed=_total_steps)
                 else:
                     progress.update(task, description="Building GLB...")
                     build_glb(
@@ -542,18 +468,17 @@ def _convert_carto_meshes(
                     )
                     progress.update(task, completed=_total_steps)
 
-                # Apply KTX2 GPU-compressed textures when toktx is available
-                from med2glb.glb.compress import optimize_textures_ktx2
-                optimize_textures_ktx2(out_path)
+                if _variant_written:
+                    # Apply KTX2 GPU-compressed textures when toktx is available
+                    from med2glb.glb.compress import optimize_textures_ktx2
+                    optimize_textures_ktx2(out_path)
 
-                # Produce a _compressed variant if the file exceeds the size limit
-                if config.max_size_mb > 0:
-                    _build_compressed_carto_variant(
-                        out_path, config.max_size_mb, mesh_data,
-                        do_animate and bool(points), _n_frames, do_vectors,
-                        active_lat if (do_animate and points) else None,
-                        None, progress,
-                    )
+            if not _variant_written:
+                console.print(
+                    f"  [dim]Skipped vectors variant — data not suitable, "
+                    f"non-vector variant already covers this.[/dim]"
+                )
+                continue
 
             _print_carto_summary(
                 study, mesh, mesh_data, points, config.coloring,
@@ -584,7 +509,6 @@ def run_carto_pipeline(
     subdivide: int,
     animate: bool,
     vectors: str,
-    max_size_mb: int,
     target_faces: int,
 ) -> None:
     """Execute the CARTO conversion pipeline."""
@@ -663,6 +587,5 @@ def run_carto_pipeline(
         vectors=effective_vectors,
         vector_mesh_indices=vec_suitable_list,
         target_faces=target_faces,
-        max_size_mb=max_size_mb,
     )
     _convert_carto_meshes(config, study, start_time)

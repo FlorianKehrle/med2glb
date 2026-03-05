@@ -11,7 +11,6 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn
 
 from med2glb._console import console
 from med2glb._pipeline_dicom import (
-    enforce_size_limit,
     print_series_table,
     _interactive_select_series,
 )
@@ -31,8 +30,6 @@ def run_gallery_mode(
     series: str | None,
     columns: int,
     no_animate: bool,
-    max_size_mb: int = 0,
-    compress_strategy: str = "draco",
     verbose: bool = False,
 ) -> None:
     """Execute gallery mode: individual GLBs, lightbox grid, and spatial fan."""
@@ -126,9 +123,6 @@ def run_gallery_mode(
             )
             progress.update(task, description=f"Built {len(individual_paths)} individual GLBs")
             progress.remove_task(task)
-            if max_size_mb > 0:
-                for p in individual_paths:
-                    enforce_size_limit(p, max_size_mb, compress_strategy, progress)
 
             # Step 3: Lightbox GLB (inside the series folder)
             lightbox_path = series_dir / "lightbox.glb"
@@ -137,8 +131,6 @@ def run_gallery_mode(
                 slices, lightbox_path, columns=columns, animate=animate,
             )
             progress.remove_task(task)
-            if max_size_mb > 0:
-                enforce_size_limit(lightbox_path, max_size_mb, compress_strategy, progress)
 
             # Step 4: Spatial fan GLB (inside the series folder)
             spatial_path = series_dir / "spatial.glb"
@@ -147,8 +139,6 @@ def run_gallery_mode(
                 slices, spatial_path, animate=animate,
             )
             progress.remove_task(task)
-            if max_size_mb > 0 and spatial_created:
-                enforce_size_limit(spatial_path, max_size_mb, compress_strategy, progress)
 
         summary = {
             "name": series_name,

@@ -113,9 +113,7 @@ def enforce_size_limit(
 ) -> None:
     """Compress a GLB file if it exceeds the size limit.
 
-    Tries texture-based compression (for DICOM GLBs with textures).
-    For CARTO GLBs (vertex-color only), use _build_compressed_carto_variant
-    instead — this function only handles texture-based strategies.
+    Tries texture-based compression (for GLBs with textures).
     """
     max_bytes = max_size_mb * 1024 * 1024
     if not path.exists() or path.stat().st_size <= max_bytes:
@@ -244,8 +242,6 @@ def run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
         alpha=config.alpha,
         multi_threshold=None,
         series_uid=config.series_uid,
-        max_size_mb=config.max_size_mb,
-        compress_strategy=config.compress_strategy,
         verbose=config.verbose,
     )
 
@@ -263,8 +259,6 @@ def run_pipeline(
     alpha: float,
     multi_threshold: str | None,
     series: str | None,
-    max_size_mb: int,
-    compress_strategy: str,
     verbose: bool,
 ) -> None:
     """Execute the conversion pipeline with series selection."""
@@ -282,8 +276,6 @@ def run_pipeline(
             target_faces=target_faces,
             alpha=alpha,
             series_uid=series,
-            max_size_mb=max_size_mb,
-            compress_strategy=compress_strategy,
             verbose=verbose,
         )
         output_dir = output.parent
@@ -305,8 +297,6 @@ def run_pipeline(
             alpha=alpha,
             multi_threshold=multi_threshold,
             series_uid=series,
-            max_size_mb=max_size_mb,
-            compress_strategy=compress_strategy,
             verbose=verbose,
         )
         return
@@ -332,8 +322,6 @@ def run_pipeline(
             alpha=alpha,
             multi_threshold=multi_threshold,
             series_uid=info.series_uid,
-            max_size_mb=max_size_mb,
-            compress_strategy=compress_strategy,
             verbose=verbose,
         )
         return
@@ -372,8 +360,6 @@ def run_pipeline(
             alpha=alpha,
             multi_threshold=multi_threshold,
             series_uid=info.series_uid,
-            max_size_mb=max_size_mb,
-            compress_strategy=compress_strategy,
             verbose=verbose,
         )
 
@@ -390,8 +376,6 @@ def convert_series(
     alpha: float,
     multi_threshold: str | None,
     series_uid: str | None,
-    max_size_mb: int = 0,
-    compress_strategy: str = "draco",
     verbose: bool = False,
 ) -> ConversionStats | None:
     """Execute the full conversion pipeline for a single series."""
@@ -449,8 +433,6 @@ def convert_series(
                 )
                 build_textured_plane_glb(data.frames[0], output)
                 progress.remove_task(task)
-                if max_size_mb > 0:
-                    enforce_size_limit(output, max_size_mb, compress_strategy, progress)
 
                 file_size = output.stat().st_size / 1024
                 elapsed = time.time() - start_time
@@ -467,8 +449,6 @@ def convert_series(
 
             build_textured_plane_glb(data, output)
             progress.remove_task(task)
-            if max_size_mb > 0:
-                enforce_size_limit(output, max_size_mb, compress_strategy, progress)
 
             # Print summary for single slice
             file_size = output.stat().st_size / 1024
@@ -491,8 +471,6 @@ def convert_series(
 
                 build_animated_textured_plane_glb(data, output)
                 progress.remove_task(task)
-                if max_size_mb > 0:
-                    enforce_size_limit(output, max_size_mb, compress_strategy, progress)
 
                 file_size = output.stat().st_size / 1024
                 elapsed = time.time() - start_time
@@ -553,9 +531,6 @@ def convert_series(
         _export(result, output, format, animate)
         progress.remove_task(task)
 
-        # Step 6: Constrain file size
-        if max_size_mb > 0 and format == "glb":
-            enforce_size_limit(output, max_size_mb, compress_strategy, progress)
 
     # Print summary
     elapsed = time.time() - start_time
@@ -634,8 +609,6 @@ def run_compare_mode(
                 alpha=config.alpha,
                 multi_threshold=None,
                 series_uid=config.series_uid,
-                max_size_mb=config.max_size_mb,
-                compress_strategy=config.compress_strategy,
                 verbose=config.verbose,
             )
             if result is not None:

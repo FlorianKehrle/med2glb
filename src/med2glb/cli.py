@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 
 import typer
@@ -20,6 +21,7 @@ app = typer.Typer(
     name="med2glb",
     help="Convert DICOM medical imaging data to GLB 3D models.",
     add_completion=False,
+    invoke_without_command=True,
 )
 
 logger = logging.getLogger("med2glb")
@@ -48,11 +50,11 @@ def list_methods_callback(value: bool):
         raise typer.Exit()
 
 
-@app.command()
+@app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
     input_path: Path = typer.Argument(
-        ...,
+        None,
         help="Path to a DICOM file or directory containing DICOM files.",
         exists=True,
     ),
@@ -148,16 +150,6 @@ def main(
         "--no-animate",
         help="Force static output even if temporal data is detected.",
     ),
-    max_size: int = typer.Option(
-        99,
-        "--max-size",
-        help="Maximum output GLB file size in MB (0 to disable).",
-    ),
-    compress: str = typer.Option(
-        "draco",
-        "--compress",
-        help="Compression strategy: draco (default), downscale, jpeg, ktx2.",
-    ),
     do_list_series: bool = typer.Option(
         False,
         "--list-series",
@@ -183,6 +175,15 @@ def main(
     ),
 ):
     """Convert DICOM medical imaging data to GLB 3D models."""
+    # If a subcommand is being invoked, skip the main logic
+    if ctx.invoked_subcommand is not None:
+        return
+
+    # input_path is required when running the main command (not subcommands)
+    if input_path is None:
+        err_console.print("[red]Error: Missing argument 'INPUT_PATH'.[/red]")
+        raise typer.Exit(code=2)
+
     from med2glb._pipeline_carto import run_carto_from_config, run_carto_pipeline
     from med2glb._pipeline_dicom import run_dicom_from_config, run_pipeline, print_series_table
     from med2glb._pipeline_gallery import run_gallery_mode
@@ -443,7 +444,6 @@ def main(
                         subdivide=subdivide,
                         animate=animate,
                         vectors="yes" if vectors else "no",
-                        max_size_mb=max_size,
                         target_faces=faces,
                     )
             return
@@ -467,7 +467,6 @@ def main(
                             subdivide=subdivide,
                             animate=animate,
                             vectors="yes" if vectors else "no",
-                            max_size_mb=max_size,
                             target_faces=faces,
                         )
                     return
@@ -478,7 +477,6 @@ def main(
                     subdivide=subdivide,
                     animate=animate,
                     vectors="yes" if vectors else "no",
-                    max_size_mb=max_size,
                     target_faces=faces,
                 )
                 return
@@ -490,8 +488,6 @@ def main(
                 series=series,
                 columns=columns,
                 no_animate=no_animate,
-                max_size_mb=max_size,
-                compress_strategy=compress,
                 verbose=verbose,
             )
         else:
@@ -508,8 +504,6 @@ def main(
                 alpha=alpha,
                 multi_threshold=multi_threshold,
                 series=series,
-                max_size_mb=max_size,
-                compress_strategy=compress,
                 verbose=verbose,
             )
     except ValueError as e:
@@ -530,6 +524,74 @@ def main(
             import traceback
             err_console.print(traceback.format_exc())
         raise typer.Exit(code=1)
+
+
+@app.command()
+def compress(
+    glb_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        help="GLB file to compress.",
+    ),
+    max_size: int = typer.Option(
+        25,
+        "--max-size",
+        "-s",
+        help="Target size in MB.",
+    ),
+    strategy: str = typer.Option(
+        "ktx2",
+        "--strategy",
+        help="Compression strategy: ktx2, draco, downscale, jpeg.",
+    ),
+    output: Path = typer.Option(
+        None,
+        "-o",
+        "--output",
+        help="Output path (default: compress in-place).",
+    ),
+):
+    """Compress a GLB file to fit a target size."""
+    if glb_path.suffix.lower() != ".glb":
+        err_console.print(f"[red]Error: {glb_path} is not a GLB file.[/red]")
+        raise typer.Exit(code=1)
+
+    from med2glb.glb.compress import constrain_glb_size
+
+    target_path = output if output is not None else glb_path
+    if output is not None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(glb_path, target_path)
+
+    original_size = target_path.stat().st_size
+    max_bytes = max_size * 1024 * 1024
+
+    if original_size <= max_bytes:
+        console.print(
+            f"[green]Already within limit:[/green] "
+            f"{original_size / 1024:.0f} KB <= {max_size} MB"
+        )
+        raise typer.Exit()
+
+    console.print(
+        f"Compressing {target_path.name} "
+        f"({original_size / 1024:.0f} KB → {max_size} MB target, "
+        f"strategy: {strategy})..."
+    )
+
+    applied = constrain_glb_size(target_path, max_bytes, strategy=strategy)
+
+    new_size = target_path.stat().st_size
+    if applied and new_size < original_size:
+        console.print(
+            f"[green]Compressed:[/green] "
+            f"{original_size / 1024:.0f} KB → {new_size / 1024:.0f} KB"
+        )
+    else:
+        console.print(
+            f"[yellow]No further compression possible:[/yellow] "
+            f"{new_size / 1024:.0f} KB"
+        )
 
 
 def _was_option_provided(ctx: typer.Context, param_name: str) -> bool:
