@@ -40,12 +40,12 @@ def test_full_pipeline(dicom_directory, tmp_path):
     result = runner.invoke(
         app,
         [
-            str(dicom_directory),
             "-o", str(output),
             "-m", "marching-cubes",
             "--threshold", "250",
             "--smoothing", "3",
             "--faces", "5000",
+            str(dicom_directory),
         ],
     )
     assert result.exit_code == 0, f"CLI failed: {result.output}"
@@ -106,12 +106,12 @@ def test_multi_series_non_tty_auto_selects(dicom_multi_series_directory, tmp_pat
     result = runner.invoke(
         app,
         [
-            str(dicom_multi_series_directory),
             "-o", str(output),
             "-m", "marching-cubes",
             "--threshold", "250",
             "--smoothing", "3",
             "--faces", "5000",
+            str(dicom_multi_series_directory),
         ],
     )
     assert result.exit_code == 0, f"CLI failed: {result.output}"
@@ -123,8 +123,8 @@ def test_list_series_enriched(dicom_multi_series_with_multiframe_directory):
     result = runner.invoke(
         app,
         [
-            str(dicom_multi_series_with_multiframe_directory),
             "--list-series",
+            str(dicom_multi_series_with_multiframe_directory),
         ],
     )
     assert result.exit_code == 0
