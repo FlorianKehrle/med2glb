@@ -31,6 +31,7 @@ def _compute_anim_budget(
     n_faces: int,
     n_frames: int,
     max_size_bytes: int,
+    target_faces: int = 80000,
 ) -> tuple[int, int]:
     """Compute the optimal face count and texture size for an animated GLB.
 
@@ -43,8 +44,9 @@ def _compute_anim_budget(
     geometry quality within AR file-size budgets.
 
     Strategy: prioritize geometry quality (face count) over texture
-    resolution.  Pick the highest texture resolution that still allows
-    all original faces to fit within the budget.
+    resolution.  The effective face goal is ``min(n_faces, target_faces)``
+    — pick the highest texture resolution that still allows at least that
+    many faces to fit.
 
     Returns:
         (target_faces, texture_size) — the optimal combination.
@@ -58,21 +60,19 @@ def _compute_anim_budget(
     ]
 
     geom_bytes_per_face = 80  # pos(12) + norm(12) + uv(8) + idx(12) ~ unwelded
+    face_goal = min(n_faces, target_faces)
 
-    # Pick the highest texture tier that still allows all faces to fit.
-    # Iterate high->low; the first tier where all faces fit is the best.
-    # If no tier fits all faces, fall through to the max-faces fallback.
+    # Pick the highest texture tier that fits the face goal.
     for tex_size, img_size in _TEX_TIERS:
         texture_cost = n_frames * img_size
         if texture_cost >= max_size_bytes:
             continue
         remaining = max_size_bytes - texture_cost
         achievable = min(n_faces, int(remaining / geom_bytes_per_face))
-        if achievable >= n_faces:
-            return n_faces, tex_size
+        if achievable >= face_goal:
+            return achievable, tex_size
 
-    # No tier can fit all faces — pick the tier that maximizes face count
-    # (lowest texture resolution = most room for geometry).
+    # No tier fits even the face goal — maximize faces at lowest texture.
     best_faces, best_tex = 10000, 512
     for tex_size, img_size in reversed(_TEX_TIERS):
         texture_cost = n_frames * img_size
@@ -124,10 +124,11 @@ def prepare_animated_cache(
     # Compute optimal face count and texture size for the budget
     budget_faces, tex_size = _compute_anim_budget(
         len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
+        target_faces=target_faces,
     )
     effective_target = min(target_faces, budget_faces)
 
-    # Decimate if mesh is large (animation duplicates mesh N times)
+    # Decimate if mesh is large
     if len(mesh_data.faces) > effective_target:
         _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
         from med2glb.mesh.processing import decimate, compute_normals
@@ -279,10 +280,11 @@ def build_carto_animated_glb(
         # Compute optimal face count and texture size for the budget
         budget_faces, tex_size = _compute_anim_budget(
             len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
+            target_faces=target_faces,
         )
         effective_target = min(target_faces, budget_faces)
 
-        # Decimate if mesh is large (animation duplicates mesh N times)
+        # Decimate if mesh is large
         if len(mesh_data.faces) > effective_target:
             _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
             from med2glb.mesh.processing import decimate, compute_normals

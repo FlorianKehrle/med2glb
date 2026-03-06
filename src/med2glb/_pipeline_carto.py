@@ -378,6 +378,7 @@ def _convert_carto_meshes(
             _orig_faces = len(mesh_data.faces)
             _budget_faces, _budget_tex = _compute_anim_budget(
                 _orig_faces, _n_frames, int(_anim_max_size * 1024 * 1024),
+                target_faces=config.target_faces,
             )
             _eff_faces = min(config.target_faces, _budget_faces)
             if _orig_faces > _eff_faces:
