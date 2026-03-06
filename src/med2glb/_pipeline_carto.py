@@ -361,32 +361,10 @@ def _convert_carto_meshes(
 
         # === Pre-compute animated cache if multiple animated variants ===
         _n_frames = 30
-        # Animated GLBs decompress 30 textures into GPU memory — cap file size
-        # to prevent HoloLens 2 crashes (30 frames × 4 MB/texture = 120 MB+ GPU).
-        _ANIMATED_MAX_SIZE_MB = 25
-        if config.full_quality:
-            _anim_max_size = 500  # effectively uncapped
-        else:
-            _anim_max_size = _ANIMATED_MAX_SIZE_MB
         animated_variants = [
             (a, v) for a, v in variants if a and points
         ]
 
-        # Show budget info when animated quality is constrained
-        if animated_variants:
-            from med2glb.glb.carto_builder import _compute_anim_budget
-            _orig_faces = len(mesh_data.faces)
-            _budget_faces, _budget_tex = _compute_anim_budget(
-                _orig_faces, _n_frames, int(_anim_max_size * 1024 * 1024),
-                target_faces=config.target_faces,
-            )
-            _eff_faces = min(config.target_faces, _budget_faces)
-            if _orig_faces > _eff_faces:
-                console.print(
-                    f"  [dim]Budget: {_anim_max_size} MB limit → "
-                    f"{_eff_faces:,} faces, {_budget_tex}×{_budget_tex} textures "
-                    f"(reduced from {_orig_faces:,} faces)[/dim]"
-                )
         anim_cache = None
         if len(animated_variants) > 1 and active_lat is not None:
             from med2glb.glb.carto_builder import prepare_animated_cache
@@ -405,8 +383,6 @@ def _convert_carto_meshes(
 
                 anim_cache = prepare_animated_cache(
                     mesh_data, active_lat, n_frames=_n_frames,
-                    target_faces=config.target_faces,
-                    max_size_mb=_anim_max_size,
                     progress=_cache_progress,
                 )
                 progress.remove_task(task)
@@ -450,8 +426,6 @@ def _convert_carto_meshes(
                     progress.update(task, description="Building excitation ring animation...")
                     written = build_carto_animated_glb(
                         mesh_data, active_lat, out_path,
-                        target_faces=config.target_faces,
-                        max_size_mb=_anim_max_size,
                         vectors=do_vectors,
                         progress=_anim_progress,
                         legend_info=legend_info,

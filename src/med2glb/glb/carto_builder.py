@@ -1,10 +1,10 @@
-"""CARTO animated GLB: excitation highlight ring using frame-based visibility.
+"""CARTO animated GLB: excitation highlight ring using emissive overlay.
 
-Creates N mesh copies with different vertex colors. The static colormap
-(LAT, bipolar, or unipolar) is always visible; a bright highlight ring
-sweeps across the surface following LAT activation timing.  Animation
-switches the visible frame via scale [1,1,1] / [0,0,0] — universally
-supported in glTF viewers including HoloLens 2 (MRTK/glTFast).
+Uses the same full-quality mesh as the static GLB.  The static colormap
+is baked into a shared baseColorTexture, and the sweeping highlight ring
+is rendered via per-frame emissiveTextures (mostly black, tiny JPEGs).
+Animation switches the visible frame via scale [1,1,1] / [0,0,0] —
+universally supported in glTF viewers including HoloLens 2 (MRTK/glTFast).
 """
 
 from __future__ import annotations
@@ -19,72 +19,13 @@ import pygltflib
 
 from med2glb.core.types import MeshData
 from med2glb.glb.builder import _center_vertices, _pad_to_4, write_accessor
+from med2glb.glb.vertex_color_bake import compute_texture_size
 
 logger = logging.getLogger("med2glb")
 
 # Highlight ring parameters (tuned to match CARTO PRIME V7 "Map Replay" video)
-_RING_WIDTH = 0.025  # σ of Gaussian — narrow, sharp band like the real CARTO system
+_RING_WIDTH = 0.025  # sigma of Gaussian -- narrow, sharp band like the real CARTO system
 _HIGHLIGHT_ADD = np.array([0.55, 0.55, 0.55], dtype=np.float32)  # additive white brightness
-
-
-def _compute_anim_budget(
-    n_faces: int,
-    n_frames: int,
-    max_size_bytes: int,
-    target_faces: int = 80000,
-) -> tuple[int, int]:
-    """Compute the optimal face count and texture size for an animated GLB.
-
-    Animated GLBs bake per-frame colors into JPEG texture atlases.
-    File size ~ ``n_frames x jpeg_size + geom_bytes`` (geometry is shared
-    across all frames, so face count does not multiply with frame count).
-
-    JPEG is used because CARTO color gradients are smooth and compress
-    extremely well (5-10x smaller than PNG).  This allows preserving full
-    geometry quality within AR file-size budgets.
-
-    Strategy: prioritize geometry quality (face count) over texture
-    resolution.  The effective face goal is ``min(n_faces, target_faces)``
-    — pick the highest texture resolution that still allows at least that
-    many faces to fit.
-
-    Returns:
-        (target_faces, texture_size) — the optimal combination.
-    """
-    # (texture_resolution, estimated_jpeg_bytes @ q=85) — highest quality first
-    _TEX_TIERS: list[tuple[int, int]] = [
-        (4096, 400_000),  # ~400 KB/JPEG
-        (2048, 120_000),  # ~120 KB/JPEG
-        (1024, 35_000),   # ~35 KB/JPEG
-        (512, 10_000),    # ~10 KB/JPEG
-    ]
-
-    geom_bytes_per_face = 80  # pos(12) + norm(12) + uv(8) + idx(12) ~ unwelded
-    face_goal = min(n_faces, target_faces)
-
-    # Pick the highest texture tier that fits the face goal.
-    for tex_size, img_size in _TEX_TIERS:
-        texture_cost = n_frames * img_size
-        if texture_cost >= max_size_bytes:
-            continue
-        remaining = max_size_bytes - texture_cost
-        achievable = min(n_faces, int(remaining / geom_bytes_per_face))
-        if achievable >= face_goal:
-            return achievable, tex_size
-
-    # No tier fits even the face goal — maximize faces at lowest texture.
-    best_faces, best_tex = 10000, 512
-    for tex_size, img_size in reversed(_TEX_TIERS):
-        texture_cost = n_frames * img_size
-        if texture_cost >= max_size_bytes:
-            continue
-        remaining = max_size_bytes - texture_cost
-        achievable = max(10000, min(n_faces, int(remaining / geom_bytes_per_face)))
-        if achievable > best_faces:
-            best_faces = achievable
-            best_tex = tex_size
-
-    return best_faces, best_tex
 
 
 @dataclass
@@ -98,7 +39,8 @@ class AnimatedBakeCache:
     unwelded_faces: np.ndarray
     shared_uvs: np.ndarray
     centroid: list[float]
-    frame_textures: list[bytes]
+    base_texture: bytes
+    emissive_textures: list[bytes]
     n_frames: int
 
 
@@ -112,35 +54,13 @@ def prepare_animated_cache(
 ) -> AnimatedBakeCache | None:
     """Compute expensive intermediates for animated CARTO GLB variants.
 
-    Performs decimation, frame color generation, xatlas UV unwrap,
-    rasterization map precomputation, and frame texture baking.
-    Returns None if LAT values are invalid (all-NaN or zero range),
-    indicating the caller should fall back to static export.
+    Uses the full mesh (no decimation).  Bakes one shared base color
+    texture and N small emissive ring textures.
+    Returns None if LAT values are invalid (all-NaN or zero range).
     """
     def _report(desc: str, current: int = 0, total: int = 0) -> None:
         if progress:
             progress(desc, current, total)
-
-    # Compute optimal face count and texture size for the budget
-    budget_faces, tex_size = _compute_anim_budget(
-        len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
-        target_faces=target_faces,
-    )
-    effective_target = min(target_faces, budget_faces)
-
-    # Decimate if mesh is large
-    if len(mesh_data.faces) > effective_target:
-        _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
-        from med2glb.mesh.processing import decimate, compute_normals
-
-        decimated = decimate(mesh_data, target_faces=effective_target)
-        decimated = compute_normals(decimated)
-        # Resample LAT values to decimated mesh via nearest neighbor
-        from scipy.spatial import KDTree
-        tree = KDTree(mesh_data.vertices)
-        _, idx = tree.query(decimated.vertices)
-        lat_values = lat_values[idx]
-        mesh_data = decimated
 
     valid_lat = ~np.isnan(lat_values)
     if not np.any(valid_lat):
@@ -163,27 +83,27 @@ def prepare_animated_cache(
     else:
         base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
 
-    # Generate all frame vertex colors at once via batched numpy broadcast
-    _report("Generating frame colors...", 0, n_frames)
+    # Generate emissive ring colors for each frame (ring only, no base)
+    _report("Generating ring colors...", 0, n_frames)
     t_values = np.linspace(0, 1, n_frames).reshape(-1, 1)  # (F, 1)
     sigma_sq_2 = 2 * _RING_WIDTH ** 2
     ring_all = np.exp(-((lat_norm[np.newaxis, :] - t_values) ** 2) / sigma_sq_2)  # (F, N)
     ring_all[:, ~valid_lat] = 0.0
-    add_all = ring_all[:, :, np.newaxis] * _HIGHLIGHT_ADD[np.newaxis, np.newaxis, :]  # (F, N, 3)
-    colors_all = np.broadcast_to(base_colors[np.newaxis, :, :], (n_frames, n_verts, 4)).copy()
-    colors_all[:, :, :3] = np.minimum(colors_all[:, :, :3] + add_all, 1.0)
-    colors_all[:, :, 3] = 1.0
-    frame_colors_u8 = np.clip(colors_all * 255 + 0.5, 0, 255).astype(np.uint8)
-    del colors_all, ring_all, add_all  # free intermediates
+    # Emissive colors: ring intensity * highlight color, as RGBA with A=1
+    emissive_all = ring_all[:, :, np.newaxis] * _HIGHLIGHT_ADD[np.newaxis, np.newaxis, :]  # (F, N, 3)
+    emissive_rgba = np.zeros((n_frames, n_verts, 4), dtype=np.float32)
+    emissive_rgba[:, :, :3] = emissive_all
+    emissive_rgba[:, :, 3] = 1.0
+    del ring_all, emissive_all
 
-    # UV unwrap ONCE with xatlas, precompute raster map, apply per frame
+    # UV unwrap ONCE with xatlas
     from med2glb.glb.vertex_color_bake import (
         xatlas_unwrap,
         precompute_rasterization_map,
         apply_rasterization_map,
     )
 
-    # tex_size is from budget computation — decoupled from face count
+    tex_size = compute_texture_size(len(mesh_data.faces))
 
     _report("UV unwrapping with xatlas...", 0, n_frames)
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
@@ -196,20 +116,31 @@ def prepare_animated_cache(
     if mesh_data.normals is not None:
         unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
 
-    # Precompute pixel→triangle mapping once (expensive), then apply per frame
+    # Precompute pixel-to-triangle mapping once
     _report("Precomputing rasterization map...", 0, n_frames)
     raster_map = precompute_rasterization_map(new_faces, shared_uvs, tex_size)
 
-    _report("Baking frame textures...", 0, n_frames)
-    frame_textures: list[bytes] = []
+    # Bake ONE base color texture (same quality as static GLB)
+    _report("Baking base color texture...", 0, n_frames)
+    base_colors_remapped = base_colors[vmapping]
+    base_texture = apply_rasterization_map(
+        raster_map, base_colors_remapped,
+        image_format="JPEG", jpeg_quality=90,
+    )
+
+    # Bake per-frame emissive ring textures (mostly black = tiny JPEG)
+    _report("Baking emissive ring textures...", 0, n_frames)
+    emissive_textures: list[bytes] = []
     for fi in range(n_frames):
-        _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
-        colors_remapped = frame_colors_u8[fi, vmapping].astype(np.float32) / 255.0
+        _report(f"Baking ring frame {fi + 1}/{n_frames}...", fi, n_frames)
+        ring_colors = emissive_rgba[fi, vmapping]
         img_bytes = apply_rasterization_map(
-            raster_map, colors_remapped,
+            raster_map, ring_colors,
             image_format="JPEG", jpeg_quality=85,
         )
-        frame_textures.append(img_bytes)
+        emissive_textures.append(img_bytes)
+
+    del emissive_rgba
 
     return AnimatedBakeCache(
         mesh_data=mesh_data,
@@ -219,7 +150,8 @@ def prepare_animated_cache(
         unwelded_faces=new_faces,
         shared_uvs=shared_uvs,
         centroid=centroid,
-        frame_textures=frame_textures,
+        base_texture=base_texture,
+        emissive_textures=emissive_textures,
         n_frames=n_frames,
     )
 
@@ -239,34 +171,18 @@ def build_carto_animated_glb(
 ) -> bool:
     """Build animated GLB with CARTO-style highlight ring over static colormap.
 
-    The static vertex colors (from any coloring mode) remain visible at all
-    times.  A bright ring sweeps across the surface following LAT activation
-    timing.
-
-    Args:
-        mesh_data: MeshData with vertex_colors set (LAT/bipolar/unipolar colormap).
-        lat_values: Per-vertex LAT values (ms) for ring timing. NaN for unknown.
-        output_path: Where to write the .glb file.
-        n_frames: Number of animation frames.
-        loop_duration_s: Total animation loop time in seconds.
-        target_faces: Explicit face limit (legacy). Overridden by max_size_mb
-            when max_size_mb yields a higher limit.
-        max_size_mb: Target max file size in MB. Used to compute an appropriate
-            face count that balances quality and file size.
-        vectors: If True, add animated LAT streamline arrows.
-        progress: Optional callback(description, current, total) for progress.
+    Uses the full mesh (no decimation).  The static vertex colors are baked
+    into a shared baseColorTexture, and the highlight ring is rendered via
+    per-frame emissiveTextures.
 
     Returns:
-        True if the GLB was written, False if skipped (vectors requested but
-        streamline quality was insufficient — the non-vectors variant already
-        covers this case).
+        True if the GLB was written, False if skipped.
     """
     def _report(desc: str, current: int = 0, total: int = 0) -> None:
         if progress:
             progress(desc, current, total)
 
     if cache is not None:
-        # Fast path: use pre-computed intermediates
         mesh_data = cache.mesh_data
         lat_values = cache.lat_values
         n_frames = cache.n_frames
@@ -275,108 +191,30 @@ def build_carto_animated_glb(
         unwelded_faces = cache.unwelded_faces
         shared_uvs = cache.shared_uvs
         centroid = cache.centroid
-        frame_textures = cache.frame_textures
+        base_texture = cache.base_texture
+        emissive_textures = cache.emissive_textures
     else:
-        # Compute optimal face count and texture size for the budget
-        budget_faces, tex_size = _compute_anim_budget(
-            len(mesh_data.faces), n_frames, int(max_size_mb * 1024 * 1024),
-            target_faces=target_faces,
+        # Compute everything from scratch (non-cached path)
+        tmp_cache = prepare_animated_cache(
+            mesh_data, lat_values, n_frames=n_frames,
+            target_faces=target_faces, max_size_mb=max_size_mb,
+            progress=progress,
         )
-        effective_target = min(target_faces, budget_faces)
-
-        # Decimate if mesh is large
-        if len(mesh_data.faces) > effective_target:
-            _report(f"Decimating {len(mesh_data.faces):,} → {effective_target:,} faces...")
-            from med2glb.mesh.processing import decimate, compute_normals
-
-            decimated = decimate(mesh_data, target_faces=effective_target)
-            decimated = compute_normals(decimated)
-            # Resample LAT values to decimated mesh via nearest neighbor
-            # (vertex_colors are already preserved inside decimate())
-            from scipy.spatial import KDTree
-            tree = KDTree(mesh_data.vertices)
-            _, idx = tree.query(decimated.vertices)
-            lat_values = lat_values[idx]
-            mesh_data = decimated
-
-        valid_lat = ~np.isnan(lat_values)
-        if not np.any(valid_lat):
-            # No valid LAT — fall back to static export
+        if tmp_cache is None:
             from med2glb.glb.builder import build_glb
             build_glb([mesh_data], output_path, source_units="mm")
             return True
 
-        lat_min = float(np.nanmin(lat_values))
-        lat_max = float(np.nanmax(lat_values))
-        lat_range = lat_max - lat_min
-        if lat_range < 1e-6:
-            from med2glb.glb.builder import build_glb
-            build_glb([mesh_data], output_path, source_units="mm")
-            return True
-
-        # Normalize LAT to [0, 1]
-        lat_norm = (lat_values - lat_min) / lat_range
-        lat_norm[~valid_lat] = np.nan
-
-        # Base colors from static coloring (mesh_data.vertex_colors)
-        n_verts = len(mesh_data.vertices)
-        if mesh_data.vertex_colors is not None:
-            base_colors = mesh_data.vertex_colors.astype(np.float32)
-        else:
-            # Fallback: neutral light gray if no colormap was applied
-            base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
-
-        # Generate all frame vertex colors at once via batched numpy broadcast
-        _report("Generating frame colors...", 0, n_frames)
-        t_values = np.linspace(0, 1, n_frames).reshape(-1, 1)  # (F, 1)
-        sigma_sq_2 = 2 * _RING_WIDTH ** 2
-        ring_all = np.exp(-((lat_norm[np.newaxis, :] - t_values) ** 2) / sigma_sq_2)  # (F, N)
-        ring_all[:, ~valid_lat] = 0.0
-        add_all = ring_all[:, :, np.newaxis] * _HIGHLIGHT_ADD[np.newaxis, np.newaxis, :]  # (F, N, 3)
-        colors_all = np.broadcast_to(base_colors[np.newaxis, :, :], (n_frames, n_verts, 4)).copy()
-        colors_all[:, :, :3] = np.minimum(colors_all[:, :, :3] + add_all, 1.0)
-        colors_all[:, :, 3] = 1.0
-        frame_colors_u8 = np.clip(colors_all * 255 + 0.5, 0, 255).astype(np.uint8)
-        del colors_all, ring_all, add_all  # free intermediates
-
-        # UV unwrap ONCE with xatlas, precompute raster map, apply per frame
-        from med2glb.glb.vertex_color_bake import (
-            xatlas_unwrap,
-            precompute_rasterization_map,
-            apply_rasterization_map,
-        )
-
-        # tex_size is from budget computation — decoupled from face count
-
-        _report("UV unwrapping with xatlas...", 0, n_frames)
-        vmapping, new_faces, shared_uvs = xatlas_unwrap(
-            mesh_data.vertices, mesh_data.faces, mesh_data.normals,
-        )
-        unwelded_verts, centroid = _center_vertices(
-            mesh_data.vertices[vmapping].astype(np.float32),
-        )
-        unwelded_normals = None
-        if mesh_data.normals is not None:
-            unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
-        unwelded_faces = new_faces
-
-        # Precompute pixel→triangle mapping once (expensive), then apply per frame (cheap)
-        _report("Precomputing rasterization map...", 0, n_frames)
-        raster_map = precompute_rasterization_map(new_faces, shared_uvs, tex_size)
-
-        _report("Baking frame textures...", 0, n_frames)
-        frame_textures: list[bytes] = []
-        for fi in range(n_frames):
-            _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
-            colors_remapped = frame_colors_u8[fi, vmapping].astype(np.float32) / 255.0
-            img_bytes = apply_rasterization_map(
-                raster_map, colors_remapped,
-                image_format="JPEG", jpeg_quality=85,
-            )
-            frame_textures.append(img_bytes)
-
-        # Free per-frame color arrays and raster map (textures are baked now)
-        del frame_colors_u8, raster_map
+        mesh_data = tmp_cache.mesh_data
+        lat_values = tmp_cache.lat_values
+        n_frames = tmp_cache.n_frames
+        unwelded_verts = tmp_cache.unwelded_verts
+        unwelded_normals = tmp_cache.unwelded_normals
+        unwelded_faces = tmp_cache.unwelded_faces
+        shared_uvs = tmp_cache.shared_uvs
+        centroid = tmp_cache.centroid
+        base_texture = tmp_cache.base_texture
+        emissive_textures = tmp_cache.emissive_textures
 
     # Compute animated arrow dashes if vectors enabled
     arrow_frame_dashes = None
@@ -405,15 +243,14 @@ def build_carto_animated_glb(
             arrow_frame_dashes = compute_animated_dashes(
                 streamlines, n_frames=n_frames,
             )
-            # Speed-dependent sizing (reuse gradients from trace_all_streamlines)
             arrow_speed_factors = compute_dash_speed_factors(
                 arrow_frame_dashes, face_grads, face_centers,
             )
 
-    # Build glTF with N frame nodes under a root mm→m scale node
+    # Build glTF
     gltf = pygltflib.GLTF2(
         scene=0,
-        scenes=[pygltflib.Scene(nodes=[])],  # set after building nodes
+        scenes=[pygltflib.Scene(nodes=[])],
         nodes=[],
         meshes=[],
         accessors=[],
@@ -437,25 +274,44 @@ def build_carto_animated_glb(
         wrapT=pygltflib.CLAMP_TO_EDGE,
     ))
 
-    # Embed per-frame textures into binary buffer
+    # Embed base color texture (shared across all frames)
+    base_offset = len(binary_data)
+    binary_data.extend(base_texture)
+    _pad_to_4(binary_data)
+
+    base_bv_idx = len(gltf.bufferViews)
+    gltf.bufferViews.append(pygltflib.BufferView(
+        buffer=0, byteOffset=base_offset, byteLength=len(base_texture),
+    ))
+    base_img_idx = len(gltf.images)
+    gltf.images.append(pygltflib.Image(
+        bufferView=base_bv_idx, mimeType="image/jpeg",
+    ))
+    base_tex_idx = len(gltf.textures)
+    gltf.textures.append(pygltflib.Texture(sampler=0, source=base_img_idx))
+
+    # Embed per-frame emissive textures
+    emissive_tex_indices: list[int] = []
     for fi in range(n_frames):
         img_offset = len(binary_data)
-        binary_data.extend(frame_textures[fi])
+        binary_data.extend(emissive_textures[fi])
         _pad_to_4(binary_data)
 
         img_bv_idx = len(gltf.bufferViews)
         gltf.bufferViews.append(pygltflib.BufferView(
-            buffer=0, byteOffset=img_offset, byteLength=len(frame_textures[fi]),
+            buffer=0, byteOffset=img_offset, byteLength=len(emissive_textures[fi]),
         ))
         img_idx = len(gltf.images)
         gltf.images.append(pygltflib.Image(
             bufferView=img_bv_idx, mimeType="image/jpeg",
         ))
+        tex_idx = len(gltf.textures)
         gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
+        emissive_tex_indices.append(tex_idx)
 
-    del frame_textures  # free memory
+    del emissive_textures  # free memory
 
-    # Shared geometry: positions, normals, UVs, indices (written once, unwelded)
+    # Shared geometry: positions, normals, UVs, indices (written once)
     pos_acc = write_accessor(
         gltf, binary_data, unwelded_verts, pygltflib.ARRAY_BUFFER,
         pygltflib.FLOAT, pygltflib.VEC3, with_minmax=True,
@@ -478,25 +334,27 @@ def build_carto_animated_glb(
         pygltflib.UNSIGNED_INT, pygltflib.SCALAR, with_minmax=True,
     )
 
-    # Per-frame: material (with texture) + mesh + node
+    # Per-frame: material (shared base + per-frame emissive) + mesh + node
     _report("Assembling GLB...", n_frames, n_frames)
     for fi in range(n_frames):
         mat_idx = len(gltf.materials)
         mat_kwargs: dict = dict(
             name=f"wavefront_{fi}",
             pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
-                baseColorTexture=pygltflib.TextureInfo(index=fi),
+                baseColorTexture=pygltflib.TextureInfo(index=base_tex_idx),
                 baseColorFactor=[1.0, 1.0, 1.0, 1.0],
                 metallicFactor=0.0,
                 roughnessFactor=0.7,
             ),
+            emissiveTexture=pygltflib.TextureInfo(index=emissive_tex_indices[fi]),
+            emissiveFactor=[1.0, 1.0, 1.0],
             doubleSided=True,
         )
         if mesh_data.material.unlit:
             mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
         gltf.materials.append(pygltflib.Material(**mat_kwargs))
 
-        # Primitive with shared geometry + per-frame texture
+        # Primitive with shared geometry
         attrs = pygltflib.Attributes(POSITION=pos_acc)
         if norm_acc is not None:
             attrs.NORMAL = norm_acc
@@ -519,7 +377,7 @@ def build_carto_animated_glb(
         ))
 
     # Collect all child node indices for the root node
-    child_node_indices = list(range(n_frames))  # wavefront frame nodes
+    child_node_indices = list(range(n_frames))
 
     # Add arrow nodes if vectors enabled
     arrow_node_indices: list[int] = []
@@ -561,9 +419,7 @@ def build_carto_animated_glb(
     channels = []
     samplers = []
 
-    # Wavefront frame visibility channels
     for fi in range(n_frames):
-        # Scale output: [1,1,1] at this frame's keyframe, [0,0,0] at others
         scales = np.zeros((n_frames, 3), dtype=np.float32)
         scales[fi] = [1.0, 1.0, 1.0]
 
@@ -610,8 +466,7 @@ def build_carto_animated_glb(
         samplers=samplers,
     ))
 
-    # Root node: mm → m conversion + 10x AR display scale.
-    # Cardiac structures (~12cm) render at ~120cm for comfortable AR inspection.
+    # Root node: mm -> m conversion + 10x AR display scale.
     root_idx = len(gltf.nodes)
     gltf.nodes.append(pygltflib.Node(
         name="root",

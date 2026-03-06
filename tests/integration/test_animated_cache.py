@@ -86,16 +86,17 @@ class TestAnimatedBakeCache:
         n_frames = 5
 
         cache = prepare_animated_cache(
-            mesh_data, active_lat, n_frames=n_frames, target_faces=100000,
+            mesh_data, active_lat, n_frames=n_frames,
         )
         assert cache is not None
         assert cache.n_frames == n_frames
-        assert len(cache.frame_textures) == n_frames
+        assert cache.base_texture is not None
+        assert len(cache.emissive_textures) == n_frames
 
         out = tmp_path / "cached.glb"
         result = build_carto_animated_glb(
             mesh_data, active_lat, out,
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
             cache=cache,
         )
 
@@ -104,7 +105,8 @@ class TestAnimatedBakeCache:
         gltf = pygltflib.GLTF2.load(str(out))
         assert len(gltf.animations) == 1
         assert len(gltf.meshes) == n_frames
-        assert len(gltf.textures) == n_frames
+        # 1 base texture + n_frames emissive textures
+        assert len(gltf.textures) == 1 + n_frames
 
     def test_cached_matches_uncached(self, large_carto_data, tmp_path):
         """Cached and uncached paths produce identical file sizes."""
@@ -121,17 +123,17 @@ class TestAnimatedBakeCache:
         out_a = tmp_path / "uncached.glb"
         build_carto_animated_glb(
             mesh_data, active_lat, out_a,
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
         )
 
         # Cached
         cache = prepare_animated_cache(
-            mesh_data, active_lat, n_frames=n_frames, target_faces=100000,
+            mesh_data, active_lat, n_frames=n_frames,
         )
         out_b = tmp_path / "cached.glb"
         build_carto_animated_glb(
             mesh_data, active_lat, out_b,
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
             cache=cache,
         )
 
@@ -156,7 +158,7 @@ class TestAnimatedBakeCache:
         n_frames = 5
 
         cache = prepare_animated_cache(
-            mesh_data, active_lat, n_frames=n_frames, target_faces=100000,
+            mesh_data, active_lat, n_frames=n_frames,
         )
         assert cache is not None
 
@@ -164,16 +166,15 @@ class TestAnimatedBakeCache:
         out1 = tmp_path / "animated.glb"
         r1 = build_carto_animated_glb(
             mesh_data, active_lat, out1,
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
             cache=cache,
         )
 
-        # Second variant (animated, same params — simulates animated+vectors
-        # without actual vector tracing which may skip on synthetic data)
+        # Second variant (animated, same params)
         out2 = tmp_path / "animated_2.glb"
         r2 = build_carto_animated_glb(
             mesh_data, active_lat, out2,
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
             cache=cache,
         )
 
@@ -181,7 +182,7 @@ class TestAnimatedBakeCache:
         assert out1.stat().st_size == out2.stat().st_size
 
     def test_speedup_measurement(self, large_carto_data, tmp_path):
-        """Measure wall-clock speedup: uncached×2 vs cached(prep+build×2)."""
+        """Measure wall-clock speedup: uncached x 2 vs cached(prep+build x 2)."""
         from med2glb.glb.carto_builder import (
             build_carto_animated_glb,
             prepare_animated_cache,
@@ -195,11 +196,11 @@ class TestAnimatedBakeCache:
         t0 = time.perf_counter()
         build_carto_animated_glb(
             mesh_data, active_lat, tmp_path / "unc_1.glb",
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
         )
         build_carto_animated_glb(
             mesh_data, active_lat, tmp_path / "unc_2.glb",
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
         )
         t_uncached = time.perf_counter() - t0
 
@@ -207,16 +208,16 @@ class TestAnimatedBakeCache:
         t0 = time.perf_counter()
         cache = prepare_animated_cache(
             mesh_data, active_lat,
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
         )
         build_carto_animated_glb(
             mesh_data, active_lat, tmp_path / "cac_1.glb",
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
             cache=cache,
         )
         build_carto_animated_glb(
             mesh_data, active_lat, tmp_path / "cac_2.glb",
-            n_frames=n_frames, target_faces=100000,
+            n_frames=n_frames,
             cache=cache,
         )
         t_cached = time.perf_counter() - t0
