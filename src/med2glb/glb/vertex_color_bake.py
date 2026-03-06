@@ -316,11 +316,16 @@ def precompute_rasterization_map(
     }
 
 
-def apply_rasterization_map(raster_map: dict, vertex_colors: np.ndarray) -> bytes:
+def apply_rasterization_map(
+    raster_map: dict,
+    vertex_colors: np.ndarray,
+    image_format: str = "PNG",
+    jpeg_quality: int = 85,
+) -> bytes:
     """Apply precomputed rasterization map with new vertex colors.
 
     This is very fast: just a single vectorized gather + weighted sum + scatter,
-    plus precomputed gutter bleeding and PNG encoding.
+    plus precomputed gutter bleeding and image encoding.
     """
     return _apply_and_encode(
         raster_map["pixel_y"], raster_map["pixel_x"],
@@ -329,6 +334,8 @@ def apply_rasterization_map(raster_map: dict, vertex_colors: np.ndarray) -> byte
         vertex_colors, raster_map["tex_size"],
         mask=raster_map["mask"],
         bleed_map=raster_map.get("bleed_map"),
+        image_format=image_format,
+        jpeg_quality=jpeg_quality,
     )
 
 
@@ -340,8 +347,10 @@ def _apply_and_encode(
     texture_size: int,
     mask: np.ndarray | None = None,
     bleed_map: tuple | None = None,
+    image_format: str = "PNG",
+    jpeg_quality: int = 85,
 ) -> bytes:
-    """Interpolate colors, scatter into texture, bleed, encode PNG."""
+    """Interpolate colors, scatter into texture, bleed, encode to image bytes."""
     tex_size = texture_size
     texture = np.zeros((tex_size, tex_size, 4), dtype=np.float32)
 
@@ -364,9 +373,13 @@ def _apply_and_encode(
         _bleed_gutter(texture, mask.copy() if mask is not None else mask, tex_size, tex_size)
 
     texture_u8 = np.clip(texture * 255 + 0.5, 0, 255).astype(np.uint8)
-    img = Image.fromarray(texture_u8, mode="RGBA")
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    if image_format == "JPEG":
+        img = Image.fromarray(texture_u8[:, :, :3], mode="RGB")
+        img.save(buf, format="JPEG", quality=jpeg_quality)
+    else:
+        img = Image.fromarray(texture_u8, mode="RGBA")
+        img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 
 

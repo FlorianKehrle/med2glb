@@ -34,34 +34,36 @@ def _compute_anim_budget(
 ) -> tuple[int, int]:
     """Compute the optimal face count and texture size for an animated GLB.
 
-    Animated GLBs bake per-frame colors into PNG texture atlases.
-    File size ≈ ``n_frames × png_size + geom_bytes`` (geometry is shared
+    Animated GLBs bake per-frame colors into JPEG texture atlases.
+    File size ~ ``n_frames x jpeg_size + geom_bytes`` (geometry is shared
     across all frames, so face count does not multiply with frame count).
 
+    JPEG is used because CARTO color gradients are smooth and compress
+    extremely well (5-10x smaller than PNG).  This allows preserving full
+    geometry quality within AR file-size budgets.
+
     Strategy: prioritize geometry quality (face count) over texture
-    resolution.  CARTO color gradients are smooth, so lower-resolution
-    textures are visually acceptable, whereas aggressive decimation
-    creates obvious faceting.  Pick the highest texture resolution that
-    still allows all original faces to fit within the budget.
+    resolution.  Pick the highest texture resolution that still allows
+    all original faces to fit within the budget.
 
     Returns:
         (target_faces, texture_size) — the optimal combination.
     """
-    # (texture_resolution, estimated_png_bytes) — highest quality first
+    # (texture_resolution, estimated_jpeg_bytes @ q=85) — highest quality first
     _TEX_TIERS: list[tuple[int, int]] = [
-        (4096, 2_000_000),  # ~2 MB/PNG
-        (2048, 700_000),    # ~700 KB/PNG
-        (1024, 200_000),    # ~200 KB/PNG
-        (512, 50_000),      # ~50 KB/PNG
+        (4096, 400_000),  # ~400 KB/JPEG
+        (2048, 120_000),  # ~120 KB/JPEG
+        (1024, 35_000),   # ~35 KB/JPEG
+        (512, 10_000),    # ~10 KB/JPEG
     ]
 
-    geom_bytes_per_face = 80  # pos(12) + norm(12) + uv(8) + idx(12) ≈ unwelded
+    geom_bytes_per_face = 80  # pos(12) + norm(12) + uv(8) + idx(12) ~ unwelded
 
     # Pick the highest texture tier that still allows all faces to fit.
-    # Iterate high→low; the first tier where all faces fit is the best.
+    # Iterate high->low; the first tier where all faces fit is the best.
     # If no tier fits all faces, fall through to the max-faces fallback.
-    for tex_size, png_size in _TEX_TIERS:
-        texture_cost = n_frames * png_size
+    for tex_size, img_size in _TEX_TIERS:
+        texture_cost = n_frames * img_size
         if texture_cost >= max_size_bytes:
             continue
         remaining = max_size_bytes - texture_cost
@@ -72,8 +74,8 @@ def _compute_anim_budget(
     # No tier can fit all faces — pick the tier that maximizes face count
     # (lowest texture resolution = most room for geometry).
     best_faces, best_tex = 10000, 512
-    for tex_size, png_size in reversed(_TEX_TIERS):
-        texture_cost = n_frames * png_size
+    for tex_size, img_size in reversed(_TEX_TIERS):
+        texture_cost = n_frames * img_size
         if texture_cost >= max_size_bytes:
             continue
         remaining = max_size_bytes - texture_cost
@@ -202,8 +204,11 @@ def prepare_animated_cache(
     for fi in range(n_frames):
         _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
         colors_remapped = frame_colors_u8[fi, vmapping].astype(np.float32) / 255.0
-        png_bytes = apply_rasterization_map(raster_map, colors_remapped)
-        frame_textures.append(png_bytes)
+        img_bytes = apply_rasterization_map(
+            raster_map, colors_remapped,
+            image_format="JPEG", jpeg_quality=85,
+        )
+        frame_textures.append(img_bytes)
 
     return AnimatedBakeCache(
         mesh_data=mesh_data,
@@ -362,8 +367,11 @@ def build_carto_animated_glb(
         for fi in range(n_frames):
             _report(f"Baking frame {fi + 1}/{n_frames}...", fi, n_frames)
             colors_remapped = frame_colors_u8[fi, vmapping].astype(np.float32) / 255.0
-            png_bytes = apply_rasterization_map(raster_map, colors_remapped)
-            frame_textures.append(png_bytes)
+            img_bytes = apply_rasterization_map(
+                raster_map, colors_remapped,
+                image_format="JPEG", jpeg_quality=85,
+            )
+            frame_textures.append(img_bytes)
 
         # Free per-frame color arrays and raster map (textures are baked now)
         del frame_colors_u8, raster_map
@@ -439,7 +447,7 @@ def build_carto_animated_glb(
         ))
         img_idx = len(gltf.images)
         gltf.images.append(pygltflib.Image(
-            bufferView=img_bv_idx, mimeType="image/png",
+            bufferView=img_bv_idx, mimeType="image/jpeg",
         ))
         gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
 
