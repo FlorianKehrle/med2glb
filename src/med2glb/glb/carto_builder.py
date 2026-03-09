@@ -28,15 +28,17 @@ logger = logging.getLogger("med2glb")
 _RING_WIDTH = 0.025  # sigma of Gaussian -- narrow, sharp band like the real CARTO system
 _HIGHLIGHT_ADD = np.array([0.55, 0.55, 0.55], dtype=np.float32)  # additive white brightness
 
-# xatlas time estimation — empirical power-law model: t = k * n_faces^1.3
-# Calibrated from: 71 288 faces → 69 s (measured on i7-13700K).
-_XATLAS_K = 69.0 / (71_288 ** 1.3)
+# xatlas time estimation — empirical power-law model: t = k * n_faces^exp
+# Fitted from 5 real CARTO meshes (v7.1 + v7.2, subdiv 0-2, 18K-506K faces).
+# Topology affects timing heavily, so ±50% error is expected.
+_XATLAS_K = 6.50e-08
+_XATLAS_EXP = 1.79
 
 
 def _estimate_xatlas_time(n_faces: int) -> str:
     """Human-readable time estimate for xatlas UV unwrap."""
-    secs = _XATLAS_K * (n_faces ** 1.3)
-    if secs < 45:
+    secs = _XATLAS_K * (n_faces ** _XATLAS_EXP)
+    if secs < 30:
         return "<1 min"
     if secs < 90:
         return "~1 min"
