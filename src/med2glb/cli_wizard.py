@@ -474,17 +474,6 @@ def run_carto_wizard(
         subdivide = 2
         logger.info("Using default subdivision: 2")
 
-    # --- Full quality (animated only) ---
-    full_quality = False
-    if animate and interactive:
-        fq_choice = Prompt.ask(
-            "Full quality animated? (bypasses 25 MB HoloLens limit, larger files)",
-            choices=["y", "n"],
-            default="n",
-            console=console,
-        )
-        full_quality = fq_choice.lower() == "y"
-
     # --- Name ---
     # Auto-generate: <study_or_dir>_<coloring>_sub<N>
     base_name = study.study_name or input_path.name
@@ -507,8 +496,6 @@ def run_carto_wizard(
     else:
         console.print(f"  Vectors:    {vectors}")
     console.print(f"  Subdivide:  {subdivide}")
-    if full_quality:
-        console.print(f"  Quality:    full (no animated size cap)")
 
     return CartoConfig(
         input_path=input_path,
@@ -520,7 +507,6 @@ def run_carto_wizard(
         static=static,
         vectors=vectors,
         vector_mesh_indices=vector_mesh_indices,
-        full_quality=full_quality,
     )
 
 

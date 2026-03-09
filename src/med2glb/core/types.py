@@ -189,7 +189,6 @@ class CartoConfig:
     vectors: str = "no"  # "no", "yes" (both with/without), "only" (vectors only)
     vector_mesh_indices: list[int] | None = None  # meshes suitable for vectors; None = all
     target_faces: int = 80000
-    full_quality: bool = False  # bypass animated size cap (25 MB)
 
 
 @dataclass
