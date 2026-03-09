@@ -551,6 +551,24 @@ def convert_series(
     for w in result.warnings:
         err_console.print(f"[yellow]Warning: {w}[/yellow]")
 
+    # Append to conversion log
+    from med2glb.io.conversion_log import append_dicom_entry
+    append_dicom_entry(
+        output.parent,
+        output_path=output,
+        method_name=method_name,
+        input_path=str(input_path),
+        input_type=input_type.value,
+        series_uid=series_uid,
+        mesh_count=len(result.meshes),
+        vertex_count=total_verts,
+        face_count=total_faces,
+        file_size_kb=file_size,
+        animated=animate,
+        elapsed_seconds=elapsed,
+        warnings=result.warnings or None,
+    )
+
     return ConversionStats(
         method_name=method_name,
         output_path=output,

@@ -197,6 +197,49 @@ def _print_carto_summary(
     console.print(f"  Time:       {_format_duration(elapsed)}")
 
 
+def _write_carto_log(
+    output_dir: Path,
+    study: "CartoStudy",
+    mesh: "CartoMesh",
+    mesh_data: "MeshData",
+    points: list[CartoPoint] | None,
+    config: "CartoConfig",
+    variant_outputs: list[tuple[bool, bool, Path]],
+    start_time: float,
+) -> None:
+    """Append conversion metadata to the log file in the output directory."""
+    from med2glb.io.conversion_log import append_carto_entry
+
+    elapsed = time.time() - start_time
+
+    color_range = ""
+    if config.coloring == "bipolar":
+        color_range = "0.05 - 1.5 mV"
+    elif config.coloring == "unipolar":
+        color_range = "3.0 - 10.0 mV"
+    elif config.coloring == "lat" and points:
+        valid_lats = [p.lat for p in points if not math.isnan(p.lat)]
+        if valid_lats:
+            color_range = f"{min(valid_lats):.0f} - {max(valid_lats):.0f} ms (auto)"
+
+    append_carto_entry(
+        output_dir,
+        structure_name=mesh.structure_name,
+        carto_version=_carto_version_label(study.version),
+        study_name=study.study_name or "",
+        coloring=config.coloring,
+        color_range=color_range,
+        subdivide=config.subdivide,
+        active_vertices=len(mesh_data.vertices),
+        total_vertices=len(mesh.vertices),
+        face_count=len(mesh_data.faces),
+        mapping_points=len(points) if points else 0,
+        variant_outputs=variant_outputs,
+        elapsed_seconds=elapsed,
+        source_path=str(config.input_path),
+    )
+
+
 def _load_carto_study(input_path: Path) -> "CartoStudy":
     """Load a CARTO study with a Rich progress bar."""
     from med2glb.io.carto_reader import load_carto_study, _find_export_dir
@@ -492,6 +535,10 @@ def _convert_carto_meshes(
             _print_carto_summary(
                 study, mesh, mesh_data, points, config.coloring,
                 config.subdivide, variant_outputs, start_time,
+            )
+            _write_carto_log(
+                carto_output_dir, study, mesh, mesh_data, points,
+                config, variant_outputs, start_time,
             )
 
 
