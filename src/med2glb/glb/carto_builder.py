@@ -293,7 +293,7 @@ def build_carto_static_glb(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gltf.save(str(output_path))
 
-    logger.info(
+    logger.debug(
         f"CARTO static GLB (from cache): {len(mesh_data.vertices)} verts, "
         f"{output_path.stat().st_size / 1024:.0f} KB"
     )
@@ -626,7 +626,7 @@ def build_carto_animated_glb(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gltf.save(str(output_path))
 
-    logger.info(
+    logger.debug(
         f"CARTO animated GLB: {n_frames} frames, "
         f"{len(mesh_data.vertices)} verts, "
         f"{output_path.stat().st_size / 1024:.0f} KB"

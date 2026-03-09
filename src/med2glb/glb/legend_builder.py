@@ -541,7 +541,7 @@ def add_legend_nodes(
         extras.update(metadata)
     gltf.extras = extras
 
-    logger.info(
+    logger.debug(
         "Added %d legend/info panel(s) for %s coloring [%.1f–%.1f]",
         len(node_indices), coloring, clamp_range[0], clamp_range[1],
     )

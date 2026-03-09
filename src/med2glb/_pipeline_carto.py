@@ -144,13 +144,15 @@ def _print_carto_summary(
     points: list[CartoPoint] | None,
     coloring: str,
     subdivide: int,
-    do_animate: bool,
-    do_vectors: bool,
-    out_path: Path,
+    variant_outputs: list[tuple[bool, bool, Path]],
     start_time: float,
 ) -> None:
-    """Print a rich summary table after a CARTO mesh conversion."""
-    file_size = out_path.stat().st_size / 1024
+    """Print a single summary after all variants of a CARTO mesh are built.
+
+    Args:
+        variant_outputs: List of (do_animate, do_vectors, out_path) for each
+            successfully written variant.
+    """
     elapsed = time.time() - start_time
     n_total_verts = len(mesh.vertices)
 
@@ -164,11 +166,10 @@ def _print_carto_summary(
         if valid_lats:
             clamp_info = f"{min(valid_lats):.0f} – {max(valid_lats):.0f} ms (auto)"
 
-    console.print(f"\n[green]CARTO conversion complete![/green]")
+    console.print(f"\n[green]Done: {mesh.structure_name}[/green]")
     console.print(f"  System:     {_carto_version_label(study.version)}")
     if study.study_name:
         console.print(f"  Study:      {study.study_name}")
-    console.print(f"  Map:        {mesh.structure_name}")
     console.print(f"  Coloring:   {coloring}")
     if subdivide > 0:
         console.print(f"  Subdivide:  level {subdivide} (~{4**subdivide}x face increase)")
@@ -182,14 +183,17 @@ def _print_carto_summary(
 
     console.print(f"  Vertices:   {len(mesh_data.vertices):,} active / {n_total_verts:,} total")
     console.print(f"  Faces:      {len(mesh_data.faces):,}")
-    anim_desc = "No"
-    if do_animate and points:
-        anim_desc = "Yes (excitation ring)"
-        if do_vectors:
-            anim_desc += " + LAT vectors"
-    console.print(f"  Animated:   {anim_desc}")
-    console.print(f"  Output:     {out_path}")
-    console.print(f"  Size:       {file_size:.1f} KB")
+
+    console.print(f"  Output:")
+    for do_animate, do_vectors, out_path in variant_outputs:
+        file_size = out_path.stat().st_size / 1024
+        label = "static"
+        if do_animate:
+            label = "animated"
+            if do_vectors:
+                label += " + vectors"
+        console.print(f"    {out_path.name}  [dim]({file_size:.0f} KB, {label})[/dim]")
+
     console.print(f"  Time:       {_format_duration(elapsed)}")
 
 
@@ -392,34 +396,35 @@ def _convert_carto_meshes(
                 progress.remove_task(task)
 
         # === Emit each variant from cached state ===
-        for do_animate, do_vectors in variants:
-            anim_suffix = "_animated" if (do_animate and points) else ""
-            vec_suffix = "_vectors" if do_vectors else ""
-            glb_name = f"{mesh.structure_name}_{config.coloring}{anim_suffix}{vec_suffix}.glb"
-            out_path = carto_output_dir / glb_name
+        variant_outputs: list[tuple[bool, bool, Path]] = []
 
-            console.print(
-                f"\n[bold]  Variant: {mesh.structure_name}[/bold] "
-                f"({config.coloring} coloring"
-                f"{', animated' if do_animate else ', static'}"
-                f"{', vectors' if do_vectors else ''})"
-            )
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=20),
+            MofNCompleteColumn(),
+            console=console,
+        ) as progress:
+            for do_animate, do_vectors in variants:
+                anim_suffix = "_animated" if (do_animate and points) else ""
+                vec_suffix = "_vectors" if do_vectors else ""
+                glb_name = f"{mesh.structure_name}_{config.coloring}{anim_suffix}{vec_suffix}.glb"
+                out_path = carto_output_dir / glb_name
 
-            if do_animate and points:
-                _total_steps = _n_frames + 1
-            else:
-                _total_steps = 1
+                variant_label = "static"
+                if do_animate:
+                    variant_label = "animated + vectors" if do_vectors else "animated"
 
-            _variant_written = True
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(bar_width=20),
-                MofNCompleteColumn(),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Building GLB...", total=_total_steps)
+                if do_animate and points:
+                    _total_steps = _n_frames + 1
+                else:
+                    _total_steps = 1
 
+                task = progress.add_task(
+                    f"Building {variant_label}...", total=_total_steps,
+                )
+
+                _variant_written = True
                 if do_animate and points:
                     from med2glb.glb.carto_builder import build_carto_animated_glb
 
@@ -427,7 +432,6 @@ def _convert_carto_meshes(
                         progress.update(task, description=desc,
                                         completed=current + 1)
 
-                    progress.update(task, description="Building excitation ring animation...")
                     written = build_carto_animated_glb(
                         mesh_data, active_lat, out_path,
                         vectors=do_vectors,
@@ -440,9 +444,7 @@ def _convert_carto_meshes(
                     else:
                         progress.update(task, completed=_total_steps)
                 else:
-                    progress.update(task, description="Building GLB...")
                     if anim_cache is not None:
-                        # Reuse pre-computed xatlas + base texture from cache
                         from med2glb.glb.carto_builder import build_carto_static_glb
                         build_carto_static_glb(
                             anim_cache, out_path, legend_info=legend_info,
@@ -455,20 +457,20 @@ def _convert_carto_meshes(
                     progress.update(task, completed=_total_steps)
 
                 if _variant_written:
-                    # Apply KTX2 GPU-compressed textures when toktx is available
                     from med2glb.glb.compress import optimize_textures_ktx2
                     optimize_textures_ktx2(out_path)
+                    variant_outputs.append((do_animate, do_vectors, out_path))
+                else:
+                    progress.update(
+                        task,
+                        description=f"[dim]Skipped {variant_label} (data not suitable)[/dim]",
+                        completed=_total_steps,
+                    )
 
-            if not _variant_written:
-                console.print(
-                    f"  [dim]Skipped vectors variant — data not suitable, "
-                    f"non-vector variant already covers this.[/dim]"
-                )
-                continue
-
+        if variant_outputs:
             _print_carto_summary(
                 study, mesh, mesh_data, points, config.coloring,
-                config.subdivide, do_animate, do_vectors, out_path, start_time,
+                config.subdivide, variant_outputs, start_time,
             )
 
 

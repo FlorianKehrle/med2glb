@@ -345,5 +345,5 @@ def build_animated_arrow_nodes(
         ))
         node_indices.append(node_idx)
 
-    logger.info(f"Built {len(node_indices)} arrow animation frames")
+    logger.debug(f"Built {len(node_indices)} arrow animation frames")
     return node_indices
