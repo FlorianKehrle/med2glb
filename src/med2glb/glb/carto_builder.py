@@ -28,6 +28,24 @@ logger = logging.getLogger("med2glb")
 _RING_WIDTH = 0.025  # sigma of Gaussian -- narrow, sharp band like the real CARTO system
 _HIGHLIGHT_ADD = np.array([0.55, 0.55, 0.55], dtype=np.float32)  # additive white brightness
 
+# xatlas time estimation — empirical power-law model: t = k * n_faces^1.3
+# Calibrated from: 71 288 faces → 69 s (measured on i7-13700K).
+_XATLAS_K = 69.0 / (71_288 ** 1.3)
+
+
+def _estimate_xatlas_time(n_faces: int) -> str:
+    """Human-readable time estimate for xatlas UV unwrap."""
+    secs = _XATLAS_K * (n_faces ** 1.3)
+    if secs < 45:
+        return "<1 min"
+    if secs < 90:
+        return "~1 min"
+    mins = secs / 60
+    if mins < 60:
+        return f"~{mins:.0f} min"
+    hours = mins / 60
+    return f"~{hours:.1f} h"
+
 
 @dataclass
 class AnimatedBakeCache:
@@ -120,7 +138,8 @@ def prepare_animated_cache(
     # 1024 is plenty for the ring highlight even on large meshes.
     emissive_tex_size = min(base_tex_size, 1024)
 
-    _status(f"UV unwrapping {n_faces:,} faces with xatlas...")
+    eta = _estimate_xatlas_time(n_faces)
+    _status(f"UV unwrapping {n_faces:,} faces with xatlas (estimated {eta})...")
     t0 = time.monotonic()
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
         mesh_data.vertices, mesh_data.faces, mesh_data.normals,
