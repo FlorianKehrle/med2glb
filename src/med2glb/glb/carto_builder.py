@@ -103,7 +103,10 @@ def prepare_animated_cache(
         apply_rasterization_map,
     )
 
-    tex_size = compute_texture_size(len(mesh_data.faces))
+    base_tex_size = compute_texture_size(len(mesh_data.faces))
+    # Emissive ring textures are mostly black (thin gaussian band) —
+    # 1024 is plenty for the ring highlight even on large meshes.
+    emissive_tex_size = min(base_tex_size, 1024)
 
     _report("UV unwrapping with xatlas...", 0, n_frames)
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
@@ -116,29 +119,38 @@ def prepare_animated_cache(
     if mesh_data.normals is not None:
         unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
 
-    # Precompute pixel-to-triangle mapping once
+    # Precompute rasterization maps — full-res for base, smaller for emissive
     _report("Precomputing rasterization map...", 0, n_frames)
-    raster_map = precompute_rasterization_map(new_faces, shared_uvs, tex_size)
+    base_raster_map = precompute_rasterization_map(new_faces, shared_uvs, base_tex_size)
 
     # Bake ONE base color texture (same quality as static GLB)
     _report("Baking base color texture...", 0, n_frames)
     base_colors_remapped = base_colors[vmapping]
     base_texture = apply_rasterization_map(
-        raster_map, base_colors_remapped,
+        base_raster_map, base_colors_remapped,
         image_format="JPEG", jpeg_quality=90,
     )
 
     # Bake per-frame emissive ring textures (mostly black = tiny JPEG)
     _report("Baking emissive ring textures...", 0, n_frames)
+    if emissive_tex_size == base_tex_size:
+        emissive_raster_map = base_raster_map
+    else:
+        del base_raster_map  # free memory before building smaller map
+        emissive_raster_map = precompute_rasterization_map(
+            new_faces, shared_uvs, emissive_tex_size,
+        )
+
     emissive_textures: list[bytes] = []
     for fi in range(n_frames):
         _report(f"Baking ring frame {fi + 1}/{n_frames}...", fi, n_frames)
         ring_colors = emissive_rgba[fi, vmapping]
         img_bytes = apply_rasterization_map(
-            raster_map, ring_colors,
+            emissive_raster_map, ring_colors,
             image_format="JPEG", jpeg_quality=85,
         )
         emissive_textures.append(img_bytes)
+    del emissive_raster_map
 
     del emissive_rgba
 
@@ -153,6 +165,137 @@ def prepare_animated_cache(
         base_texture=base_texture,
         emissive_textures=emissive_textures,
         n_frames=n_frames,
+    )
+
+
+def build_carto_static_glb(
+    cache: AnimatedBakeCache,
+    output_path: Path,
+    legend_info: dict | None = None,
+) -> None:
+    """Build a static GLB reusing geometry and base texture from the animated cache.
+
+    Avoids a redundant xatlas unwrap + rasterization pass by reusing the
+    pre-computed UV layout and base color texture from the animated cache.
+    """
+    mesh_data = cache.mesh_data
+    gltf = pygltflib.GLTF2(
+        scene=0,
+        scenes=[pygltflib.Scene(nodes=[])],
+        nodes=[],
+        meshes=[],
+        accessors=[],
+        bufferViews=[],
+        buffers=[],
+        materials=[],
+        images=[],
+        textures=[],
+        samplers=[],
+    )
+    if mesh_data.material.unlit:
+        gltf.extensionsUsed = ["KHR_materials_unlit"]
+    binary_data = bytearray()
+
+    # Sampler
+    gltf.samplers.append(pygltflib.Sampler(
+        magFilter=pygltflib.LINEAR,
+        minFilter=pygltflib.LINEAR,
+        wrapS=pygltflib.CLAMP_TO_EDGE,
+        wrapT=pygltflib.CLAMP_TO_EDGE,
+    ))
+
+    # Base color texture
+    img_offset = len(binary_data)
+    binary_data.extend(cache.base_texture)
+    _pad_to_4(binary_data)
+
+    gltf.bufferViews.append(pygltflib.BufferView(
+        buffer=0, byteOffset=img_offset, byteLength=len(cache.base_texture),
+    ))
+    gltf.images.append(pygltflib.Image(bufferView=0, mimeType="image/jpeg"))
+    gltf.textures.append(pygltflib.Texture(sampler=0, source=0))
+
+    # Material
+    mat_kwargs: dict = dict(
+        name="carto_static",
+        pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+            baseColorTexture=pygltflib.TextureInfo(index=0),
+            baseColorFactor=[1.0, 1.0, 1.0, 1.0],
+            metallicFactor=0.0,
+            roughnessFactor=0.7,
+        ),
+        doubleSided=True,
+    )
+    if mesh_data.material.unlit:
+        mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
+    gltf.materials.append(pygltflib.Material(**mat_kwargs))
+
+    # Geometry
+    pos_acc = write_accessor(
+        gltf, binary_data, cache.unwelded_verts, pygltflib.ARRAY_BUFFER,
+        pygltflib.FLOAT, pygltflib.VEC3, with_minmax=True,
+    )
+    norm_acc = None
+    if cache.unwelded_normals is not None:
+        norm_acc = write_accessor(
+            gltf, binary_data, cache.unwelded_normals, pygltflib.ARRAY_BUFFER,
+            pygltflib.FLOAT, pygltflib.VEC3,
+        )
+    uv_acc = write_accessor(
+        gltf, binary_data, cache.shared_uvs, pygltflib.ARRAY_BUFFER,
+        pygltflib.FLOAT, pygltflib.VEC2,
+    )
+    idx_acc = write_accessor(
+        gltf, binary_data, cache.unwelded_faces.ravel(), pygltflib.ELEMENT_ARRAY_BUFFER,
+        pygltflib.UNSIGNED_INT, pygltflib.SCALAR, with_minmax=True,
+    )
+
+    attrs = pygltflib.Attributes(POSITION=pos_acc)
+    if norm_acc is not None:
+        attrs.NORMAL = norm_acc
+    attrs.TEXCOORD_0 = uv_acc
+
+    gltf.meshes.append(pygltflib.Mesh(
+        name="carto_static",
+        primitives=[pygltflib.Primitive(
+            attributes=attrs, indices=idx_acc, material=0,
+        )],
+    ))
+
+    child_nodes = [0]
+    gltf.nodes.append(pygltflib.Node(name="mesh", mesh=0))
+
+    if legend_info:
+        from med2glb.glb.legend_builder import add_legend_nodes
+        centered_verts = (
+            mesh_data.vertices - np.array(cache.centroid, dtype=np.float32)
+        ).astype(np.float32)
+        legend_nodes = add_legend_nodes(
+            gltf, binary_data, centered_verts,
+            coloring=legend_info["coloring"],
+            clamp_range=tuple(legend_info["clamp_range"]),
+            centroid=[0.0, 0.0, 0.0],
+            metadata=legend_info.get("metadata"),
+        )
+        child_nodes.extend(legend_nodes)
+
+    # Root node: mm -> m + 10x AR scale
+    root_idx = len(gltf.nodes)
+    gltf.nodes.append(pygltflib.Node(
+        name="root", children=child_nodes, scale=[0.01, 0.01, 0.01],
+    ))
+    gltf.scenes[0].nodes = [root_idx]
+
+    gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
+    gltf.set_binary_blob(bytes(binary_data))
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    gltf.save(str(output_path))
+
+    logger.info(
+        f"CARTO static GLB (from cache): {len(mesh_data.vertices)} verts, "
+        f"{output_path.stat().st_size / 1024:.0f} KB"
     )
 
 

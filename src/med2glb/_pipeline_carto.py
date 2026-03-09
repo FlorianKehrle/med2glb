@@ -359,14 +359,18 @@ def _convert_carto_meshes(
             },
         }
 
-        # === Pre-compute animated cache if multiple animated variants ===
+        # === Pre-compute animated cache (shared xatlas + textures) ===
         _n_frames = 30
         animated_variants = [
             (a, v) for a, v in variants if a and points
         ]
+        has_static = any(not a for a, _ in variants)
 
+        # Always compute cache when animated variants exist — the cache is
+        # also reused for the static variant to avoid a redundant xatlas
+        # unwrap + rasterization pass (saves ~2 minutes per mesh).
         anim_cache = None
-        if len(animated_variants) > 1 and active_lat is not None:
+        if animated_variants and active_lat is not None:
             from med2glb.glb.carto_builder import prepare_animated_cache
 
             with Progress(
@@ -437,10 +441,17 @@ def _convert_carto_meshes(
                         progress.update(task, completed=_total_steps)
                 else:
                     progress.update(task, description="Building GLB...")
-                    build_glb(
-                        [mesh_data], out_path,
-                        source_units="mm", legend_info=legend_info,
-                    )
+                    if anim_cache is not None:
+                        # Reuse pre-computed xatlas + base texture from cache
+                        from med2glb.glb.carto_builder import build_carto_static_glb
+                        build_carto_static_glb(
+                            anim_cache, out_path, legend_info=legend_info,
+                        )
+                    else:
+                        build_glb(
+                            [mesh_data], out_path,
+                            source_units="mm", legend_info=legend_info,
+                        )
                     progress.update(task, completed=_total_steps)
 
                 if _variant_written:

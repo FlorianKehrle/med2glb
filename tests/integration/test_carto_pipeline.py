@@ -130,14 +130,14 @@ class TestCartoEndToEnd:
         active_lat = lat_values[active_mask]
 
         cache = prepare_animated_cache(
-            mesh_data, active_lat, n_frames=5, target_faces=100000,
+            mesh_data, active_lat, n_frames=5,
         )
         assert cache is not None
 
         output = tmp_path / "test_animated.glb"
         build_carto_animated_glb(
             mesh_data, active_lat, output,
-            n_frames=5, target_faces=100000,
+            n_frames=5,
             cache=cache,
         )
 
@@ -186,14 +186,14 @@ class TestCartoEndToEnd:
             mesh_data = carto_mesh_to_mesh_data(mesh, points, coloring=coloring, subdivide=0)
 
             cache = prepare_animated_cache(
-                mesh_data, active_lat, n_frames=5, target_faces=100000,
+                mesh_data, active_lat, n_frames=5,
             )
             assert cache is not None
 
             output = tmp_path / f"test_animated_{coloring}.glb"
             build_carto_animated_glb(
                 mesh_data, active_lat, output,
-                n_frames=5, target_faces=100000,
+                n_frames=5,
                 cache=cache,
             )
 
@@ -241,14 +241,14 @@ class TestRealCartoV71:
         active_lat = _extract_active_lat(mesh, points, mesh_data)
 
         cache = prepare_animated_cache(
-            mesh_data, active_lat, n_frames=5, target_faces=10000,
+            mesh_data, active_lat, n_frames=5,
         )
         assert cache is not None
 
         output = v71_output / f"{mesh.structure_name}_lat_animated.glb"
         build_carto_animated_glb(
             mesh_data, active_lat, output,
-            n_frames=5, target_faces=10000,
+            n_frames=5,
             cache=cache,
         )
 
@@ -309,14 +309,14 @@ class TestRealCartoV72O:
         active_lat = _extract_active_lat(mesh, points, mesh_data)
 
         cache = prepare_animated_cache(
-            mesh_data, active_lat, n_frames=5, target_faces=10000,
+            mesh_data, active_lat, n_frames=5,
         )
         assert cache is not None
 
         output = v72_o_output / f"{mesh.structure_name}_lat_animated.glb"
         build_carto_animated_glb(
             mesh_data, active_lat, output,
-            n_frames=5, target_faces=10000,
+            n_frames=5,
             cache=cache,
         )
 
@@ -339,7 +339,7 @@ class TestRealCartoV72O:
         assert single.lat_range_ms >= 0.0
 
     def test_animated_with_vectors(self, v72_o_study, v72_o_output):
-        """Animated GLB with vectors via shared cache — vectors may be skipped after decimation."""
+        """Animated GLB with vectors via shared cache."""
         from med2glb.io.carto_mapper import carto_mesh_to_mesh_data
         from med2glb.glb.carto_builder import build_carto_animated_glb, prepare_animated_cache
         from med2glb.cli_wizard import _assess_vector_quality
@@ -357,20 +357,19 @@ class TestRealCartoV72O:
 
         # Shared cache for both variants (the production code path)
         cache = prepare_animated_cache(
-            mesh_data, active_lat, n_frames=5, target_faces=10000,
+            mesh_data, active_lat, n_frames=5,
         )
         assert cache is not None
 
         output = v72_o_output / f"{mesh.structure_name}_lat_animated_vectors.glb"
         wrote = build_carto_animated_glb(
             mesh_data, active_lat, output,
-            n_frames=5, target_faces=10000,
+            n_frames=5,
             vectors=True,
             cache=cache,
         )
 
-        # Vector quality may be rejected after decimation even if
-        # _assess_vector_quality passed on the full mesh
+        # Vector quality may be rejected if streamlines are too short
         if wrote:
             assert output.exists()
             gltf = pygltflib.GLTF2.load(str(output))

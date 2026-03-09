@@ -200,12 +200,19 @@ def trace_streamline(
     face_adjacency: dict[tuple[int, int], int],
     max_steps: int = 200,
     step_size: float = 0.5,
+    vertex_gradients: np.ndarray | None = None,
 ) -> list[np.ndarray]:
     """Trace a single streamline on the mesh surface following the gradient.
 
     Starting from a point in barycentric coordinates within a face, advance
-    along the face gradient. When the point exits the current face (a
+    along the gradient. When the point exits the current face (a
     barycentric coord goes negative), cross to the adjacent face and continue.
+
+    When *vertex_gradients* are provided, the gradient at each point is
+    interpolated from the vertex gradients using barycentric weights.
+    This produces smoother flow that can traverse faces whose own face
+    gradient is zero (common with sparse LAT data).  Falls back to the
+    face gradient when vertex gradients are not supplied.
 
     Returns:
         List of 3D points forming the streamline polyline.
@@ -213,6 +220,9 @@ def trace_streamline(
     path: list[np.ndarray] = []
     cur_face = start_face
     cur_bary = start_bary.copy()
+    prev_direction: np.ndarray | None = None
+    zero_grad_steps = 0
+    _MAX_COAST_STEPS = 20  # max steps to coast through zero-gradient regions
 
     for _ in range(max_steps):
         fi = faces[cur_face]
@@ -220,12 +230,31 @@ def trace_streamline(
         pos = _barycentric_to_world(cur_bary, tri)
         path.append(pos.copy())
 
-        grad = face_gradients[cur_face]
+        # Interpolate gradient: prefer vertex gradients (smoother)
+        if vertex_gradients is not None:
+            grad = (
+                cur_bary[0] * vertex_gradients[fi[0]]
+                + cur_bary[1] * vertex_gradients[fi[1]]
+                + cur_bary[2] * vertex_gradients[fi[2]]
+            )
+        else:
+            grad = face_gradients[cur_face]
+
         grad_len = np.linalg.norm(grad)
         if grad_len < 1e-10:
-            break
+            # Coast through zero-gradient regions using last known direction.
+            # This is physically motivated: conduction propagation does not
+            # stop at areas without measurement data.
+            if prev_direction is not None and zero_grad_steps < _MAX_COAST_STEPS:
+                zero_grad_steps += 1
+                direction = prev_direction
+            else:
+                break
+        else:
+            zero_grad_steps = 0
+            direction = grad / grad_len
 
-        direction = grad / grad_len
+        prev_direction = direction
         new_pos = pos + direction * step_size
         new_bary = _world_to_barycentric(new_pos, tri)
 
@@ -382,6 +411,12 @@ def trace_all_streamlines(
         vertices, faces, lat_values,
     )
 
+    # Compute vertex gradients for smooth interpolation during tracing.
+    # Vertex gradients accumulate from neighboring faces, so they are
+    # non-zero even at vertices surrounded by individually zero-gradient
+    # faces — critical for sparse LAT data.
+    vert_grads = compute_vertex_gradients(vertices, faces, lat_values, normals)
+
     # Auto-scale step size from mesh bounding box
     if step_size is None:
         bbox = vertices.max(axis=0) - vertices.min(axis=0)
@@ -404,6 +439,7 @@ def trace_all_streamlines(
         path = trace_streamline(
             face_idx, bary, faces, vertices, face_grads, adjacency,
             max_steps=max_steps, step_size=step_size,
+            vertex_gradients=vert_grads,
         )
         if len(path) >= 3:  # Need at least 3 points for a meaningful streamline
             path = _smooth_streamline(path)

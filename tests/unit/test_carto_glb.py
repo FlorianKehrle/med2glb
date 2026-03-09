@@ -89,7 +89,6 @@ class TestCartoAnimatedGlb:
         build_carto_animated_glb(
             mesh_data, active_lat, output,
             n_frames=5, loop_duration_s=1.0,
-            target_faces=100000,  # no decimation needed for tiny mesh
         )
 
         assert output.exists()
@@ -148,7 +147,6 @@ class TestCartoAnimatedGlb:
         build_carto_animated_glb(
             mesh_data, active_lat, output,
             n_frames=1, loop_duration_s=1.0,
-            target_faces=100000,
         )
 
         assert output.exists()
