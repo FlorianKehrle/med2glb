@@ -35,6 +35,18 @@ _XATLAS_K = 6.50e-08
 _XATLAS_EXP = 1.79
 
 
+def _fmt_duration(seconds: float) -> str:
+    """Format seconds as human-readable duration."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m {s}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m {s}s"
+
+
 def _estimate_xatlas_time(n_faces: int) -> str:
     """Human-readable time estimate for xatlas UV unwrap."""
     secs = _XATLAS_K * (n_faces ** _XATLAS_EXP)
@@ -146,7 +158,7 @@ def prepare_animated_cache(
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
         mesh_data.vertices, mesh_data.faces, mesh_data.normals,
     )
-    _status(f"UV unwrap done ({time.monotonic() - t0:.0f}s). Rasterizing {base_tex_size}x{base_tex_size} texture...")
+    _status(f"UV unwrap done ({_fmt_duration(time.monotonic() - t0)}). Rasterizing {base_tex_size}x{base_tex_size} texture...")
 
     unwelded_verts, centroid = _center_vertices(
         mesh_data.vertices[vmapping].astype(np.float32),
@@ -158,7 +170,7 @@ def prepare_animated_cache(
     # Precompute rasterization maps — full-res for base, smaller for emissive
     t0 = time.monotonic()
     base_raster_map = precompute_rasterization_map(new_faces, shared_uvs, base_tex_size)
-    _status(f"Rasterization map done ({time.monotonic() - t0:.0f}s). Baking textures...")
+    _status(f"Rasterization map done ({_fmt_duration(time.monotonic() - t0)}). Baking textures...")
 
     # Bake ONE base color texture (same quality as static GLB)
     base_colors_remapped = base_colors[vmapping]

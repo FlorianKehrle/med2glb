@@ -53,9 +53,10 @@ def xatlas_unwrap(
     elapsed = time.monotonic() - t0
     vmapping, new_faces, uvs = atlas[0]
 
+    elapsed_str = f"{int(elapsed)}s" if elapsed < 60 else f"{int(elapsed)//60}m {int(elapsed)%60}s"
     logger.info(
-        "xatlas unwrap: %d → %d verts, %d charts (%.1fs)",
-        len(vertices), len(vmapping), atlas.chart_count, elapsed,
+        "xatlas unwrap: %d → %d verts, %d charts (%s)",
+        len(vertices), len(vmapping), atlas.chart_count, elapsed_str,
     )
 
     return vmapping, new_faces.astype(np.uint32), uvs.astype(np.float32)
