@@ -10,6 +10,7 @@ universally supported in glTF viewers including HoloLens 2 (MRTK/glTFast).
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,8 +58,19 @@ def prepare_animated_cache(
     Uses the full mesh (no decimation).  Bakes one shared base color
     texture and N small emissive ring textures.
     Returns None if LAT values are invalid (all-NaN or zero range).
+
+    The *progress* callback receives ``(description, current, total)``.
+    For blocking steps (xatlas, rasterization), ``current=0, total=0`` —
+    the caller should treat this as a status message.
+    For frame-based steps, ``current`` and ``total`` are meaningful.
     """
-    def _report(desc: str, current: int = 0, total: int = 0) -> None:
+    def _status(desc: str) -> None:
+        """Report a blocking step (no progress counter)."""
+        if progress:
+            progress(desc, 0, 0)
+
+    def _frame(desc: str, current: int, total: int) -> None:
+        """Report frame progress (counter is meaningful)."""
         if progress:
             progress(desc, current, total)
 
@@ -84,7 +96,6 @@ def prepare_animated_cache(
         base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
 
     # Generate emissive ring colors for each frame (ring only, no base)
-    _report("Generating ring colors...", 0, n_frames)
     t_values = np.linspace(0, 1, n_frames).reshape(-1, 1)  # (F, 1)
     sigma_sq_2 = 2 * _RING_WIDTH ** 2
     ring_all = np.exp(-((lat_norm[np.newaxis, :] - t_values) ** 2) / sigma_sq_2)  # (F, N)
@@ -103,16 +114,19 @@ def prepare_animated_cache(
         apply_rasterization_map,
     )
 
-    base_tex_size = compute_texture_size(len(mesh_data.faces))
+    n_faces = len(mesh_data.faces)
+    base_tex_size = compute_texture_size(n_faces)
     # Emissive ring textures are mostly black (thin gaussian band) —
     # 1024 is plenty for the ring highlight even on large meshes.
     emissive_tex_size = min(base_tex_size, 1024)
 
-    n_faces = len(mesh_data.faces)
-    _report(f"UV unwrapping {n_faces:,} faces with xatlas...", 0, n_frames)
+    _status(f"UV unwrapping {n_faces:,} faces with xatlas...")
+    t0 = time.monotonic()
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
         mesh_data.vertices, mesh_data.faces, mesh_data.normals,
     )
+    _status(f"UV unwrap done ({time.monotonic() - t0:.0f}s). Rasterizing {base_tex_size}x{base_tex_size} texture...")
+
     unwelded_verts, centroid = _center_vertices(
         mesh_data.vertices[vmapping].astype(np.float32),
     )
@@ -121,11 +135,11 @@ def prepare_animated_cache(
         unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
 
     # Precompute rasterization maps — full-res for base, smaller for emissive
-    _report(f"Precomputing rasterization map ({base_tex_size}x{base_tex_size})...", 0, n_frames)
+    t0 = time.monotonic()
     base_raster_map = precompute_rasterization_map(new_faces, shared_uvs, base_tex_size)
+    _status(f"Rasterization map done ({time.monotonic() - t0:.0f}s). Baking textures...")
 
     # Bake ONE base color texture (same quality as static GLB)
-    _report("Baking base color texture...", 0, n_frames)
     base_colors_remapped = base_colors[vmapping]
     base_texture = apply_rasterization_map(
         base_raster_map, base_colors_remapped,
@@ -133,7 +147,6 @@ def prepare_animated_cache(
     )
 
     # Bake per-frame emissive ring textures (mostly black = tiny JPEG)
-    _report("Baking emissive ring textures...", 0, n_frames)
     if emissive_tex_size == base_tex_size:
         emissive_raster_map = base_raster_map
     else:
@@ -144,7 +157,7 @@ def prepare_animated_cache(
 
     emissive_textures: list[bytes] = []
     for fi in range(n_frames):
-        _report(f"Baking ring frame {fi + 1}/{n_frames}...", fi, n_frames)
+        _frame(f"Baking ring textures...", fi, n_frames)
         ring_colors = emissive_rgba[fi, vmapping]
         img_bytes = apply_rasterization_map(
             emissive_raster_map, ring_colors,

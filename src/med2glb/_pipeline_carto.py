@@ -378,24 +378,42 @@ def _convert_carto_meshes(
         if animated_variants and active_lat is not None:
             from med2glb.glb.carto_builder import prepare_animated_cache
 
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(bar_width=20),
-                MofNCompleteColumn(),
-                TimeElapsedColumn(),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Pre-computing animated cache...", total=None)
+            # Use plain console prints for blocking steps (xatlas, rasterization)
+            # and a progress bar only for the frame baking loop where it updates.
+            _frame_progress: Progress | None = None
+            _frame_task = None
 
-                def _cache_progress(desc: str, current: int, _total: int) -> None:
-                    progress.update(task, description=desc)
+            def _cache_progress(desc: str, current: int, total: int) -> None:
+                nonlocal _frame_progress, _frame_task
+                if total == 0:
+                    # Blocking step — print status line
+                    if _frame_progress is not None:
+                        _frame_progress.stop()
+                        _frame_progress = None
+                        _frame_task = None
+                    console.print(f"  {desc}")
+                else:
+                    # Frame loop — use a real progress bar
+                    if _frame_progress is None:
+                        _frame_progress = Progress(
+                            SpinnerColumn(),
+                            TextColumn("[progress.description]{task.description}"),
+                            BarColumn(bar_width=20),
+                            MofNCompleteColumn(),
+                            console=console,
+                        )
+                        _frame_progress.start()
+                        _frame_task = _frame_progress.add_task(desc, total=total)
+                    _frame_progress.update(_frame_task, description=desc, completed=current)
 
-                anim_cache = prepare_animated_cache(
-                    mesh_data, active_lat, n_frames=_n_frames,
-                    progress=_cache_progress,
-                )
-                progress.remove_task(task)
+            anim_cache = prepare_animated_cache(
+                mesh_data, active_lat, n_frames=_n_frames,
+                progress=_cache_progress,
+            )
+            if _frame_progress is not None:
+                _frame_progress.update(_frame_task, completed=_n_frames)
+                _frame_progress.stop()
+                _frame_progress = None
 
         # === Emit each variant from cached state ===
         variant_outputs: list[tuple[bool, bool, Path]] = []
