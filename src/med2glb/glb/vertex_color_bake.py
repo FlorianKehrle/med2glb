@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 
 import numpy as np
 import xatlas
@@ -47,12 +48,14 @@ def xatlas_unwrap(
     else:
         atlas.add_mesh(verts_f32, faces_u32)
 
+    t0 = time.monotonic()
     atlas.generate()
+    elapsed = time.monotonic() - t0
     vmapping, new_faces, uvs = atlas[0]
 
     logger.info(
-        "xatlas unwrap: %d → %d verts, %d charts",
-        len(vertices), len(vmapping), atlas.chart_count,
+        "xatlas unwrap: %d → %d verts, %d charts (%.1fs)",
+        len(vertices), len(vmapping), atlas.chart_count, elapsed,
     )
 
     return vmapping, new_faces.astype(np.uint32), uvs.astype(np.float32)

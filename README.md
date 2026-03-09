@@ -11,7 +11,7 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 **Key features:**
 
 - **Analyze-and-prompt workflow** -- point it at a directory, it analyzes the data, shows a summary, and guides you through relevant options with smart defaults
-- **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring overlay; animated LAT streamline vectors showing conduction direction; Loop subdivision with IDW interpolation for smooth color maps; color scale legend cylinder and study info panel embedded alongside the mesh for AR readability
+- **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring via emissive overlay (full-quality mesh shared across all variants); animated LAT streamline vectors showing conduction direction; Loop subdivision with IDW interpolation for smooth color maps; color scale legend cylinder and study info panel embedded alongside the mesh for AR readability
 - **Animated cardiac output** -- 2D cine clips become animated GLB with per-frame texture planes; 3D temporal volumes use morph targets; CARTO excitation ring animation
 - **Gallery mode** -- convert every slice to textured quads with three layouts: individual GLBs, lightbox grid, and spatial fan positioned using DICOM metadata
 - **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and chamber-detect (echo/general)
@@ -76,11 +76,13 @@ Coloring (lat / bipolar / unipolar) [lat]:
 Output mode (static / animated / both) [both]:
 LAT vectors (yes / no / only) [yes]:
 Subdivision level (0-3) [2]:
-Full quality animated? (y/n) [n]:
 
-→ ./Export_Study/glb/ReBS_V_SR_11_lat.glb
-→ ./Export_Study/glb/ReBS_V_SR_11_lat_animated.glb
-→ ./Export_Study/glb/ReBS_V_SR_11_lat_animated_vectors.glb
+Done: ReBS_V_SR_11
+  Output:
+    ReBS_V_SR_11_lat.glb  (1245 KB, static)
+    ReBS_V_SR_11_lat_animated.glb  (1823 KB, animated)
+    ReBS_V_SR_11_lat_animated_vectors.glb  (2104 KB, animated + vectors)
+  Time: 2m 15s
 ```
 
 ### DICOM example
@@ -249,7 +251,7 @@ The spatial layout uses `ImagePositionPatient` and `ImageOrientationPatient` fro
 
 ## Compress
 
-The `compress` subcommand shrinks a GLB file to fit a target size. Animated CARTO GLBs are already budget-constrained upfront (25 MB cap for HoloLens 2 stability), so this command is primarily useful for post-hoc compression of any GLB.
+The `compress` subcommand shrinks a GLB file to fit a target size.
 
 ```bash
 # Compress in-place to 25 MB (default)

@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 
 import typer
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -295,6 +295,7 @@ def _convert_carto_meshes(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(bar_width=20),
             MofNCompleteColumn(),
+            TimeElapsedColumn(),
             console=console,
         ) as progress:
             task = progress.add_task("Subdividing mesh...", total=None)
@@ -382,6 +383,7 @@ def _convert_carto_meshes(
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(bar_width=20),
                 MofNCompleteColumn(),
+                TimeElapsedColumn(),
                 console=console,
             ) as progress:
                 task = progress.add_task("Pre-computing animated cache...", total=None)
@@ -403,6 +405,7 @@ def _convert_carto_meshes(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(bar_width=20),
             MofNCompleteColumn(),
+            TimeElapsedColumn(),
             console=console,
         ) as progress:
             for do_animate, do_vectors in variants:

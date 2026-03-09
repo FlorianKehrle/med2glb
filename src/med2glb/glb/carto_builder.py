@@ -108,7 +108,8 @@ def prepare_animated_cache(
     # 1024 is plenty for the ring highlight even on large meshes.
     emissive_tex_size = min(base_tex_size, 1024)
 
-    _report("UV unwrapping with xatlas...", 0, n_frames)
+    n_faces = len(mesh_data.faces)
+    _report(f"UV unwrapping {n_faces:,} faces with xatlas...", 0, n_frames)
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
         mesh_data.vertices, mesh_data.faces, mesh_data.normals,
     )
@@ -120,7 +121,7 @@ def prepare_animated_cache(
         unwelded_normals = mesh_data.normals[vmapping].astype(np.float32)
 
     # Precompute rasterization maps — full-res for base, smaller for emissive
-    _report("Precomputing rasterization map...", 0, n_frames)
+    _report(f"Precomputing rasterization map ({base_tex_size}x{base_tex_size})...", 0, n_frames)
     base_raster_map = precompute_rasterization_map(new_faces, shared_uvs, base_tex_size)
 
     # Bake ONE base color texture (same quality as static GLB)
