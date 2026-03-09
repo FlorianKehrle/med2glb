@@ -1,6 +1,6 @@
 # med2glb Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-02-09
+Auto-generated from all feature plans. Last updated: 2026-03-09
 
 ## Active Technologies
 
@@ -22,7 +22,7 @@ src/med2glb/
 ├── io/                 # DICOM reading, CARTO reader/mapper, file export
 ├── methods/            # Pluggable conversion methods (registry pattern)
 ├── mesh/               # Mesh processing (Taubin smoothing, decimation)
-├── glb/                # GLB construction + morph target animation + CARTO wavefront animation
+├── glb/                # GLB construction + morph target animation + CARTO emissive overlay animation
 └── core/               # Data structures and types
 
 tests/
@@ -58,7 +58,7 @@ pytest --cov=med2glb
 
 ## Recent Changes
 
-- **carto-support**: CARTO 3 EP mapping support — .mesh/.car parser, per-vertex COLOR_0 heatmaps (LAT/bipolar/unipolar), animated LAT wavefront sweep, auto-detection
+- **carto-support**: CARTO 3 EP mapping support — .mesh/.car parser, texture-baked heatmaps (LAT/bipolar/unipolar) via xatlas UV unwrap, animated excitation ring via emissive overlay (full-quality mesh shared across static/animated/vector variants), animated LAT streamline vectors with vertex-gradient interpolation + momentum coasting, Loop subdivision with IDW interpolation, auto-detection
 - **1-dicom-glb-converter**: Initial feature — DICOM to GLB conversion with pluggable methods, morph target animation, cardiac segmentation
 
 <!-- MANUAL ADDITIONS START -->
