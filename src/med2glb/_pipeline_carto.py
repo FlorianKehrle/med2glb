@@ -154,40 +154,29 @@ def _print_carto_summary(
     mesh: "CartoMesh",
     mesh_data: "MeshData",
     points: list[CartoPoint] | None,
-    coloring: str,
+    colorings: list[str],
     subdivide: int,
-    variant_outputs: list[tuple[bool, bool, Path]],
+    all_outputs: list[tuple[str, bool, bool, Path]],
     start_time: float,
     step_times: dict[str, float] | None = None,
 ) -> None:
-    """Print a single summary after all variants of a CARTO mesh are built.
+    """Print a single summary after all colorings of a CARTO mesh are built.
 
     Args:
-        variant_outputs: List of (do_animate, do_vectors, out_path) for each
-            successfully written variant.
+        colorings: List of coloring schemes that were produced.
+        all_outputs: List of (coloring, do_animate, do_vectors, out_path) for
+            each successfully written variant across all colorings.
     """
     elapsed = time.time() - start_time
     n_total_verts = len(mesh.vertices)
-
-    clamp_info = ""
-    if coloring == "bipolar":
-        clamp_info = "0.05 – 1.5 mV"
-    elif coloring == "unipolar":
-        clamp_info = "3.0 – 10.0 mV"
-    elif coloring == "lat" and points:
-        valid_lats = [p.lat for p in points if not math.isnan(p.lat)]
-        if valid_lats:
-            clamp_info = f"{min(valid_lats):.0f} – {max(valid_lats):.0f} ms (auto)"
 
     console.print(f"\n[green]Done: {mesh.structure_name}[/green]")
     console.print(f"  System:     {_carto_version_label(study.version)}")
     if study.study_name:
         console.print(f"  Study:      {study.study_name}")
-    console.print(f"  Coloring:   {coloring}")
+    console.print(f"  Colorings:  {', '.join(colorings)}")
     if subdivide > 0:
         console.print(f"  Subdivide:  level {subdivide} (~{4**subdivide}x face increase)")
-    if clamp_info:
-        console.print(f"  Color range: {clamp_info}")
 
     mesh_points = points or []
     point_stats = _carto_point_stats(mesh_points)
@@ -198,23 +187,36 @@ def _print_carto_summary(
     console.print(f"  Faces:      {len(mesh_data.faces):,}")
 
     console.print(f"  Output:")
-    for do_animate, do_vectors, out_path in variant_outputs:
+    for coloring, do_animate, do_vectors, out_path in all_outputs:
         file_size = out_path.stat().st_size / 1024
         label = "static"
         if do_animate:
             label = "animated"
             if do_vectors:
                 label += " + vectors"
-        console.print(f"    {out_path.name}  [dim]({file_size:.0f} KB, {label})[/dim]")
+        console.print(f"    {out_path.name}  [dim]({file_size:.0f} KB, {coloring} {label})[/dim]")
 
-    console.print(f"  Time:       {_format_duration(elapsed)}")
+    console.print(f"  Total time: {_format_duration(elapsed)}")
     if step_times:
-        parts = []
-        for label in ("Subdivide", "Mapping", "xatlas", "Rasterize", "Textures", "KTX2"):
+        # Separate shared (one-time) steps from per-coloring steps
+        shared_labels = ("Subdivide", "Mapping", "xatlas", "Rasterize", "Textures")
+        shared_parts = []
+        for label in shared_labels:
             if label in step_times and step_times[label] >= 0.5:
-                parts.append(f"{label} {_format_duration(step_times[label])}")
-        if parts:
-            console.print(f"  [dim]          ({', '.join(parts)})[/dim]")
+                shared_parts.append(f"{label} {_format_duration(step_times[label])}")
+        if shared_parts:
+            console.print(f"  [dim]  Shared:   {', '.join(shared_parts)}[/dim]")
+
+        # Per-coloring recolor times
+        coloring_parts = []
+        for label in sorted(step_times):
+            if label.startswith("Recolor:") and step_times[label] >= 0.5:
+                coloring_parts.append(f"{label} {_format_duration(step_times[label])}")
+        if coloring_parts:
+            console.print(f"  [dim]  Recolor:  {', '.join(coloring_parts)}[/dim]")
+
+        if "KTX2" in step_times and step_times["KTX2"] >= 0.5:
+            console.print(f"  [dim]  KTX2:     {_format_duration(step_times['KTX2'])}[/dim]")
 
 
 def _write_carto_log(
@@ -223,9 +225,9 @@ def _write_carto_log(
     mesh: "CartoMesh",
     mesh_data: "MeshData",
     points: list[CartoPoint] | None,
-    coloring: str,
+    colorings: list[str],
     subdivide: int,
-    variant_outputs: list[tuple[bool, bool, Path]],
+    all_outputs: list[tuple[str, bool, bool, Path]],
     start_time: float,
     source_path: Path,
     step_times: dict[str, float] | None = None,
@@ -236,22 +238,21 @@ def _write_carto_log(
 
     elapsed = time.time() - start_time
 
-    color_range = ""
-    if coloring == "bipolar":
-        color_range = "0.05 - 1.5 mV"
-    elif coloring == "unipolar":
-        color_range = "3.0 - 10.0 mV"
-    elif coloring == "lat" and points:
-        valid_lats = [p.lat for p in points if not math.isnan(p.lat)]
-        if valid_lats:
-            color_range = f"{min(valid_lats):.0f} - {max(valid_lats):.0f} ms (auto)"
+    # For the log, summarize all colorings produced
+    color_range = ", ".join(colorings)
+
+    # Convert all_outputs to variant_outputs format expected by log
+    variant_outputs = [
+        (do_animate, do_vectors, out_path)
+        for _coloring, do_animate, do_vectors, out_path in all_outputs
+    ]
 
     append_carto_entry(
         output_dir,
         structure_name=mesh.structure_name,
         carto_version=_carto_version_label(study.version),
         study_name=study.study_name or "",
-        coloring=coloring,
+        coloring=color_range,
         color_range=color_range,
         subdivide=subdivide,
         active_vertices=len(mesh_data.vertices),
@@ -477,6 +478,11 @@ def _convert_carto_meshes(
             "unipolar": (3.0, 10.0),
         }
 
+        # Collect all outputs across colorings for one combined summary
+        all_outputs: list[tuple[str, bool, bool, Path]] = []
+        produced_colorings: list[str] = []
+        last_data_coverage: float | None = None
+
         for coloring in available_colorings:
             is_lat = coloring == "lat"
 
@@ -566,7 +572,7 @@ def _convert_carto_meshes(
                 coloring_variants.append((False, False))
 
             # Emit GLB files for this coloring
-            variant_outputs: list[tuple[bool, bool, Path]] = []
+            t_coloring_start = time.monotonic()
 
             with Progress(
                 SpinnerColumn(),
@@ -616,9 +622,18 @@ def _convert_carto_meshes(
                             progress.update(task, completed=_total_steps)
                     else:
                         if is_lat and anim_cache is not None:
+                            # LAT static — reuse full cache (geometry + texture)
                             from med2glb.glb.carto_builder import build_carto_static_glb
                             build_carto_static_glb(
                                 anim_cache, out_path, legend_info=legend_info,
+                            )
+                        elif not is_lat and anim_cache is not None and anim_cache.vmapping is not None:
+                            # Bipolar/unipolar — reuse cached xatlas geometry,
+                            # only re-bake the texture with new vertex colors
+                            from med2glb.glb.carto_builder import build_carto_recolored_static_glb
+                            build_carto_recolored_static_glb(
+                                anim_cache, mesh_data, out_path,
+                                legend_info=legend_info,
                             )
                         else:
                             build_glb(
@@ -632,7 +647,7 @@ def _convert_carto_meshes(
                         t_ktx = time.monotonic()
                         if optimize_textures_ktx2(out_path):
                             step_times["KTX2"] = step_times.get("KTX2", 0) + (time.monotonic() - t_ktx)
-                        variant_outputs.append((do_animate, do_vectors, out_path))
+                        all_outputs.append((coloring, do_animate, do_vectors, out_path))
                     else:
                         progress.update(
                             task,
@@ -640,19 +655,31 @@ def _convert_carto_meshes(
                             completed=_total_steps,
                         )
 
-            if variant_outputs:
-                _print_carto_summary(
-                    study, mesh, mesh_data, points, coloring,
-                    config.subdivide, variant_outputs, start_time,
-                    step_times=step_times,
-                )
-                _write_carto_log(
-                    carto_output_dir, study, mesh, mesh_data, points,
-                    coloring, config.subdivide, variant_outputs, start_time,
-                    source_path=config.input_path,
-                    step_times=step_times,
-                    data_coverage_pct=data_coverage_pct,
-                )
+            # Track per-coloring build time (excludes shared steps)
+            if not is_lat:
+                step_times[f"Recolor:{coloring}"] = time.monotonic() - t_coloring_start
+
+            if coloring not in produced_colorings and any(
+                c == coloring for c, *_ in all_outputs
+            ):
+                produced_colorings.append(coloring)
+            last_data_coverage = data_coverage_pct
+
+        # === One combined summary per mesh (after all colorings) ===
+        if all_outputs:
+            _print_carto_summary(
+                study, mesh, lat_mesh_data, points,
+                produced_colorings,
+                config.subdivide, all_outputs, start_time,
+                step_times=step_times,
+            )
+            _write_carto_log(
+                carto_output_dir, study, mesh, lat_mesh_data, points,
+                produced_colorings, config.subdivide, all_outputs, start_time,
+                source_path=config.input_path,
+                step_times=step_times,
+                data_coverage_pct=last_data_coverage,
+            )
 
 
 def run_carto_from_config(config: "CartoConfig") -> None:

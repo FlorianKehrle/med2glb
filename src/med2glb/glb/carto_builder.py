@@ -75,6 +75,7 @@ class AnimatedBakeCache:
     base_texture: bytes
     emissive_textures: list[bytes]
     n_frames: int
+    vmapping: np.ndarray | None = None
     step_times: dict[str, float] | None = None
 
 
@@ -217,6 +218,7 @@ def prepare_animated_cache(
         base_texture=base_texture,
         emissive_textures=emissive_textures,
         n_frames=n_frames,
+        vmapping=vmapping,
         step_times=_step_times,
     )
 
@@ -348,6 +350,157 @@ def build_carto_static_glb(
 
     logger.debug(
         f"CARTO static GLB (from cache): {len(mesh_data.vertices)} verts, "
+        f"{output_path.stat().st_size / 1024:.0f} KB"
+    )
+
+
+def build_carto_recolored_static_glb(
+    cache: AnimatedBakeCache,
+    mesh_data: MeshData,
+    output_path: Path,
+    legend_info: dict | None = None,
+) -> None:
+    """Build a static GLB reusing xatlas geometry from the cache with new vertex colors.
+
+    For non-LAT colorings (bipolar/unipolar) that share the same mesh geometry
+    but have different vertex colors.  Reuses the cached UV unwrap and
+    rasterization map, only re-baking the base color texture (~1s instead of
+    re-running xatlas which takes minutes).
+    """
+    from med2glb.glb.vertex_color_bake import (
+        precompute_rasterization_map,
+        apply_rasterization_map,
+    )
+
+    vmapping = cache.vmapping
+    if vmapping is None:
+        raise ValueError("Cache has no vmapping — cannot recolor")
+
+    n_faces = len(cache.unwelded_faces)
+    tex_size = compute_texture_size(n_faces)
+
+    # Re-bake base color texture with the new vertex colors
+    if mesh_data.vertex_colors is not None:
+        new_colors = mesh_data.vertex_colors.astype(np.float32)[vmapping]
+    else:
+        new_colors = np.full((len(cache.unwelded_verts), 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
+
+    raster_map = precompute_rasterization_map(cache.unwelded_faces, cache.shared_uvs, tex_size)
+    new_texture = apply_rasterization_map(raster_map, new_colors)
+    del raster_map
+
+    # Build GLB using cached geometry + new texture
+    gltf = pygltflib.GLTF2(
+        scene=0,
+        scenes=[pygltflib.Scene(nodes=[])],
+        nodes=[],
+        meshes=[],
+        accessors=[],
+        bufferViews=[],
+        buffers=[],
+        materials=[],
+        images=[],
+        textures=[],
+        samplers=[],
+    )
+    if mesh_data.material.unlit:
+        gltf.extensionsUsed = ["KHR_materials_unlit"]
+    binary_data = bytearray()
+
+    gltf.samplers.append(pygltflib.Sampler(
+        magFilter=pygltflib.LINEAR,
+        minFilter=pygltflib.LINEAR,
+        wrapS=pygltflib.CLAMP_TO_EDGE,
+        wrapT=pygltflib.CLAMP_TO_EDGE,
+    ))
+
+    img_offset = len(binary_data)
+    binary_data.extend(new_texture)
+    _pad_to_4(binary_data)
+
+    gltf.bufferViews.append(pygltflib.BufferView(
+        buffer=0, byteOffset=img_offset, byteLength=len(new_texture),
+    ))
+    gltf.images.append(pygltflib.Image(bufferView=0, mimeType="image/png"))
+    gltf.textures.append(pygltflib.Texture(sampler=0, source=0))
+
+    mat_kwargs: dict = dict(
+        name="carto_recolored",
+        pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+            baseColorTexture=pygltflib.TextureInfo(index=0),
+            baseColorFactor=[1.0, 1.0, 1.0, 1.0],
+            metallicFactor=0.0,
+            roughnessFactor=0.7,
+        ),
+        doubleSided=True,
+    )
+    if mesh_data.material.unlit:
+        mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
+    gltf.materials.append(pygltflib.Material(**mat_kwargs))
+
+    pos_acc = write_accessor(
+        gltf, binary_data, cache.unwelded_verts, pygltflib.ARRAY_BUFFER,
+        pygltflib.FLOAT, pygltflib.VEC3, with_minmax=True,
+    )
+    norm_acc = None
+    if cache.unwelded_normals is not None:
+        norm_acc = write_accessor(
+            gltf, binary_data, cache.unwelded_normals, pygltflib.ARRAY_BUFFER,
+            pygltflib.FLOAT, pygltflib.VEC3,
+        )
+    uv_acc = write_accessor(
+        gltf, binary_data, cache.shared_uvs, pygltflib.ARRAY_BUFFER,
+        pygltflib.FLOAT, pygltflib.VEC2,
+    )
+    idx_acc = write_accessor(
+        gltf, binary_data, cache.unwelded_faces.ravel(), pygltflib.ELEMENT_ARRAY_BUFFER,
+        pygltflib.UNSIGNED_INT, pygltflib.SCALAR, with_minmax=True,
+    )
+
+    attrs = pygltflib.Attributes(POSITION=pos_acc)
+    if norm_acc is not None:
+        attrs.NORMAL = norm_acc
+    attrs.TEXCOORD_0 = uv_acc
+
+    gltf.meshes.append(pygltflib.Mesh(
+        name="carto_recolored",
+        primitives=[pygltflib.Primitive(
+            attributes=attrs, indices=idx_acc, material=0,
+        )],
+    ))
+
+    child_nodes = [0]
+    gltf.nodes.append(pygltflib.Node(name="mesh", mesh=0))
+
+    if legend_info:
+        from med2glb.glb.legend_builder import add_legend_nodes
+        centered_verts = (
+            mesh_data.vertices - np.array(cache.centroid, dtype=np.float32)
+        ).astype(np.float32)
+        legend_nodes = add_legend_nodes(
+            gltf, binary_data, centered_verts,
+            coloring=legend_info["coloring"],
+            clamp_range=tuple(legend_info["clamp_range"]),
+            centroid=[0.0, 0.0, 0.0],
+            metadata=legend_info.get("metadata"),
+        )
+        child_nodes.extend(legend_nodes)
+
+    root_idx = len(gltf.nodes)
+    gltf.nodes.append(pygltflib.Node(
+        name="root", children=child_nodes, scale=[0.01, 0.01, 0.01],
+    ))
+    gltf.scenes[0].nodes = [root_idx]
+
+    gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
+    gltf.set_binary_blob(bytes(binary_data))
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    gltf.save(str(output_path))
+
+    logger.debug(
+        f"CARTO recolored static GLB: {len(mesh_data.vertices)} verts, "
         f"{output_path.stat().st_size / 1024:.0f} KB"
     )
 
