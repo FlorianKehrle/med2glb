@@ -11,7 +11,7 @@ No existing end-to-end CLI tool converts DICOM directly to animated GLB for augm
 **Key features:**
 
 - **Analyze-and-prompt workflow** -- point it at a directory, it analyzes the data, shows a summary, and guides you through relevant options with smart defaults
-- **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring via emissive overlay (full-quality mesh shared across all variants); animated LAT streamline vectors showing conduction direction; Loop subdivision with IDW interpolation for smooth color maps; color scale legend cylinder and study info panel embedded alongside the mesh for AR readability
+- **CARTO 3 EP mapping support** -- auto-detects CARTO export directories; renders LAT, bipolar voltage, and unipolar voltage heatmaps as per-vertex colored GLBs; animated excitation ring via emissive overlay (full-quality mesh shared across all variants); animated LAT streamline vectors showing conduction direction; Loop subdivision with IDW interpolation for smooth color maps; lossless PNG textures compressed to KTX2/Basis Universal for optimal AR quality; color scale legend cylinder and study info panel embedded alongside the mesh for AR readability
 - **Animated cardiac output** -- 2D cine clips become animated GLB with per-frame texture planes; 3D temporal volumes use morph targets; CARTO excitation ring animation
 - **Gallery mode** -- convert every slice to textured quads with three layouts: individual GLBs, lightbox grid, and spatial fan positioned using DICOM metadata
 - **Pluggable conversion methods** -- classical (Gaussian + adaptive threshold), marching cubes, TotalSegmentator (CT), and chamber-detect (echo/general)
@@ -203,6 +203,23 @@ By default, CARTO meshes are Loop-subdivided twice (`--subdivide 2`) before mapp
 - `_car.txt` files: sparse measurement points mapped to mesh vertices via k-NN IDW interpolation (with subdivision) or nearest-neighbor + linear interpolation (without)
 - LAT sentinel value `-10000` is treated as unmapped (rendered as transparent gray)
 
+**CARTO processing pipeline:**
+
+When you run a CARTO conversion, the following steps happen under the hood:
+
+1. **Parse** -- `.mesh` and `_car.txt` files are read; inactive vertices (GroupID `-1000000`) and fill/cap geometry (negative GroupIDs) are stripped
+2. **Subdivide** (if `--subdivide > 0`) -- Loop subdivision increases mesh resolution (~4x faces per level); measurement points are mapped via k-NN IDW interpolation for smooth color gradients
+3. **Color map** -- per-vertex LAT/bipolar/unipolar values are mapped through clinical colormaps to RGBA vertex colors
+4. **xatlas UV unwrap** (~60-90s) -- the mesh is UV-parameterized for texture baking (computed once, shared across all output variants)
+5. **Rasterize** -- vertex colors are baked into a texture via barycentric interpolation with 10-iteration gutter bleeding to prevent mipmap seam artifacts
+6. **Encode textures** -- base color and per-frame emissive ring textures are encoded as lossless PNG
+7. **Build GLB** -- geometry, textures, materials (metallic=0, roughness=0.7), and animation keyframes are assembled into a glTF binary
+8. **KTX2 compress** (if `toktx` is installed) -- PNG textures are GPU-compressed to KTX2/Basis Universal (UASTC + Zstandard) as the single lossy step, producing smaller files with better quality than double-lossy JPEG
+
+Texture resolution scales with face count: 512px (≤5k faces), 1024px (≤20k), 2048px (≤80k), 4096px (>80k). Emissive ring textures are capped at 1024px since the thin Gaussian highlight doesn't need higher resolution.
+
+For animated output, the full-quality mesh is shared across all 30 frames -- only the emissive texture (mostly black with a thin ring) changes per frame, keeping file size small.
+
 **LAT conduction vectors:**
 
 Animated streamline arrows overlaid on the mesh showing the direction of electrical conduction derived from the LAT gradient field. The arrows flow along curved paths following the gradient, with dashes that advance each frame in sync with the excitation ring animation. In static mode, a single frame of arrows is rendered as an extra mesh node.
@@ -211,6 +228,43 @@ The wizard automatically assesses vector quality using three checks: minimum val
 - **yes** -- produce both with-vectors and without-vectors variants (for comparison)
 - **no** -- no vector output
 - **only** -- produce only the animated+vectors variant (no static, no non-vector files)
+
+### CARTO workflow example
+
+A typical workflow for converting CARTO data for AR review on HoloLens:
+
+```bash
+# 1. Point med2glb at the CARTO export -- the wizard guides you through options
+med2glb ./Export_Study_AF/
+
+# 2. The wizard shows all maps, their point counts, and LAT ranges.
+#    Pick a map, choose coloring (lat/bipolar/unipolar), and output mode.
+#    Default settings (subdivide=2, lat coloring, both static+animated) work
+#    well for most cases.
+
+# 3. Output is placed in ./Export_Study_AF/glb/:
+#      MapName_lat.glb                    -- static heatmap
+#      MapName_lat_animated.glb           -- animated excitation ring
+#      MapName_lat_animated_vectors.glb   -- animated ring + streamline arrows
+#      med2glb_log.txt                    -- conversion metadata
+
+# For non-interactive / scripted usage, pass flags directly:
+med2glb ./Export_Study_AF/ --coloring lat --animate --vectors --subdivide 2
+
+# Bipolar voltage for scar mapping (no animation needed):
+med2glb ./Export_Study_AF/ --coloring bipolar
+
+# Quick preview without subdivision (original mesh, fastest):
+med2glb ./Export_Study_AF/ --subdivide 0
+
+# Maximum smoothness for presentation (slower, more vertices):
+med2glb ./Export_Study_AF/ --subdivide 3
+
+# Batch-convert all CARTO exports in a parent directory:
+med2glb ../CARTO_exports/ --batch --coloring lat --animate --vectors
+```
+
+For best AR quality, install the [Khronos `toktx` tool](https://github.com/KhronosGroup/KTX-Software) so textures are automatically GPU-compressed to KTX2. Without it, textures remain as lossless PNG (larger files but same visual quality).
 
 ## Gallery Mode
 
@@ -271,7 +325,7 @@ Four compression strategies are available:
 
 | Strategy | Method | Quality | Speed |
 |---|---|---|---|
-| `ktx2` (default) | KTX2 GPU-compressed textures (requires `toktx`) | Best | Moderate |
+| `ktx2` (default) | KTX2 GPU-compressed textures via Basis Universal (requires `toktx`) | Best | Moderate |
 | `draco` | Draco mesh compression + texture downscale fallback | Good | Moderate |
 | `downscale` | Progressive texture resolution reduction (lossless PNG) | High | Fast |
 | `jpeg` | JPEG re-encoding with decreasing quality | Lower | Fast |
