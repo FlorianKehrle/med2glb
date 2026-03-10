@@ -17,7 +17,6 @@ Built for clinical AR workflows — point it at a DICOM directory or CARTO expor
 - [CLI Reference](#cli-reference)
 - [Architecture](#architecture)
 - [Development](#development)
-- [Code Review](#code-review)
 
 ---
 
@@ -462,53 +461,3 @@ pytest tests/unit/ -x -q
 # Install dev dependencies
 pip install -e ".[dev]"
 ```
-
----
-
-## Code Review
-
-### With GitHub Copilot CLI
-
-Run a code review of staged and unstaged changes directly from the terminal:
-
-```bash
-# Review current changes
-copilot "review my changes"
-
-# Review a specific file
-copilot "review src/med2glb/_pipeline_carto.py for bugs"
-
-# Review changes on a branch
-copilot "review the diff between main and this branch"
-```
-
-Copilot CLI analyzes the code in context, surfacing only high-signal issues: bugs, security vulnerabilities, logic errors. It does not comment on style or formatting.
-
-### With Claude Code
-
-Run a comprehensive codebase review using [Claude Code](https://docs.anthropic.com/en/docs/claude-code):
-
-```bash
-claude "run a code review"
-```
-
-This launches a read-only analysis covering architecture, latest changes, code quality, AR-specific optimizations, and improvement suggestions. Claude Code is aware that GLB outputs target augmented reality viewers and that inputs are clinical data formats (DICOM, CARTO).
-
-For targeted reviews:
-
-```bash
-# Review a specific module
-claude "review the CARTO pipeline for performance issues"
-
-# Review test coverage
-claude "analyze test coverage gaps in the carto mapper"
-
-# Review a recent commit
-claude "review the last commit for correctness"
-```
-
----
-
-## License
-
-MIT

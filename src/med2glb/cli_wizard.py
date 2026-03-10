@@ -59,7 +59,7 @@ def _estimate_time(
 
     Heuristic derived from observed timings on typical hardware:
     - Subdivision dominates for large meshes (~16x faces at level 2)
-    - xatlas UV unwrap is the single biggest step (~1-2 min for 100k+ verts)
+    - xatlas UV unwrap is the single biggest step (superlinear scaling)
     - Texture baking scales with frame count × vertex count
     - Vector generation adds ~30-60s for meshes with points
 
@@ -73,8 +73,9 @@ def _estimate_time(
     # ~1s per 100k post-sub triangles for subdivision
     t_subdivide = post_sub / 100_000 * 1.0
 
-    # xatlas: roughly 1 min per 100k post-sub triangles
-    t_xatlas = post_sub / 100_000 * 60.0
+    # xatlas: power-law model matching carto_builder._estimate_xatlas_time
+    # Coefficients fitted from real xatlas benchmarks (superlinear scaling)
+    t_xatlas = 6.50e-08 * (post_sub ** 1.79)
 
     # Texture baking: ~0.3s per 100k post-sub triangles × 30 frames
     t_bake = post_sub / 100_000 * 0.3 * 30
