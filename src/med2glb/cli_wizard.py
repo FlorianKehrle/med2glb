@@ -379,7 +379,7 @@ def run_carto_wizard(
     input_path: Path,
     console: Console,
     # Presets from CLI flags — if set, skip the corresponding prompt
-    preset_coloring: str | None = None,
+    preset_colorings: list[str] | None = None,
     preset_animate: bool | None = None,
     preset_static: bool | None = None,
     preset_vectors: str | None = None,
@@ -485,19 +485,10 @@ def run_carto_wizard(
     else:
         selected_indices = None  # all
 
-    # --- Coloring ---
-    if preset_coloring is not None:
-        coloring = preset_coloring
-    elif interactive:
-        coloring = Prompt.ask(
-            "Coloring",
-            choices=["lat", "bipolar", "unipolar"],
-            default="lat",
-            console=console,
-        )
-    else:
-        coloring = "lat"
-        logger.info("Using default coloring: lat")
+    # --- Colorings ---
+    # All available colorings are produced by default; pipeline skips those
+    # with no valid data.  CLI --coloring can restrict to a single scheme.
+    colorings = preset_colorings if preset_colorings is not None else ["lat", "bipolar", "unipolar"]
 
     # --- Output mode ---
     if preset_animate is not None and preset_static is not None:
@@ -518,20 +509,21 @@ def run_carto_wizard(
         logger.info("Using default output mode: both (static + animated)")
 
     # --- LAT vectors ---
-    # Assess quality per mesh to determine which ones are suitable
+    # Vectors are only produced for LAT coloring; assess quality to decide
+    # whether to offer them.  Since LAT is always in the coloring set by
+    # default, we always assess (unless LAT was explicitly excluded).
+    lat_included = "lat" in colorings
     vec_quality = _assess_vector_quality(study, selected_indices)
     vector_mesh_indices: list[int] | None = None  # None = all selected
 
     if preset_vectors is not None:
         vectors = preset_vectors
-        # When user explicitly requests vectors, apply to all selected meshes
         if vectors in ("yes", "only"):
             vector_mesh_indices = None
-    elif interactive and coloring == "lat":
+    elif interactive and lat_included:
         if vec_quality.suitable:
             default_vec = "yes"
             prompt_label = "LAT conduction vectors"
-            # If only some meshes are suitable, note which ones
             all_indices = selected_indices if selected_indices is not None else list(range(len(study.meshes)))
             if vec_quality.suitable_indices and len(vec_quality.suitable_indices) < len(all_indices):
                 names = [study.meshes[i].structure_name for i in vec_quality.suitable_indices]
@@ -548,7 +540,7 @@ def run_carto_wizard(
         vectors = vec_choice
         if vectors in ("yes", "only") and vec_quality.suitable_indices is not None:
             vector_mesh_indices = vec_quality.suitable_indices
-    elif not interactive and coloring == "lat":
+    elif not interactive and lat_included:
         vectors = "yes" if vec_quality.suitable else "no"
         if vectors == "yes" and vec_quality.suitable_indices is not None:
             vector_mesh_indices = vec_quality.suitable_indices
@@ -572,18 +564,18 @@ def run_carto_wizard(
         logger.info("Using default subdivision: 2")
 
     # --- Name ---
-    # Auto-generate: <study_or_dir>_<coloring>_sub<N>
+    # Auto-generate: <study_or_dir>_sub<N>
     base_name = study.study_name or input_path.name
     # Sanitise for filesystem: replace spaces/slashes with underscores
     base_name = base_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
-    name = f"{base_name}_{coloring}_sub{subdivide}"
+    name = f"{base_name}_sub{subdivide}"
 
     # --- Summary ---
     console.print(f"\n[dim]Configuration:[/dim]")
     console.print(f"  Name:       {name}")
     sel_str = "all" if selected_indices is None else ", ".join(str(i + 1) for i in selected_indices)
     console.print(f"  Maps:       {sel_str}")
-    console.print(f"  Coloring:   {coloring}")
+    console.print(f"  Colorings:  {', '.join(colorings)}")
     mode_str = ("static + animated" if static and animate
                 else "animated" if animate else "static")
     console.print(f"  Output:     {mode_str}")
@@ -598,7 +590,7 @@ def run_carto_wizard(
         input_path=input_path,
         name=name,
         selected_mesh_indices=selected_indices,
-        coloring=coloring,
+        colorings=colorings,
         subdivide=subdivide,
         animate=animate,
         static=static,
@@ -628,7 +620,7 @@ def run_batch_carto_wizard(
     studies: list[tuple[Path, "CartoStudy"]],
     console: Console,
     # Presets from CLI flags — if set, skip the corresponding prompt
-    preset_coloring: str | None = None,
+    preset_colorings: list[str] | None = None,
     preset_animate: bool | None = None,
     preset_static: bool | None = None,
     preset_vectors: str | None = None,
@@ -637,8 +629,8 @@ def run_batch_carto_wizard(
     """Batch CARTO wizard: ask settings once, apply to all studies.
 
     Shows a summary table of all detected datasets, prompts for shared
-    settings (coloring, output mode, vectors, subdivide), then returns
-    one ``CartoConfig`` per study with per-study vector quality assessment.
+    settings (output mode, vectors, subdivide), then returns one
+    ``CartoConfig`` per study with per-study vector quality assessment.
     """
     interactive = is_interactive()
 
@@ -684,18 +676,8 @@ def run_batch_carto_wizard(
 
     console.print(table)
 
-    # --- Coloring (shared) ---
-    if preset_coloring is not None:
-        coloring = preset_coloring
-    elif interactive:
-        coloring = Prompt.ask(
-            "Coloring (applied to all datasets)",
-            choices=["lat", "bipolar", "unipolar"],
-            default="lat",
-            console=console,
-        )
-    else:
-        coloring = "lat"
+    # --- Colorings (always all available) ---
+    colorings = preset_colorings if preset_colorings is not None else ["lat", "bipolar", "unipolar"]
 
     # --- Output mode (shared) ---
     if preset_animate is not None and preset_static is not None:
@@ -715,16 +697,17 @@ def run_batch_carto_wizard(
         animate = True
 
     # --- Vectors (shared choice, per-study quality) ---
+    lat_included = "lat" in colorings
     if preset_vectors is not None:
         vectors = preset_vectors
-    elif interactive and coloring == "lat":
+    elif interactive and lat_included:
         vectors = Prompt.ask(
             "LAT conduction vectors",
             choices=["yes", "no", "only"],
             default="yes",
             console=console,
         )
-    elif not interactive and coloring == "lat":
+    elif not interactive and lat_included:
         vectors = "yes"
     else:
         vectors = "no"
@@ -748,7 +731,7 @@ def run_batch_carto_wizard(
         vector_mesh_indices: list[int] | None = None
         study_vectors = vectors
 
-        if study_vectors in ("yes", "only") and coloring == "lat":
+        if study_vectors in ("yes", "only") and lat_included:
             vec_quality = _assess_vector_quality(study, None)
             if not vec_quality.suitable:
                 console.print(
@@ -768,16 +751,16 @@ def run_batch_carto_wizard(
                         f"{', '.join(skip_names)} (insufficient data)[/yellow]"
                     )
 
-        # Auto-generate name: <study_or_dir>_<coloring>_sub<N>
+        # Auto-generate name: <study_or_dir>_sub<N>
         base_name = study.study_name or path.name
         base_name = base_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
-        study_name = f"{base_name}_{coloring}_sub{subdivide}"
+        study_name = f"{base_name}_sub{subdivide}"
 
         configs.append(CartoConfig(
             input_path=path,
             name=study_name,
             selected_mesh_indices=None,  # all meshes
-            coloring=coloring,
+            colorings=colorings,
             subdivide=subdivide,
             animate=animate,
             static=static,
@@ -788,7 +771,7 @@ def run_batch_carto_wizard(
     # --- Summary ---
     console.print(f"\n[dim]Batch Configuration:[/dim]")
     console.print(f"  Datasets:   {len(configs)}")
-    console.print(f"  Coloring:   {coloring}")
+    console.print(f"  Colorings:  {', '.join(colorings)}")
     mode_str = ("static + animated" if static and animate
                 else "animated" if animate else "static")
     console.print(f"  Output:     {mode_str}")

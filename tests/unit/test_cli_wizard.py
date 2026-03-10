@@ -166,7 +166,7 @@ class TestRunCartoWizard:
         console = Console(file=None, force_terminal=False)
         config = run_carto_wizard(
             carto_study, Path("/fake/input"), console,
-            preset_coloring="bipolar",
+            preset_colorings=["bipolar"],
             preset_animate=True,
             preset_static=False,
             preset_vectors="yes",
@@ -174,7 +174,7 @@ class TestRunCartoWizard:
             preset_meshes="all",
         )
         assert isinstance(config, CartoConfig)
-        assert config.coloring == "bipolar"
+        assert config.colorings == ["bipolar"]
         assert config.animate is True
         assert config.static is False
         assert config.vectors == "yes"
@@ -188,7 +188,7 @@ class TestRunCartoWizard:
             config = run_carto_wizard(
                 carto_study, Path("/fake/input"), console,
             )
-        assert config.coloring == "lat"
+        assert config.colorings == ["lat", "bipolar", "unipolar"]
         assert config.animate is True
         assert config.static is True
         assert config.vectors == "no"
@@ -483,7 +483,7 @@ class TestRunBatchCartoWizard:
 
         configs = run_batch_carto_wizard(
             studies, console,
-            preset_coloring="lat",
+            preset_colorings=["lat"],
             preset_animate=True,
             preset_static=True,
             preset_vectors="no",
@@ -495,7 +495,7 @@ class TestRunBatchCartoWizard:
         assert configs[1].input_path == tmp_path / "b"
 
     def test_shared_settings_applied(self, tmp_path):
-        """All configs should share the same coloring/subdivide/animate settings."""
+        """All configs should share the same colorings/subdivide/animate settings."""
         studies = [
             (tmp_path / "a", self._make_study("mesh_a")),
             (tmp_path / "b", self._make_study("mesh_b")),
@@ -504,7 +504,7 @@ class TestRunBatchCartoWizard:
 
         configs = run_batch_carto_wizard(
             studies, console,
-            preset_coloring="bipolar",
+            preset_colorings=["bipolar"],
             preset_animate=False,
             preset_static=True,
             preset_vectors="no",
@@ -512,7 +512,7 @@ class TestRunBatchCartoWizard:
         )
 
         for cfg in configs:
-            assert cfg.coloring == "bipolar"
+            assert cfg.colorings == ["bipolar"]
             assert cfg.subdivide == 1
             assert cfg.animate is False
             assert cfg.static is True
@@ -526,7 +526,7 @@ class TestRunBatchCartoWizard:
 
         configs = run_batch_carto_wizard(
             studies, console,
-            preset_coloring="lat",
+            preset_colorings=["lat"],
             preset_animate=True,
             preset_static=True,
             preset_vectors="no",
@@ -545,7 +545,7 @@ class TestRunBatchCartoWizard:
 
         configs = run_batch_carto_wizard(
             studies, console,
-            preset_coloring="lat",
+            preset_colorings=["lat"],
             preset_animate=True,
             preset_static=True,
             preset_vectors="yes",

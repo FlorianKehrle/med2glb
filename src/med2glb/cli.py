@@ -119,9 +119,10 @@ def main(
         help="List available conversion methods and exit.",
     ),
     coloring: str = typer.Option(
-        "lat",
+        "all",
         "--coloring",
-        help="CARTO coloring scheme: lat, bipolar, unipolar.",
+        help="CARTO coloring scheme filter: lat, bipolar, unipolar, or all (default). "
+             "When 'all', every available coloring is produced.",
     ),
     subdivide: int = typer.Option(
         2,
@@ -422,7 +423,7 @@ def main(
                 from med2glb.cli_wizard import run_batch_carto_wizard
                 configs = run_batch_carto_wizard(
                     studies, console,
-                    preset_coloring=coloring if _was_option_provided(ctx, "coloring") else None,
+                    preset_colorings=[coloring] if _was_option_provided(ctx, "coloring") and coloring != "all" else None,
                     preset_animate=animate if _was_option_provided(ctx, "animate") else None,
                     preset_static=not no_animate if _was_option_provided(ctx, "no_animate") else None,
                     preset_vectors=("yes" if vectors else None) if _was_option_provided(ctx, "vectors") else None,

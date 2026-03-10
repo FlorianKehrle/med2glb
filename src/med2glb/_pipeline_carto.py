@@ -223,9 +223,11 @@ def _write_carto_log(
     mesh: "CartoMesh",
     mesh_data: "MeshData",
     points: list[CartoPoint] | None,
-    config: "CartoConfig",
+    coloring: str,
+    subdivide: int,
     variant_outputs: list[tuple[bool, bool, Path]],
     start_time: float,
+    source_path: Path,
     step_times: dict[str, float] | None = None,
     data_coverage_pct: float | None = None,
 ) -> None:
@@ -235,11 +237,11 @@ def _write_carto_log(
     elapsed = time.time() - start_time
 
     color_range = ""
-    if config.coloring == "bipolar":
+    if coloring == "bipolar":
         color_range = "0.05 - 1.5 mV"
-    elif config.coloring == "unipolar":
+    elif coloring == "unipolar":
         color_range = "3.0 - 10.0 mV"
-    elif config.coloring == "lat" and points:
+    elif coloring == "lat" and points:
         valid_lats = [p.lat for p in points if not math.isnan(p.lat)]
         if valid_lats:
             color_range = f"{min(valid_lats):.0f} - {max(valid_lats):.0f} ms (auto)"
@@ -249,16 +251,16 @@ def _write_carto_log(
         structure_name=mesh.structure_name,
         carto_version=_carto_version_label(study.version),
         study_name=study.study_name or "",
-        coloring=config.coloring,
+        coloring=coloring,
         color_range=color_range,
-        subdivide=config.subdivide,
+        subdivide=subdivide,
         active_vertices=len(mesh_data.vertices),
         total_vertices=len(mesh.vertices),
         face_count=len(mesh_data.faces),
         mapping_points=len(points) if points else 0,
         variant_outputs=variant_outputs,
         elapsed_seconds=elapsed,
-        source_path=str(config.input_path),
+        source_path=str(source_path),
         step_times=step_times,
         data_coverage_pct=data_coverage_pct,
     )
@@ -301,10 +303,18 @@ def _convert_carto_meshes(
 ) -> None:
     """Core CARTO processing: build and export GLB variants for selected meshes.
 
-    Handles mesh selection, subdivision, coloring, animation, vectors,
+    Handles mesh selection, subdivision, multi-coloring, animation, vectors,
     compression, and summary printing for all requested variants.
+
+    Expensive shared work (subdivision, xatlas UV unwrap) is computed once per
+    mesh. Per-coloring work (vertex color mapping, texture baking) is cheap
+    and repeated for each requested coloring that has valid data.
     """
-    from med2glb.io.carto_mapper import carto_mesh_to_mesh_data, subdivide_carto_mesh
+    from med2glb.io.carto_mapper import (
+        carto_mesh_to_mesh_data,
+        extract_point_field,
+        subdivide_carto_mesh,
+    )
     from med2glb.glb.builder import build_glb
 
     selected = config.selected_mesh_indices
@@ -315,47 +325,57 @@ def _convert_carto_meshes(
     carto_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Build list of (mesh_idx, animate_flag, vectors_flag) jobs.
-    # vectors="yes": produce BOTH with and without vectors (user can compare).
-    # vectors="only": produce ONLY the animated+vectors variant.
-    # vectors="no": no vector variants at all.
-    # vector_mesh_indices limits which meshes get vectors (None = all).
+    # Animation and vectors only apply to LAT coloring — they are handled
+    # inside the per-coloring loop, not scheduled here.
     has_vectors = config.vectors in ("yes", "only")
     vectors_only = config.vectors == "only"
     vec_meshes = set(config.vector_mesh_indices) if config.vector_mesh_indices is not None else None
-    jobs: list[tuple[int, bool, bool]] = []
-    if vectors_only:
-        # Only animated+vectors — nothing else
-        for mesh_idx in selected:
-            mesh_has_vec = vec_meshes is None or mesh_idx in vec_meshes
-            if mesh_has_vec:
-                jobs.append((mesh_idx, True, True))
-            else:
-                # Mesh not suitable for vectors — fall back to animated without
-                jobs.append((mesh_idx, True, False))
-    else:
-        for mesh_idx in selected:
-            mesh_has_vec = has_vectors and (vec_meshes is None or mesh_idx in vec_meshes)
-            if config.static:
-                jobs.append((mesh_idx, False, False))
-            if config.animate:
-                jobs.append((mesh_idx, True, False))
-                if mesh_has_vec:
-                    jobs.append((mesh_idx, True, True))
 
-    # Group jobs by mesh_idx so shared intermediates are computed once per mesh
-    grouped: dict[int, list[tuple[bool, bool]]] = {}
-    for mesh_idx, do_animate, do_vectors in jobs:
-        grouped.setdefault(mesh_idx, []).append((do_animate, do_vectors))
-
-    for mesh_idx, variants in grouped.items():
+    for mesh_idx in selected:
         mesh = study.meshes[mesh_idx]
         points = study.points.get(mesh.structure_name)
+        mesh_has_vec = has_vectors and (vec_meshes is None or mesh_idx in vec_meshes)
+
+        # Determine which colorings have valid data for this mesh
+        available_colorings: list[str] = []
+        for c in config.colorings:
+            if not points:
+                # No points at all — skip all colorings
+                break
+            _, valid_values = extract_point_field(points, c)
+            if len(valid_values) > 0:
+                available_colorings.append(c)
+
+        if not available_colorings:
+            console.print(
+                f"\n[yellow]Skipping {mesh.structure_name}: "
+                f"no valid data for any coloring[/yellow]"
+            )
+            continue
+
+        # Count total variants for the status message
+        n_variants = 0
+        for c in available_colorings:
+            if c == "lat":
+                # LAT gets full variant set (static/animated/vectors)
+                if vectors_only:
+                    n_variants += 1  # animated+vectors only
+                else:
+                    if config.static:
+                        n_variants += 1
+                    if config.animate and points:
+                        n_variants += 1  # animated
+                        if mesh_has_vec:
+                            n_variants += 1  # animated+vectors
+            else:
+                # Bipolar/unipolar are static-only
+                n_variants += 1
 
         # === Shared intermediates — computed ONCE per mesh ===
         step_times: dict[str, float] = {}
         console.print(
             f"\n[bold]Preparing: {mesh.structure_name}[/bold] "
-            f"({len(variants)} variant(s))"
+            f"({n_variants} variant(s) across {len(available_colorings)} coloring(s))"
         )
 
         with Progress(
@@ -368,137 +388,64 @@ def _convert_carto_meshes(
         ) as progress:
             task = progress.add_task("Subdividing mesh...", total=None)
 
-            # 1. Subdivide once
+            # 1. Subdivide once (coloring-independent)
             subdivided = None
             t_step = time.monotonic()
             if config.subdivide > 0:
                 subdivided = subdivide_carto_mesh(mesh, iterations=config.subdivide)
             step_times["Subdivide"] = time.monotonic() - t_step
-            progress.update(task, description="Mapping vertices...")
+            progress.update(task, description="Extracting LAT values...")
 
-            # 2. Mesh data (colors, active filtering) once
+            # 2. Compute LAT mesh data first — needed for animation cache
+            #    which is shared across LAT variants
             t_step = time.monotonic()
-            mesh_data = carto_mesh_to_mesh_data(
-                mesh, points, coloring=config.coloring,
+            lat_mesh_data = carto_mesh_to_mesh_data(
+                mesh, points, coloring="lat",
                 subdivide=config.subdivide, pre_subdivided=subdivided,
             )
             step_times["Mapping"] = time.monotonic() - t_step
             progress.update(
                 task,
-                description=f"Mapped {len(mesh_data.vertices):,} verts, "
-                f"{len(mesh_data.faces):,} faces",
+                description=f"Mapped {len(lat_mesh_data.vertices):,} verts, "
+                f"{len(lat_mesh_data.faces):,} faces",
             )
 
-            # 3. LAT values once (if any variant needs animation or vectors)
-            needs_lat = any(
-                (anim and points) or vec for anim, vec in variants
-            )
+            # 3. LAT values once (needed for animation and vectors)
             active_lat = None
-            if needs_lat and points:
+            if points and "lat" in available_colorings:
                 progress.update(task, description="Extracting LAT values...")
                 active_lat = _extract_active_lat(
-                    mesh, points, mesh_data, config.subdivide,
+                    mesh, points, lat_mesh_data, config.subdivide,
                     subdivided_mesh=subdivided,
                 )
 
             progress.remove_task(task)
 
-        # === Compute data coverage ===
-        data_coverage_pct: float | None = None
-        if points and mesh_data.vertex_colors is not None:
-            n_active = len(mesh_data.vertices)
-            # Count vertices that got a valid color (not gray NaN)
-            # Gray NaN vertices have color (0.5, 0.5, 0.5, 1.0)
-            colors = mesh_data.vertex_colors
-            is_gray = (
-                (np.abs(colors[:, 0] - 0.5) < 0.01)
-                & (np.abs(colors[:, 1] - 0.5) < 0.01)
-                & (np.abs(colors[:, 2] - 0.5) < 0.01)
-            )
-            n_colored = int(np.sum(~is_gray))
-            data_coverage_pct = 100.0 * n_colored / n_active if n_active > 0 else 100.0
-
-            if data_coverage_pct < 50.0:
-                # Count valid measurement points for the warning message
-                if config.coloring == "lat":
-                    n_valid = sum(1 for p in points if not math.isnan(p.lat))
-                elif config.coloring == "bipolar":
-                    n_valid = sum(1 for p in points if not math.isnan(p.bipolar_voltage))
-                else:
-                    n_valid = sum(1 for p in points if not math.isnan(p.unipolar_voltage))
-                console.print(
-                    f"  [yellow]Warning: only {n_valid:,} of {len(points):,} points "
-                    f"({100.0 * n_valid / len(points):.0f}%) have valid {config.coloring.upper()} data "
-                    f"— {data_coverage_pct:.0f}% of mesh colored, rest shown as gray[/yellow]"
-                )
-
-        # === Assemble legend metadata ===
-        _UNITS = {"lat": "ms", "bipolar": "mV", "unipolar": "mV"}
-        _DEFAULT_RANGES: dict[str, tuple[float, float]] = {
-            "bipolar": (0.05, 1.5),
-            "unipolar": (3.0, 10.0),
-        }
-        unit = _UNITS.get(config.coloring, "")
-        if config.coloring in _DEFAULT_RANGES:
-            clamp_range = _DEFAULT_RANGES[config.coloring]
-        elif active_lat is not None:
-            clamp_range = (
-                float(np.nanmin(active_lat)),
-                float(np.nanmax(active_lat)),
-            )
-        else:
-            clamp_range = (0.0, 1.0)
-
-        from datetime import date
-        legend_metadata: dict = {
-            "study_name": study.study_name or "",
-            "carto_version": _carto_version_label(study.version),
-            "structure": mesh.structure_name,
-            "coloring": config.coloring,
-            "clamp_range": list(clamp_range),
-            "unit": unit,
-            "mapping_points": len(points) if points else 0,
-            "export_date": date.today().isoformat(),
-        }
-        if data_coverage_pct is not None and data_coverage_pct < 100.0:
-            legend_metadata["data_coverage"] = f"{data_coverage_pct:.0f}% {config.coloring.upper()}"
-
-        legend_info: dict = {
-            "coloring": config.coloring,
-            "clamp_range": list(clamp_range),
-            "metadata": legend_metadata,
-        }
-
-        # === Pre-compute animated cache (shared xatlas + textures) ===
+        # === Pre-compute LAT animated cache (shared xatlas + textures) ===
         _n_frames = 30
-        animated_variants = [
-            (a, v) for a, v in variants if a and points
-        ]
-        has_static = any(not a for a, _ in variants)
+        lat_needs_anim = (
+            "lat" in available_colorings
+            and active_lat is not None
+            and points
+            and (config.animate or vectors_only)
+        )
 
-        # Always compute cache when animated variants exist — the cache is
-        # also reused for the static variant to avoid a redundant xatlas
-        # unwrap + rasterization pass (saves ~2 minutes per mesh).
         anim_cache = None
-        if animated_variants and active_lat is not None:
+        if lat_needs_anim:
             from med2glb.glb.carto_builder import prepare_animated_cache
 
-            # Use plain console prints for blocking steps (xatlas, rasterization)
-            # and a progress bar only for the frame baking loop where it updates.
             _frame_progress: Progress | None = None
             _frame_task = None
 
             def _cache_progress(desc: str, current: int, total: int) -> None:
                 nonlocal _frame_progress, _frame_task
                 if total == 0:
-                    # Blocking step — print status line
                     if _frame_progress is not None:
                         _frame_progress.stop()
                         _frame_progress = None
                         _frame_task = None
                     console.print(f"  {desc}")
                 else:
-                    # Frame loop — use a real progress bar
                     if _frame_progress is None:
                         _frame_progress = Progress(
                             SpinnerColumn(),
@@ -513,7 +460,7 @@ def _convert_carto_meshes(
                     _frame_progress.update(_frame_task, description=desc, completed=current)
 
             anim_cache = prepare_animated_cache(
-                mesh_data, active_lat, n_frames=_n_frames,
+                lat_mesh_data, active_lat, n_frames=_n_frames,
                 progress=_cache_progress,
             )
             if _frame_progress is not None:
@@ -523,93 +470,189 @@ def _convert_carto_meshes(
             if anim_cache is not None and anim_cache.step_times:
                 step_times.update(anim_cache.step_times)
 
-        # === Emit each variant from cached state ===
-        variant_outputs: list[tuple[bool, bool, Path]] = []
+        # === Per-coloring loop ===
+        _UNITS = {"lat": "ms", "bipolar": "mV", "unipolar": "mV"}
+        _DEFAULT_RANGES: dict[str, tuple[float, float]] = {
+            "bipolar": (0.05, 1.5),
+            "unipolar": (3.0, 10.0),
+        }
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=20),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            for do_animate, do_vectors in variants:
-                anim_suffix = "_animated" if (do_animate and points) else ""
-                vec_suffix = "_vectors" if do_vectors else ""
-                glb_name = f"{mesh.structure_name}_{config.coloring}{anim_suffix}{vec_suffix}.glb"
-                out_path = carto_output_dir / glb_name
+        for coloring in available_colorings:
+            is_lat = coloring == "lat"
 
-                variant_label = "static"
-                if do_animate:
-                    variant_label = "animated + vectors" if do_vectors else "animated"
-
-                if do_animate and points:
-                    _total_steps = _n_frames + 1
-                else:
-                    _total_steps = 1
-
-                task = progress.add_task(
-                    f"Building {variant_label}...", total=_total_steps,
+            # Get mesh data for this coloring (reuse LAT data if already computed)
+            if is_lat:
+                mesh_data = lat_mesh_data
+            else:
+                t_step = time.monotonic()
+                mesh_data = carto_mesh_to_mesh_data(
+                    mesh, points, coloring=coloring,
+                    subdivide=config.subdivide, pre_subdivided=subdivided,
                 )
+                step_times["Mapping"] = step_times.get("Mapping", 0) + (time.monotonic() - t_step)
 
-                _variant_written = True
-                if do_animate and points:
-                    from med2glb.glb.carto_builder import build_carto_animated_glb
+            # Compute data coverage for this coloring
+            data_coverage_pct: float | None = None
+            if points and mesh_data.vertex_colors is not None:
+                n_active = len(mesh_data.vertices)
+                colors = mesh_data.vertex_colors
+                is_gray = (
+                    (np.abs(colors[:, 0] - 0.5) < 0.01)
+                    & (np.abs(colors[:, 1] - 0.5) < 0.01)
+                    & (np.abs(colors[:, 2] - 0.5) < 0.01)
+                )
+                n_colored = int(np.sum(~is_gray))
+                data_coverage_pct = 100.0 * n_colored / n_active if n_active > 0 else 100.0
 
-                    def _anim_progress(desc: str, current: int, _total: int) -> None:
-                        progress.update(task, description=desc,
-                                        completed=current + 1)
-
-                    written = build_carto_animated_glb(
-                        mesh_data, active_lat, out_path,
-                        vectors=do_vectors,
-                        progress=_anim_progress,
-                        legend_info=legend_info,
-                        cache=anim_cache,
+                if data_coverage_pct < 50.0:
+                    _, valid_values = extract_point_field(points, coloring)
+                    n_valid = len(valid_values)
+                    console.print(
+                        f"  [yellow]Warning: only {n_valid:,} of {len(points):,} points "
+                        f"({100.0 * n_valid / len(points):.0f}%) have valid {coloring.upper()} data "
+                        f"— {data_coverage_pct:.0f}% of mesh colored, rest shown as gray[/yellow]"
                     )
-                    if not written:
-                        _variant_written = False
+
+            # Assemble legend metadata for this coloring
+            unit = _UNITS.get(coloring, "")
+            if coloring in _DEFAULT_RANGES:
+                clamp_range = _DEFAULT_RANGES[coloring]
+            elif active_lat is not None and is_lat:
+                clamp_range = (
+                    float(np.nanmin(active_lat)),
+                    float(np.nanmax(active_lat)),
+                )
+            else:
+                clamp_range = (0.0, 1.0)
+
+            from datetime import date
+            legend_metadata: dict = {
+                "study_name": study.study_name or "",
+                "carto_version": _carto_version_label(study.version),
+                "structure": mesh.structure_name,
+                "coloring": coloring,
+                "clamp_range": list(clamp_range),
+                "unit": unit,
+                "mapping_points": len(points) if points else 0,
+                "export_date": date.today().isoformat(),
+            }
+            if data_coverage_pct is not None and data_coverage_pct < 100.0:
+                legend_metadata["data_coverage"] = f"{data_coverage_pct:.0f}% {coloring.upper()}"
+
+            legend_info: dict = {
+                "coloring": coloring,
+                "clamp_range": list(clamp_range),
+                "metadata": legend_metadata,
+            }
+
+            # Build variant list for this coloring
+            # Animation + vectors only for LAT; other colorings are static-only
+            coloring_variants: list[tuple[bool, bool]] = []
+            if is_lat:
+                if vectors_only:
+                    if mesh_has_vec:
+                        coloring_variants.append((True, True))
                     else:
+                        coloring_variants.append((True, False))
+                else:
+                    if config.static:
+                        coloring_variants.append((False, False))
+                    if config.animate and points:
+                        coloring_variants.append((True, False))
+                        if mesh_has_vec:
+                            coloring_variants.append((True, True))
+            else:
+                # Bipolar/unipolar: static only
+                coloring_variants.append((False, False))
+
+            # Emit GLB files for this coloring
+            variant_outputs: list[tuple[bool, bool, Path]] = []
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(bar_width=20),
+                MofNCompleteColumn(),
+                TimeElapsedColumn(),
+                console=console,
+            ) as progress:
+                for do_animate, do_vectors in coloring_variants:
+                    anim_suffix = "_animated" if (do_animate and points) else ""
+                    vec_suffix = "_vectors" if do_vectors else ""
+                    glb_name = f"{mesh.structure_name}_{coloring}{anim_suffix}{vec_suffix}.glb"
+                    out_path = carto_output_dir / glb_name
+
+                    variant_label = "static"
+                    if do_animate:
+                        variant_label = "animated + vectors" if do_vectors else "animated"
+
+                    if do_animate and points:
+                        _total_steps = _n_frames + 1
+                    else:
+                        _total_steps = 1
+
+                    task = progress.add_task(
+                        f"Building {coloring} {variant_label}...", total=_total_steps,
+                    )
+
+                    _variant_written = True
+                    if do_animate and points and is_lat:
+                        from med2glb.glb.carto_builder import build_carto_animated_glb
+
+                        def _anim_progress(desc: str, current: int, _total: int) -> None:
+                            progress.update(task, description=desc,
+                                            completed=current + 1)
+
+                        written = build_carto_animated_glb(
+                            mesh_data, active_lat, out_path,
+                            vectors=do_vectors,
+                            progress=_anim_progress,
+                            legend_info=legend_info,
+                            cache=anim_cache,
+                        )
+                        if not written:
+                            _variant_written = False
+                        else:
+                            progress.update(task, completed=_total_steps)
+                    else:
+                        if is_lat and anim_cache is not None:
+                            from med2glb.glb.carto_builder import build_carto_static_glb
+                            build_carto_static_glb(
+                                anim_cache, out_path, legend_info=legend_info,
+                            )
+                        else:
+                            build_glb(
+                                [mesh_data], out_path,
+                                source_units="mm", legend_info=legend_info,
+                            )
                         progress.update(task, completed=_total_steps)
-                else:
-                    if anim_cache is not None:
-                        from med2glb.glb.carto_builder import build_carto_static_glb
-                        build_carto_static_glb(
-                            anim_cache, out_path, legend_info=legend_info,
-                        )
+
+                    if _variant_written:
+                        from med2glb.glb.compress import optimize_textures_ktx2
+                        t_ktx = time.monotonic()
+                        if optimize_textures_ktx2(out_path):
+                            step_times["KTX2"] = step_times.get("KTX2", 0) + (time.monotonic() - t_ktx)
+                        variant_outputs.append((do_animate, do_vectors, out_path))
                     else:
-                        build_glb(
-                            [mesh_data], out_path,
-                            source_units="mm", legend_info=legend_info,
+                        progress.update(
+                            task,
+                            description=f"[dim]Skipped {variant_label} (data not suitable)[/dim]",
+                            completed=_total_steps,
                         )
-                    progress.update(task, completed=_total_steps)
 
-                if _variant_written:
-                    from med2glb.glb.compress import optimize_textures_ktx2
-                    t_ktx = time.monotonic()
-                    if optimize_textures_ktx2(out_path):
-                        step_times["KTX2"] = step_times.get("KTX2", 0) + (time.monotonic() - t_ktx)
-                    variant_outputs.append((do_animate, do_vectors, out_path))
-                else:
-                    progress.update(
-                        task,
-                        description=f"[dim]Skipped {variant_label} (data not suitable)[/dim]",
-                        completed=_total_steps,
-                    )
-
-        if variant_outputs:
-            _print_carto_summary(
-                study, mesh, mesh_data, points, config.coloring,
-                config.subdivide, variant_outputs, start_time,
-                step_times=step_times,
-            )
-            _write_carto_log(
-                carto_output_dir, study, mesh, mesh_data, points,
-                config, variant_outputs, start_time,
-                step_times=step_times,
-                data_coverage_pct=data_coverage_pct,
-            )
+            if variant_outputs:
+                _print_carto_summary(
+                    study, mesh, mesh_data, points, coloring,
+                    config.subdivide, variant_outputs, start_time,
+                    step_times=step_times,
+                )
+                _write_carto_log(
+                    carto_output_dir, study, mesh, mesh_data, points,
+                    coloring, config.subdivide, variant_outputs, start_time,
+                    source_path=config.input_path,
+                    step_times=step_times,
+                    data_coverage_pct=data_coverage_pct,
+                )
 
 
 def run_carto_from_config(config: "CartoConfig") -> None:
@@ -689,7 +732,7 @@ def run_carto_pipeline(
     _has_vectors = vectors in ("yes", "only")
     vec_suitable_list: list[int] | None = None
     effective_vectors = vectors
-    if _has_vectors and coloring == "lat":
+    if _has_vectors:
         from med2glb.cli_wizard import _assess_vector_quality
         vec_quality = _assess_vector_quality(study, selected)
         vec_suitable = set(vec_quality.suitable_indices) if vec_quality.suitable_indices else set()
@@ -702,11 +745,15 @@ def run_carto_pipeline(
                 console.print(f"[yellow]Vectors skipped for: {', '.join(skip_names)} (insufficient data)[/yellow]")
             vec_suitable_list = list(vec_suitable)
 
+    # When --coloring is specified, restrict to that single coloring;
+    # otherwise produce all available colorings.
+    colorings = [coloring] if coloring != "all" else ["lat", "bipolar", "unipolar"]
+
     config = CartoConfig(
         input_path=input_path,
         output_dir=output.parent,
         selected_mesh_indices=selected,
-        coloring=coloring,
+        colorings=colorings,
         subdivide=subdivide,
         animate=animate,
         static=not animate,
