@@ -117,15 +117,15 @@ def _extract_active_lat(
         lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
         lat_values = interpolate_sparse_values(anim_mesh, lat_values)
 
-    # Distance cutoff: blank out vertices far from valid LAT points
-    from med2glb.io.carto_mapper import compute_point_spacing, extract_point_field
-    point_positions, _ = extract_point_field(points, "lat")
-    if len(point_positions) >= 2:
-        spacing = compute_point_spacing(points, "lat")
-        max_distance = spacing * 3
+    # Distance cutoff for sparse LAT data (same logic as carto_mapper)
+    from med2glb.io.carto_mapper import extract_point_field
+    point_positions, point_values = extract_point_field(points, "lat")
+    valid_ratio = len(point_values) / len(points) if points else 1.0
+    if valid_ratio < 0.4 and len(point_positions) >= 2:
         from scipy.spatial import KDTree as _KDTree
         dist_tree = _KDTree(point_positions)
         distances, _ = dist_tree.query(anim_mesh.vertices)
+        max_distance = float(np.percentile(distances, 90))
         lat_values[distances > max_distance] = np.nan
 
     # Resample to mesh_data vertices (fill-stripping may differ)
@@ -460,7 +460,7 @@ def _convert_carto_meshes(
             "export_date": date.today().isoformat(),
         }
         if data_coverage_pct is not None and data_coverage_pct < 100.0:
-            legend_metadata["data_coverage"] = f"{data_coverage_pct:.0f}%"
+            legend_metadata["data_coverage"] = f"{data_coverage_pct:.0f}% {config.coloring.upper()}"
 
         legend_info: dict = {
             "coloring": config.coloring,

@@ -43,23 +43,6 @@ def extract_point_field(
     return point_positions[valid], point_values[valid]
 
 
-def compute_point_spacing(
-    points: list[CartoPoint],
-    field: str = "lat",
-) -> float:
-    """Compute median nearest-neighbor distance between valid points.
-
-    Returns:
-        Median inter-point spacing in mm, or inf if fewer than 2 valid points.
-    """
-    positions, _ = extract_point_field(points, field)
-    if len(positions) < 2:
-        return float("inf")
-    tree = KDTree(positions)
-    dd, _ = tree.query(positions, k=2)  # k=2: closest is self
-    return float(np.median(dd[:, 1]))
-
-
 def map_points_to_vertices(
     mesh: CartoMesh,
     points: list[CartoPoint],
@@ -501,24 +484,30 @@ def carto_mesh_to_mesh_data(
             all_values = map_points_to_vertices(mesh, points, field=coloring)
             all_values = interpolate_sparse_values(mesh, all_values)
 
-        # Distance cutoff: blank out vertices far from any valid measurement
-        # to avoid misleading extrapolation.  Use 3x the median inter-point
-        # spacing of valid measurements as the hard cutoff.
-        point_positions, _ = extract_point_field(points, coloring)
-        if len(point_positions) >= 2:
-            spacing = compute_point_spacing(points, coloring)
-            max_distance = spacing * 3
+        # Distance cutoff for sparse data: when fewer than 40% of measurement
+        # points carry valid data for this coloring, the values are likely
+        # concentrated in one region and NN extrapolation to the rest of the
+        # mesh is misleading.  Use the 90th-percentile vertex-to-point
+        # distance as cutoff — this preserves the measured region while
+        # blanking truly unreachable areas.
+        # With ≥40% valid points the data is dense enough for full
+        # interpolation (typical for newer CARTO v7.2+ exports).
+        point_positions, point_values = extract_point_field(points, coloring)
+        valid_ratio = len(point_values) / len(points) if points else 1.0
+        if valid_ratio < 0.4 and len(point_positions) >= 2:
             dist_tree = KDTree(point_positions)
             distances, _ = dist_tree.query(mesh.vertices)
+            max_distance = float(np.percentile(distances, 90))
             too_far = distances > max_distance
             n_blanked = int(np.sum(too_far))
             if n_blanked > 0:
                 all_values[too_far] = np.nan
                 pct = 100.0 * n_blanked / len(all_values)
                 logger.info(
-                    "Distance cutoff (%.1f mm): blanked %d / %d vertices (%.0f%%) "
-                    "beyond 3x inter-point spacing",
-                    max_distance, n_blanked, len(all_values), pct,
+                    "Sparse %s data (%.0f%% valid): distance cutoff %.1f mm "
+                    "blanked %d / %d vertices (%.0f%%)",
+                    coloring, valid_ratio * 100, max_distance,
+                    n_blanked, len(all_values), pct,
                 )
 
         active_values = all_values[active_verts]
