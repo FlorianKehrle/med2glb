@@ -298,13 +298,10 @@ def precompute_rasterization_map(
         faces, uvs, texture_size,
     )
 
-    # Build mask for gutter bleeding
+    # Build mask for gutter bleeding (used by _bleed_gutter in _apply_and_encode)
     mask = np.zeros((texture_size, texture_size), dtype=bool)
     if len(pixel_y) > 0:
         mask[pixel_y, pixel_x] = True
-
-    # Precompute bleed map once (avoids repeated flood fills per frame)
-    bleed_map = _precompute_bleed_map(mask, texture_size)
 
     logger.info(
         "Rasterization map: %d pixels mapped from %d faces (%dx%d texture)",
@@ -316,7 +313,6 @@ def precompute_rasterization_map(
         "v0": v0, "v1": v1, "v2": v2,
         "bw0": bw0, "bw1": bw1, "bw2": bw2,
         "mask": mask, "tex_size": texture_size,
-        "bleed_map": bleed_map,
     }
 
 
@@ -328,8 +324,8 @@ def apply_rasterization_map(
 ) -> bytes:
     """Apply precomputed rasterization map with new vertex colors.
 
-    This is very fast: just a single vectorized gather + weighted sum + scatter,
-    plus precomputed gutter bleeding and image encoding.
+    Vectorized gather + weighted sum + scatter for pixel colors,
+    then inline gutter bleeding and image encoding.
     """
     return _apply_and_encode(
         raster_map["pixel_y"], raster_map["pixel_x"],
@@ -337,7 +333,6 @@ def apply_rasterization_map(
         raster_map["bw0"], raster_map["bw1"], raster_map["bw2"],
         vertex_colors, raster_map["tex_size"],
         mask=raster_map["mask"],
-        bleed_map=raster_map.get("bleed_map"),
         image_format=image_format,
         jpeg_quality=jpeg_quality,
     )
@@ -350,7 +345,6 @@ def _apply_and_encode(
     vertex_colors: np.ndarray,
     texture_size: int,
     mask: np.ndarray | None = None,
-    bleed_map: tuple | None = None,
     image_format: str = "PNG",
     jpeg_quality: int = 85,
 ) -> bytes:
@@ -371,10 +365,7 @@ def _apply_and_encode(
         )
         texture[pixel_y, pixel_x] = colors
 
-    if bleed_map is not None:
-        _apply_bleed_map(texture, bleed_map)
-    else:
-        _bleed_gutter(texture, mask.copy() if mask is not None else mask, tex_size, tex_size)
+    _bleed_gutter(texture, mask.copy(), tex_size, tex_size)
 
     texture_u8 = np.clip(texture * 255 + 0.5, 0, 255).astype(np.uint8)
     buf = io.BytesIO()
@@ -423,147 +414,6 @@ def _bleed_gutter(
             break
         texture[fill] = accum[fill] / count[fill, np.newaxis]
         mask[fill] = True
-
-
-def _precompute_bleed_map(
-    mask: np.ndarray, tex_size: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """Precompute gutter bleed source indices and weights.
-
-    Runs the same 10-iteration flood fill as ``_bleed_gutter`` but on a
-    boolean mask only, recording for each gutter pixel which source pixels
-    contribute and their averaging weights.  The result is a sparse map
-    that can be applied to any texture with the same UV layout via a
-    single vectorized gather + weighted average — avoiding repeated flood
-    fills across animation frames.
-
-    Returns:
-        ``(dst_yx, src_yx, weights)`` sparse arrays, or None if no gutter
-        pixels need bleeding.  ``dst_yx`` is (K, 2) int — row/col of each
-        gutter pixel.  ``src_yx`` and ``weights`` are lists-of-arrays: for
-        each gutter pixel k, ``src_yx[k]`` is (Nk, 2) int source
-        coordinates and ``weights[k]`` is (Nk,) float averaging weights.
-    """
-    tex_h = tex_w = tex_size
-    mask = mask.copy()
-
-    # Track which source pixels each gutter pixel averages from.
-    # source_map[y, x] = list of (src_y, src_x, weight) accumulated
-    # across iterations.  We use a flat dict keyed by (y, x).
-    gutter_sources: dict[tuple[int, int], list[tuple[int, int, float]]] = {}
-
-    for _ in range(10):
-        empty = ~mask
-        if not np.any(empty):
-            break
-
-        count = np.zeros((tex_h, tex_w), dtype=np.float32)
-
-        # Count filled neighbors per direction
-        count[1:] += mask[:-1].astype(np.float32)
-        count[:-1] += mask[1:].astype(np.float32)
-        count[:, 1:] += mask[:, :-1].astype(np.float32)
-        count[:, :-1] += mask[:, 1:].astype(np.float32)
-
-        fill = empty & (count > 0)
-        if not np.any(fill):
-            break
-
-        fill_ys, fill_xs = np.nonzero(fill)
-        fill_counts = count[fill_ys, fill_xs]
-
-        for i in range(len(fill_ys)):
-            y, x = int(fill_ys[i]), int(fill_xs[i])
-            c = float(fill_counts[i])
-            sources: list[tuple[int, int, float]] = []
-            # Up neighbor
-            if y > 0 and mask[y - 1, x]:
-                sources.append((y - 1, x, 1.0 / c))
-            # Down neighbor
-            if y < tex_h - 1 and mask[y + 1, x]:
-                sources.append((y + 1, x, 1.0 / c))
-            # Left neighbor
-            if x > 0 and mask[y, x - 1]:
-                sources.append((y, x - 1, 1.0 / c))
-            # Right neighbor
-            if x < tex_w - 1 and mask[y, x + 1]:
-                sources.append((y, x + 1, 1.0 / c))
-            gutter_sources[(y, x)] = sources
-
-        mask[fill] = True
-
-    if not gutter_sources:
-        return None
-
-    # Resolve transitive dependencies: gutter pixels sourced from other
-    # gutter pixels need to trace back to original rasterized pixels.
-    # We iterate until all sources point to non-gutter pixels.
-    # (max 10 iterations matches the flood fill depth)
-    for _ in range(10):
-        changed = False
-        for (dy, dx), sources in gutter_sources.items():
-            new_sources: list[tuple[int, int, float]] = []
-            for sy, sx, w in sources:
-                if (sy, sx) in gutter_sources:
-                    # Expand: replace this source with its own sources
-                    for sy2, sx2, w2 in gutter_sources[(sy, sx)]:
-                        new_sources.append((sy2, sx2, w * w2))
-                    changed = True
-                else:
-                    new_sources.append((sy, sx, w))
-            gutter_sources[(dy, dx)] = new_sources
-        if not changed:
-            break
-
-    # Pack into arrays for fast vectorized application
-    n_gutter = len(gutter_sources)
-    dst_yx = np.empty((n_gutter, 2), dtype=np.int32)
-    # Flatten all sources into a single gather array with segment pointers
-    all_src_y: list[int] = []
-    all_src_x: list[int] = []
-    all_weights: list[float] = []
-    offsets = np.empty(n_gutter + 1, dtype=np.int64)
-    offsets[0] = 0
-
-    for i, ((dy, dx), sources) in enumerate(gutter_sources.items()):
-        dst_yx[i] = [dy, dx]
-        for sy, sx, w in sources:
-            all_src_y.append(sy)
-            all_src_x.append(sx)
-            all_weights.append(w)
-        offsets[i + 1] = len(all_src_y)
-
-    src_y = np.array(all_src_y, dtype=np.int32)
-    src_x = np.array(all_src_x, dtype=np.int32)
-    weights = np.array(all_weights, dtype=np.float32)
-
-    return dst_yx, src_y, src_x, weights, offsets
-
-
-def _apply_bleed_map(
-    texture: np.ndarray,
-    bleed_map: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-) -> None:
-    """Apply a precomputed bleed map to a texture (in-place).
-
-    Much faster than ``_bleed_gutter``: a single vectorized gather +
-    weighted sum instead of 10 iterative flood-fill passes.
-    """
-    dst_yx, src_y, src_x, weights, offsets = bleed_map
-    n_gutter = len(dst_yx)
-    if n_gutter == 0:
-        return
-
-    # Gather source pixel colors: (total_sources, 4)
-    src_colors = texture[src_y, src_x]  # (total_sources, 4)
-
-    # Weighted sum per gutter pixel using segment offsets
-    for i in range(n_gutter):
-        s, e = int(offsets[i]), int(offsets[i + 1])
-        if s < e:
-            texture[dst_yx[i, 0], dst_yx[i, 1]] = np.dot(
-                weights[s:e], src_colors[s:e],
-            )
 
 
 def bake_vertex_colors_to_texture(
