@@ -229,6 +229,23 @@ The wizard automatically assesses vector quality using three checks: minimum val
 - **no** -- no vector output
 - **only** -- produce only the animated+vectors variant (no static, no non-vector files)
 
+**Mesh overview table:**
+
+The interactive wizard displays a summary table for each mesh in the CARTO study to help you decide which maps to convert and what to expect:
+
+| Column | Description |
+|---|---|
+| **Vertices** | Number of active vertices (excluding fill geometry marked with GroupID `-1000000`) |
+| **Triangles** | Number of faces in the original mesh (each face is a triangle) |
+| **After Subdiv** | Estimated triangle count after Loop subdivision at the default level 2 (~16× increase) |
+| **Active** | Percentage of vertices that are real geometry vs fill/cap vertices |
+| **Points** | Number of electro-anatomical measurement points from the `_car.txt` file |
+| **LAT range** | Min–max local activation time across all valid measurement points (ms) |
+| **Density** | Point-to-vertex ratio (points ÷ active vertices) — higher means denser mapping coverage |
+| **Volts** | Available voltage data: **B** = bipolar, **U** = unipolar |
+| **Dimensions** | Bounding box of active vertices (width × height × depth in mm) |
+| **Est Time** | Rough processing time estimate assuming default settings (subdivide=2, both static+animated output) |
+
 ### CARTO workflow example
 
 A typical workflow for converting CARTO data for AR review on HoloLens:
@@ -237,7 +254,8 @@ A typical workflow for converting CARTO data for AR review on HoloLens:
 # 1. Point med2glb at the CARTO export -- the wizard guides you through options
 med2glb ./Export_Study_AF/
 
-# 2. The wizard shows all maps, their point counts, and LAT ranges.
+# 2. The wizard shows a mesh overview table with geometry stats,
+#    point coverage, voltage data, and estimated processing time.
 #    Pick a map, choose coloring (lat/bipolar/unipolar), and output mode.
 #    Default settings (subdivide=2, lat coloring, both static+animated) work
 #    well for most cases.

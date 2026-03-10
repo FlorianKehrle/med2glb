@@ -12,6 +12,8 @@ from rich.console import Console
 from med2glb.cli_wizard import (
     _assess_vector_quality,
     _check_ai_available,
+    _estimate_time,
+    _mesh_bbox_mm,
     _parse_mesh_selection,
     run_batch_carto_wizard,
     run_carto_wizard,
@@ -107,6 +109,55 @@ class TestParseMeshSelection:
     def test_all_out_of_range(self):
         result = _parse_mesh_selection("10", 3)
         assert result is None  # falls back to None
+
+
+class TestMeshBboxMm:
+    def test_basic_bbox(self):
+        mesh = CartoMesh(
+            mesh_id=1,
+            vertices=np.array([
+                [0, 0, 0], [10, 0, 0], [0, 20, 0], [0, 0, 30],
+            ], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            normals=np.zeros((4, 3), dtype=np.float64),
+            group_ids=np.zeros(4, dtype=np.int32),
+            face_group_ids=np.zeros(1, dtype=np.int32),
+            mesh_color=(1, 0, 0, 1),
+            color_names=["LAT"],
+        )
+        result = _mesh_bbox_mm(mesh)
+        assert result == "10×20×30 mm"
+
+    def test_excludes_inactive_vertices(self):
+        mesh = CartoMesh(
+            mesh_id=1,
+            vertices=np.array([
+                [0, 0, 0], [10, 0, 0], [0, 10, 0], [100, 100, 100],
+            ], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            normals=np.zeros((4, 3), dtype=np.float64),
+            group_ids=np.array([0, 0, 0, -1000000], dtype=np.int32),
+            face_group_ids=np.zeros(1, dtype=np.int32),
+            mesh_color=(1, 0, 0, 1),
+            color_names=["LAT"],
+        )
+        result = _mesh_bbox_mm(mesh)
+        assert result == "10×10×0 mm"
+
+
+class TestEstimateTime:
+    def test_small_mesh_seconds(self):
+        result = _estimate_time(1000, 10, has_lat=False)
+        assert "s" in result
+
+    def test_large_mesh_minutes(self):
+        result = _estimate_time(200_000, 2000, has_lat=True)
+        assert "min" in result
+
+    def test_no_points_no_vectors(self):
+        # With 0 points and no LAT, should still return a time
+        result = _estimate_time(500, 0, has_lat=False)
+        assert "s" in result or "min" in result
 
 
 class TestRunCartoWizard:

@@ -19,6 +19,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from med2glb.core.types import (
+    CARTO_INACTIVE_GROUP_ID,
     CartoConfig,
     CartoMesh,
     CartoPoint,
@@ -37,6 +38,61 @@ logger = logging.getLogger("med2glb")
 def is_interactive() -> bool:
     """Return True if stdin and stdout are connected to a TTY."""
     return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _mesh_bbox_mm(mesh: CartoMesh) -> str:
+    """Return bounding box dimensions of active vertices as 'WxHxD mm'."""
+    active = mesh.group_ids != CARTO_INACTIVE_GROUP_ID
+    if not np.any(active):
+        return ""
+    verts = mesh.vertices[active]
+    extent = verts.max(axis=0) - verts.min(axis=0)
+    return f"{extent[0]:.0f}×{extent[1]:.0f}×{extent[2]:.0f} mm"
+
+
+def _estimate_time(
+    n_triangles: int,
+    n_points: int,
+    has_lat: bool,
+) -> str:
+    """Rough processing time estimate based on triangle/point counts.
+
+    Heuristic derived from observed timings on typical hardware:
+    - Subdivision dominates for large meshes (~16x faces at level 2)
+    - xatlas UV unwrap is the single biggest step (~1-2 min for 100k+ verts)
+    - Texture baking scales with frame count × vertex count
+    - Vector generation adds ~30-60s for meshes with points
+
+    The estimate assumes default settings (subdivide=2, 30 animation frames,
+    both static+animated output).
+    """
+    # Post-subdivision triangle count (default subdivide=2 → ~16x)
+    post_sub = n_triangles * 16
+
+    # Base: subdivision + mapping + mesh processing
+    # ~1s per 100k post-sub triangles for subdivision
+    t_subdivide = post_sub / 100_000 * 1.0
+
+    # xatlas: roughly 1 min per 100k post-sub triangles
+    t_xatlas = post_sub / 100_000 * 60.0
+
+    # Texture baking: ~0.3s per 100k post-sub triangles × 30 frames
+    t_bake = post_sub / 100_000 * 0.3 * 30
+
+    # Point mapping: ~0.5s per 1k points (KDTree + IDW)
+    t_mapping = n_points / 1_000 * 0.5
+
+    # Vector generation for meshes with LAT data and enough points
+    t_vectors = 30.0 if has_lat and n_points >= 30 else 0.0
+
+    total = t_subdivide + t_xatlas + t_bake + t_mapping + t_vectors
+
+    if total < 10:
+        return "~{:.0f} s".format(max(total, 1))
+    elif total < 120:
+        return "~{:.0f} s".format(total)
+    else:
+        return "~{:.0f} min".format(total / 60)
 
 
 @dataclass
@@ -354,23 +410,64 @@ def run_carto_wizard(
     table.add_column("Name")
     table.add_column("Vertices", justify="right")
     table.add_column("Triangles", justify="right")
+    table.add_column("After Subdiv", justify="right")
+    table.add_column("Active", justify="right")
     table.add_column("Points", justify="right")
     table.add_column("LAT range")
+    table.add_column("Density", justify="right")
+    table.add_column("Volts")
+    table.add_column("Dimensions")
+    table.add_column("Est Time", justify="right")
 
     for i, mesh in enumerate(study.meshes, 1):
         pts = study.points.get(mesh.structure_name, [])
-        n_active = int(np.sum(mesh.group_ids != -1000000))
+        n_active = int(np.sum(mesh.group_ids != CARTO_INACTIVE_GROUP_ID))
+        n_total = len(mesh.vertices)
+        n_triangles = len(mesh.faces)
+
+        # LAT range
         lat_range = ""
         valid_lats = [p.lat for p in pts if not math.isnan(p.lat)]
+        has_lat = bool(valid_lats)
         if valid_lats:
             lat_range = f"{min(valid_lats):.0f} – {max(valid_lats):.0f} ms"
+
+        # Post-subdivision triangle estimate (default subdivide=2 → ~16x)
+        post_sub = n_triangles * 16
+        after_sub = f"→ {post_sub:,}"
+
+        # Active vertex percentage
+        active_pct = f"{100.0 * n_active / n_total:.0f}%" if n_total > 0 else ""
+
+        # Point density (points / active vertices)
+        density = f"{100.0 * len(pts) / n_active:.1f}%" if n_active > 0 else ""
+
+        # Voltage data availability
+        has_bipolar = any(not math.isnan(p.bipolar_voltage) for p in pts)
+        has_unipolar = any(not math.isnan(p.unipolar_voltage) for p in pts)
+        volts = " ".join(
+            filter(None, ["B" if has_bipolar else "", "U" if has_unipolar else ""])
+        )
+
+        # Bounding box dimensions
+        bbox = _mesh_bbox_mm(mesh)
+
+        # Time estimate
+        est_time = _estimate_time(n_triangles, len(pts), has_lat)
+
         table.add_row(
             str(i),
             mesh.structure_name,
             f"{n_active:,}",
-            f"{len(mesh.faces):,}",
+            f"{n_triangles:,}",
+            after_sub,
+            active_pct,
             f"{len(pts):,}",
             lat_range,
+            density,
+            volts,
+            bbox,
+            est_time,
         )
 
     console.print(table)
