@@ -487,9 +487,10 @@ def carto_mesh_to_mesh_data(
         # Distance cutoff for sparse data: when fewer than 40% of measurement
         # points carry valid data for this coloring, the values are likely
         # concentrated in one region and NN extrapolation to the rest of the
-        # mesh is misleading.  Use the 90th-percentile vertex-to-point
-        # distance as cutoff — this preserves the measured region while
-        # blanking truly unreachable areas.
+        # mesh is misleading.
+        # Scale the coverage proportionally to the valid-point ratio: if 17%
+        # of points have LAT, color ~25% of the mesh (the nearest vertices).
+        # This ensures the colored region matches the actually-measured area.
         # With ≥40% valid points the data is dense enough for full
         # interpolation (typical for newer CARTO v7.2+ exports).
         point_positions, point_values = extract_point_field(points, coloring)
@@ -497,17 +498,19 @@ def carto_mesh_to_mesh_data(
         if valid_ratio < 0.4 and len(point_positions) >= 2:
             dist_tree = KDTree(point_positions)
             distances, _ = dist_tree.query(mesh.vertices)
-            max_distance = float(np.percentile(distances, 90))
+            # Color proportionally: valid_ratio * 150, clamped to [20, 80].
+            # E.g. 17% valid → p25 → ~25% colored; 30% valid → p45.
+            cutoff_pct = min(80, max(20, valid_ratio * 150))
+            max_distance = float(np.percentile(distances, cutoff_pct))
             too_far = distances > max_distance
             n_blanked = int(np.sum(too_far))
             if n_blanked > 0:
                 all_values[too_far] = np.nan
-                pct = 100.0 * n_blanked / len(all_values)
+                pct_colored = 100.0 - (100.0 * n_blanked / len(all_values))
                 logger.info(
-                    "Sparse %s data (%.0f%% valid): distance cutoff %.1f mm "
-                    "blanked %d / %d vertices (%.0f%%)",
-                    coloring, valid_ratio * 100, max_distance,
-                    n_blanked, len(all_values), pct,
+                    "Sparse %s data (%.0f%% valid): cutoff %.1f mm, "
+                    "%.0f%% of mesh colored",
+                    coloring, valid_ratio * 100, max_distance, pct_colored,
                 )
 
         active_values = all_values[active_verts]

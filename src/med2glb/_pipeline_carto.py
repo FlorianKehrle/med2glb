@@ -125,7 +125,8 @@ def _extract_active_lat(
         from scipy.spatial import KDTree as _KDTree
         dist_tree = _KDTree(point_positions)
         distances, _ = dist_tree.query(anim_mesh.vertices)
-        max_distance = float(np.percentile(distances, 90))
+        cutoff_pct = min(80, max(20, valid_ratio * 150))
+        max_distance = float(np.percentile(distances, cutoff_pct))
         lat_values[distances > max_distance] = np.nan
 
     # Resample to mesh_data vertices (fill-stripping may differ)
