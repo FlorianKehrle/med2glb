@@ -213,8 +213,8 @@ def _has_toktx() -> bool:
     return shutil.which("toktx") is not None
 
 
-def _png_to_ktx2(png_bytes: bytes) -> bytes | None:
-    """Convert PNG bytes to KTX2 (UASTC + Zstandard) via ``toktx``.
+def _image_to_ktx2(image_bytes: bytes) -> bytes | None:
+    """Convert image bytes (PNG or JPEG) to KTX2 (UASTC + Zstandard) via ``toktx``.
 
     Returns the KTX2 file bytes, or None on failure.
     """
@@ -223,9 +223,13 @@ def _png_to_ktx2(png_bytes: bytes) -> bytes | None:
 
     try:
         with tempfile.TemporaryDirectory() as td:
-            in_path = Path(td) / "input.png"
+            # Detect format from header; toktx supports both PNG and JPEG input
+            if image_bytes[:2] == b'\xff\xd8':
+                in_path = Path(td) / "input.jpg"
+            else:
+                in_path = Path(td) / "input.png"
             out_path = Path(td) / "output.ktx2"
-            in_path.write_bytes(png_bytes)
+            in_path.write_bytes(image_bytes)
 
             subprocess.run(
                 [
@@ -256,7 +260,7 @@ def _try_ktx2_compress(
     image_bv_set: set[int],
     scale: float = 1.0,
 ) -> tuple[bytearray, bool]:
-    """Convert all PNG images in the GLB to KTX2.
+    """Convert all images in the GLB to KTX2.
 
     If *scale* < 1.0, downscale images before KTX2 encoding.
     Returns (new_blob, converted) where *converted* is True if any
@@ -282,7 +286,7 @@ def _try_ktx2_compress(
             if scale < 1.0:
                 src_data = _reencode_image(old_data, "PNG", 0, scale)
 
-            ktx2_data = _png_to_ktx2(src_data)
+            ktx2_data = _image_to_ktx2(src_data)
             if ktx2_data is not None:
                 new_data = ktx2_data
                 converted_bvs.add(bv_idx)

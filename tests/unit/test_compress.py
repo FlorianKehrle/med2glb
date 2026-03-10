@@ -12,7 +12,7 @@ from med2glb.glb.compress import (
     constrain_glb_size,
     optimize_textures_ktx2,
     _has_toktx,
-    _png_to_ktx2,
+    _image_to_ktx2,
     _reencode_image,
 )
 
@@ -412,14 +412,14 @@ class TestKtx2Compression:
         assert _has_toktx() is False
         compress_mod._has_toktx.cache_clear()
 
-    def test_png_to_ktx2_fallback(self, monkeypatch):
-        """When toktx is unavailable, _png_to_ktx2 returns None gracefully."""
+    def test_image_to_ktx2_fallback(self, monkeypatch):
+        """When toktx is unavailable, _image_to_ktx2 returns None gracefully."""
         import shutil
         import med2glb.glb.compress as compress_mod
 
         compress_mod._has_toktx.cache_clear()
         monkeypatch.setattr(shutil, "which", lambda name: None)
-        result = _png_to_ktx2(b"\x89PNG fake data")
+        result = _image_to_ktx2(b"\x89PNG fake data")
         assert result is None
         compress_mod._has_toktx.cache_clear()
 
@@ -458,14 +458,14 @@ class TestKtx2Compression:
         not __import__("shutil").which("toktx"),
         reason="toktx not installed",
     )
-    def test_png_to_ktx2_real(self):
+    def test_image_to_ktx2_real(self):
         """Integration: real PNG→KTX2 conversion with toktx."""
         from med2glb.glb.texture import pixel_data_to_png
 
         pixel_data = np.random.randint(0, 255, (64, 64), dtype=np.uint8)
         png_bytes = pixel_data_to_png(pixel_data.astype(np.float32))
 
-        ktx2_bytes = _png_to_ktx2(png_bytes)
+        ktx2_bytes = _image_to_ktx2(png_bytes)
         assert ktx2_bytes is not None
         # KTX2 files start with the KTX2 identifier
         assert ktx2_bytes[:7] == b"\xabKTX 20"

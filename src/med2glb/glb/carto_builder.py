@@ -2,7 +2,7 @@
 
 Uses the same full-quality mesh as the static GLB.  The static colormap
 is baked into a shared baseColorTexture, and the sweeping highlight ring
-is rendered via per-frame emissiveTextures (mostly black, tiny JPEGs).
+is rendered via per-frame emissiveTextures (mostly black PNGs, compressed to KTX2).
 Animation switches the visible frame via scale [1,1,1] / [0,0,0] —
 universally supported in glTF viewers including HoloLens 2 (MRTK/glTFast).
 """
@@ -176,10 +176,9 @@ def prepare_animated_cache(
     base_colors_remapped = base_colors[vmapping]
     base_texture = apply_rasterization_map(
         base_raster_map, base_colors_remapped,
-        image_format="JPEG", jpeg_quality=90,
     )
 
-    # Bake per-frame emissive ring textures (mostly black = tiny JPEG)
+    # Bake per-frame emissive ring textures (mostly black, compressed by KTX2)
     if emissive_tex_size == base_tex_size:
         emissive_raster_map = base_raster_map
     else:
@@ -194,7 +193,6 @@ def prepare_animated_cache(
         ring_colors = emissive_rgba[fi, vmapping]
         img_bytes = apply_rasterization_map(
             emissive_raster_map, ring_colors,
-            image_format="JPEG", jpeg_quality=85,
         )
         emissive_textures.append(img_bytes)
     del emissive_raster_map
@@ -259,7 +257,7 @@ def build_carto_static_glb(
     gltf.bufferViews.append(pygltflib.BufferView(
         buffer=0, byteOffset=img_offset, byteLength=len(cache.base_texture),
     ))
-    gltf.images.append(pygltflib.Image(bufferView=0, mimeType="image/jpeg"))
+    gltf.images.append(pygltflib.Image(bufferView=0, mimeType="image/png"))
     gltf.textures.append(pygltflib.Texture(sampler=0, source=0))
 
     # Material
@@ -475,7 +473,7 @@ def build_carto_animated_glb(
     ))
     base_img_idx = len(gltf.images)
     gltf.images.append(pygltflib.Image(
-        bufferView=base_bv_idx, mimeType="image/jpeg",
+        bufferView=base_bv_idx, mimeType="image/png",
     ))
     base_tex_idx = len(gltf.textures)
     gltf.textures.append(pygltflib.Texture(sampler=0, source=base_img_idx))
@@ -493,7 +491,7 @@ def build_carto_animated_glb(
         ))
         img_idx = len(gltf.images)
         gltf.images.append(pygltflib.Image(
-            bufferView=img_bv_idx, mimeType="image/jpeg",
+            bufferView=img_bv_idx, mimeType="image/png",
         ))
         tex_idx = len(gltf.textures)
         gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
