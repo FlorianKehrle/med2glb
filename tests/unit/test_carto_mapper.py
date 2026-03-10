@@ -7,7 +7,7 @@ import pytest
 
 from med2glb.io.carto_colormaps import bipolar_colormap, lat_colormap, unipolar_colormap
 from med2glb.io.carto_mapper import (
-    _find_dominant_face_group,
+    _get_fill_face_group_ids,
     build_inactive_mask,
     carto_mesh_to_mesh_data,
     interpolate_sparse_values,
@@ -85,31 +85,94 @@ class TestBuildInactiveMask:
         assert np.sum(mask) == 2
 
 
-class TestFindDominantFaceGroup:
-    def test_excludes_transparent_groups(self):
-        """Dominant group should skip transparent fill groups even if they have more faces."""
-        # Group 0 (transparent fill): 100 faces, Group 5 (visible): 80 faces
-        face_group_ids = np.array([0] * 100 + [5] * 80, dtype=np.int32)
-        result = _find_dominant_face_group(face_group_ids, transparent_group_ids=[0, 1, 2, 3, 4])
-        assert result == 5
+class TestGetFillFaceGroupIds:
+    def test_negative_face_groups_are_fill(self):
+        """Negative face GroupIDs (except -1000000) are fill geometry."""
+        face_group_ids = np.array([0] * 100 + [-6] * 20, dtype=np.int32)
+        result = _get_fill_face_group_ids(face_group_ids)
+        assert result == {-6}
 
-    def test_no_transparent_list(self):
-        """Without transparent list, falls back to overall argmax."""
-        face_group_ids = np.array([0] * 100 + [5] * 80, dtype=np.int32)
-        result = _find_dominant_face_group(face_group_ids, transparent_group_ids=None)
-        assert result == 0
+    def test_inactive_excluded(self):
+        """-1000000 is inactive, not fill."""
+        face_group_ids = np.array([0] * 100 + [-1000000] * 20, dtype=np.int32)
+        result = _get_fill_face_group_ids(face_group_ids)
+        assert result == set()
 
-    def test_all_transparent_fallback(self):
-        """If all groups are transparent, falls back to argmax."""
-        face_group_ids = np.array([0] * 100 + [1] * 80, dtype=np.int32)
-        result = _find_dominant_face_group(face_group_ids, transparent_group_ids=[0, 1])
-        assert result == 0
+    def test_multiple_negative_groups(self):
+        """Multiple negative groups are all identified as fill."""
+        face_group_ids = np.array(
+            [0] * 100 + [-4] * 20 + [-5] * 30 + [-1000000] * 10,
+            dtype=np.int32,
+        )
+        result = _get_fill_face_group_ids(face_group_ids)
+        assert result == {-4, -5}
 
-    def test_empty_transparent_list(self):
-        """Empty transparent list behaves like None."""
-        face_group_ids = np.array([0] * 100 + [5] * 80, dtype=np.int32)
-        result = _find_dominant_face_group(face_group_ids, transparent_group_ids=[])
-        assert result == 0
+    def test_no_fill_groups(self):
+        """All-zero face groups means no fill."""
+        face_group_ids = np.array([0] * 100, dtype=np.int32)
+        result = _get_fill_face_group_ids(face_group_ids)
+        assert result == set()
+
+    def test_fill_outnumbers_surface(self):
+        """Fill groups identified even when they have more faces than surface."""
+        face_group_ids = np.array([0] * 30 + [-5] * 100 + [-4] * 50, dtype=np.int32)
+        result = _get_fill_face_group_ids(face_group_ids)
+        assert result == {-5, -4}
+
+
+class TestCartoMeshToMeshDataFillStripping:
+    """Regression tests for fill face stripping (negative face GroupID)."""
+
+    def test_strips_fill_faces_no_subdivision(self):
+        """Fill faces (negative GroupID) should be stripped, preserving the hole."""
+        from med2glb.core.types import CartoMesh
+
+        # 4 surface triangles (group 0) + 1 fill triangle (group -6)
+        vertices = np.array([
+            [0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0],  # surface verts
+            [0.5, 0.5, 0.1],  # fill-only vert
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2], [1, 3, 2],  # surface
+            [2, 3, 0], [0, 3, 1],  # surface
+            [0, 2, 4],             # fill cap
+        ], dtype=np.int32)
+        group_ids = np.array([0, 0, 0, 0, -22], dtype=np.int32)
+        face_group_ids = np.array([0, 0, 0, 0, -6], dtype=np.int32)
+        normals = np.tile([0, 0, 1], (5, 1)).astype(np.float64)
+
+        mesh = CartoMesh(
+            mesh_id=1, vertices=vertices, faces=faces, normals=normals,
+            group_ids=group_ids, face_group_ids=face_group_ids,
+            mesh_color=(0.0, 1.0, 0.0, 1.0), color_names=["LAT"],
+            transparent_group_ids=[99],  # doesn't match any face group
+            structure_name="test_fill",
+        )
+        mesh_data = carto_mesh_to_mesh_data(mesh, None, coloring="lat", subdivide=0)
+        # Fill face and fill-only vertex should be stripped
+        assert len(mesh_data.faces) == 4  # only surface faces
+        assert len(mesh_data.vertices) == 4  # fill vertex removed
+
+    def test_no_fill_faces_unchanged(self):
+        """Mesh with only group-0 faces should pass through unchanged."""
+        from med2glb.core.types import CartoMesh
+
+        vertices = np.array([
+            [0, 0, 0], [1, 0, 0], [0, 1, 0],
+        ], dtype=np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+        normals = np.tile([0, 0, 1], (3, 1)).astype(np.float64)
+
+        mesh = CartoMesh(
+            mesh_id=1, vertices=vertices, faces=faces, normals=normals,
+            group_ids=np.zeros(3, dtype=np.int32),
+            face_group_ids=np.zeros(1, dtype=np.int32),
+            mesh_color=(0.0, 1.0, 0.0, 1.0), color_names=["LAT"],
+            structure_name="test_no_fill",
+        )
+        mesh_data = carto_mesh_to_mesh_data(mesh, None, coloring="lat", subdivide=0)
+        assert len(mesh_data.faces) == 1
+        assert len(mesh_data.vertices) == 3
 
 
 class TestCartoMeshToMeshData:

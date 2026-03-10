@@ -178,30 +178,31 @@ def build_inactive_mask(mesh: CartoMesh) -> np.ndarray:
     return mesh.group_ids == _INACTIVE_GROUP_ID
 
 
-def _find_dominant_face_group(
-    face_group_ids: np.ndarray,
-    transparent_group_ids: list[int] | None = None,
-) -> int:
-    """Find the dominant (most frequent) face group, excluding transparent fill groups.
+def _get_fill_face_group_ids(face_group_ids: np.ndarray) -> set[int]:
+    """Identify face group IDs that represent fill/transparent geometry.
+
+    In the CARTO .mesh format, face GroupIDs follow a clear convention
+    (validated across 15 meshes from CARTO v7.1 and v7.2):
+
+    - ``GroupID == 0``: visible surface (myocardium)
+    - ``GroupID < 0`` (not -1000000): fill/transparent caps (e.g. PV ostia)
+    - ``GroupID == -1000000``: inactive/degenerate (handled separately)
+
+    Note: the `TransparentGroupsIDs` field in the .mesh header is a
+    CARTO-internal ID that does **not** correspond to face GroupIDs.
+    Its count matches the number of negative face groups, but the values
+    are from a different namespace.  Comparing them against face GroupIDs
+    is incorrect and can misidentify the visible surface as fill.
 
     Args:
-        face_group_ids: Per-face group IDs (already filtered to exclude -1000000).
-        transparent_group_ids: Group IDs declared as transparent fill in the .mesh header.
+        face_group_ids: Per-face group IDs (may include -1000000).
 
     Returns:
-        The group ID with the most faces among non-transparent groups.
-        Falls back to overall argmax if all groups are transparent.
+        Set of face group IDs to treat as fill (never includes -1000000).
     """
-    unique_gids, counts = np.unique(face_group_ids, return_counts=True)
-
-    if transparent_group_ids:
-        non_transparent_mask = ~np.isin(unique_gids, transparent_group_ids)
-        if np.any(non_transparent_mask):
-            filtered_idx = np.argmax(counts[non_transparent_mask])
-            return int(unique_gids[non_transparent_mask][filtered_idx])
-
-    # Fallback: all groups are transparent or no transparent list provided
-    return int(unique_gids[np.argmax(counts)])
+    unique_gids = set(np.unique(face_group_ids).tolist())
+    unique_gids.discard(_INACTIVE_GROUP_ID)
+    return {g for g in unique_gids if g < 0}
 
 
 def _smooth_singularities(
@@ -310,10 +311,11 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
     clean_faces = mesh.faces[active_face_mask]
     clean_face_gids = mesh.face_group_ids[active_face_mask]
 
-    # Identify visible vertex groups from non-transparent face groups.
-    # At this point clean_faces still uses original vertex indices.
-    if mesh.transparent_group_ids:
-        surface_fmask = ~np.isin(clean_face_gids, mesh.transparent_group_ids)
+    # Identify visible vertex groups from surface (non-fill) face groups.
+    # Negative face GroupIDs are fill/transparent caps; GroupID 0 is visible.
+    fill_face_gids = _get_fill_face_group_ids(clean_face_gids)
+    if fill_face_gids:
+        surface_fmask = ~np.isin(clean_face_gids, list(fill_face_gids))
         surface_verts_idx = np.unique(clean_faces[surface_fmask].ravel())
         visible_vert_groups = (
             set(mesh.group_ids[surface_verts_idx].tolist())
@@ -321,11 +323,7 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
             else set(mesh.group_ids.tolist())
         )
     else:
-        dominant_fgid = _find_dominant_face_group(clean_face_gids, None)
-        dominant_face_verts = np.unique(
-            clean_faces[clean_face_gids == dominant_fgid].ravel()
-        )
-        visible_vert_groups = set(mesh.group_ids[dominant_face_verts].tolist())
+        visible_vert_groups = set(mesh.group_ids.tolist())
 
     # Compact vertices: keep only those referenced by active faces
     used_verts = np.unique(clean_faces.ravel())
@@ -363,38 +361,17 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
     _, nn_idx = tree.query(new_vertices)
     new_group_ids = clean_group_ids[nn_idx]
 
-    # Mark fill-only vertices as inactive ONLY if the surface remains
-    # connected without fill.  Multi-island remaps need fill geometry
-    # for connectivity — stripping it would break the mesh into pieces.
-    fill_mask = ~np.isin(new_group_ids, list(visible_vert_groups))
-    n_fill = int(np.sum(fill_mask))
-    if n_fill > 0:
-        # Check if surface-only faces form a single connected component
-        surface_face_mask = ~fill_mask[new_faces[:, 0]]
-        surface_faces = new_faces[surface_face_mask]
-        if len(surface_faces) > 0:
-            tri_check = trimesh.Trimesh(
-                vertices=new_vertices, faces=surface_faces, process=False,
-            )
-            n_components = len(
-                trimesh.graph.connected_components(
-                    tri_check.face_adjacency, min_len=1,
-                )
-            )
-        else:
-            n_components = 0
-
-        if n_components <= 1:
+    # Mark fill-only vertices as inactive so carto_mesh_to_mesh_data
+    # strips them.  Fill faces overlap the visible surface and cause
+    # z-fighting / pinch artifacts if rendered.
+    if fill_face_gids:
+        fill_mask = ~np.isin(new_group_ids, list(visible_vert_groups))
+        n_fill = int(np.sum(fill_mask))
+        if n_fill > 0:
             new_group_ids[fill_mask] = _INACTIVE_GROUP_ID
             logger.debug(
                 "Marked %d fill-only vertices as inactive for '%s'",
                 n_fill, mesh.structure_name,
-            )
-        else:
-            logger.debug(
-                "Keeping %d fill vertices for '%s': surface has %d "
-                "disconnected components",
-                n_fill, mesh.structure_name, n_components,
             )
 
     # Derive face_group_ids from vertex 0 of each face
@@ -452,40 +429,23 @@ def carto_mesh_to_mesh_data(
 
     # Build mask of active faces.
     # 1) Always strip truly inactive faces (face_group_ids == -1000000).
-    # 2) Try stripping transparent fill faces.  If the mesh stays connected
-    #    without fill, strip them (avoids z-fighting).  If stripping fill
-    #    would disconnect the mesh (multi-island remaps), keep fill faces
-    #    and color their vertices with the mesh default color.
-    import trimesh as _trimesh
-
+    # 2) For non-subdivided meshes, also strip fill faces (negative face
+    #    GroupID).  Subdivided meshes already had fill handled in
+    #    subdivide_carto_mesh() via -1000000 vertex marking.
     non_inactive_mask = mesh.face_group_ids != _INACTIVE_GROUP_ID
 
-    keep_fill = False
-    if mesh.transparent_group_ids:
-        surface_mask = non_inactive_mask & ~np.isin(
-            mesh.face_group_ids, mesh.transparent_group_ids,
-        )
-        # Check connectivity of surface-only faces
-        surface_faces_tmp = mesh.faces[surface_mask]
-        if len(surface_faces_tmp) > 0:
-            tri_tmp = _trimesh.Trimesh(
-                vertices=mesh.vertices, faces=surface_faces_tmp, process=False,
-            )
-            n_components = len(
-                _trimesh.graph.connected_components(tri_tmp.face_adjacency, min_len=1)
-            )
-            if n_components > 1:
-                keep_fill = True
-                logger.debug(
-                    "Keeping transparent fill for '%s': surface has %d "
-                    "disconnected components without fill",
-                    mesh.structure_name, n_components,
-                )
+    # Only detect fill on original (non-subdivided) meshes.  After
+    # subdivision, face_group_ids are derived from vertex group IDs
+    # (which can all be negative) and don't follow the face-group convention.
+    if not actually_subdivided:
+        fill_face_gids = _get_fill_face_group_ids(mesh.face_group_ids)
+    else:
+        fill_face_gids = set()
 
-        if keep_fill:
-            active_faces_mask = non_inactive_mask
-        else:
-            active_faces_mask = surface_mask
+    if fill_face_gids:
+        active_faces_mask = non_inactive_mask & ~np.isin(
+            mesh.face_group_ids, list(fill_face_gids),
+        )
     else:
         active_faces_mask = non_inactive_mask
 
@@ -493,14 +453,6 @@ def carto_mesh_to_mesh_data(
     active_vert_indices = np.unique(mesh.faces[active_faces_mask].ravel())
     active_verts = np.zeros(len(mesh.vertices), dtype=bool)
     active_verts[active_vert_indices] = True
-
-    # Identify fill-only vertices (for neutral coloring when fill is kept)
-    is_fill_only = np.zeros(len(mesh.vertices), dtype=bool)
-    if keep_fill and mesh.transparent_group_ids:
-        surface_vert_indices = np.unique(mesh.faces[surface_mask].ravel())
-        is_surface_vert = np.zeros(len(mesh.vertices), dtype=bool)
-        is_surface_vert[surface_vert_indices] = True
-        is_fill_only = active_verts & ~is_surface_vert
 
     # Remap vertices: only keep active ones
     old_to_new = np.full(len(mesh.vertices), -1, dtype=np.int32)
@@ -523,9 +475,6 @@ def carto_mesh_to_mesh_data(
         ).astype(np.float32)
 
     # Compute vertex colors
-    # Fill-only vertices (when fill is kept for connectivity) get the mesh
-    # default color instead of LAT/voltage colors.
-    fill_only_in_active = is_fill_only[active_verts]
     vertex_colors = None
     if points:
         # Map sparse points to all mesh vertices first, then filter
@@ -534,19 +483,11 @@ def carto_mesh_to_mesh_data(
         else:
             all_values = map_points_to_vertices(mesh, points, field=coloring)
             all_values = interpolate_sparse_values(mesh, all_values)
-        # Set fill-only vertices to NaN so colormap renders them neutrally
-        if np.any(is_fill_only):
-            all_values[is_fill_only] = np.nan
         active_values = all_values[active_verts]
 
         colormap_fn = COLORMAPS.get(coloring)
         if colormap_fn:
             vertex_colors = colormap_fn(active_values, clamp_range=clamp_range)
-
-        # Override fill-only vertex colors with mesh default (opaque)
-        if np.any(fill_only_in_active):
-            r, g, b, a = mesh.mesh_color
-            vertex_colors[fill_only_in_active] = [r, g, b, a]
     else:
         # No points — use mesh default color as solid vertex color
         n = len(vertices)
