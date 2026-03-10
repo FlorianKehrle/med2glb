@@ -373,7 +373,10 @@ def _apply_and_encode(
         img = Image.fromarray(texture_u8[:, :, :3], mode="RGB")
         img.save(buf, format="JPEG", quality=jpeg_quality)
     else:
-        img = Image.fromarray(texture_u8, mode="RGBA")
+        # Output RGB (no alpha) — textures use alphaMode OPAQUE in glTF,
+        # and unrasterized pixels would otherwise have alpha=0 causing
+        # transparency artifacts.
+        img = Image.fromarray(texture_u8[:, :, :3], mode="RGB")
         img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
 

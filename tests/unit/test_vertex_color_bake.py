@@ -201,7 +201,7 @@ class TestRasterizeVertexColors:
         # Should be decodable
         img = Image.open(io.BytesIO(png))
         assert img.size == (16, 16)
-        assert img.mode == "RGBA"
+        assert img.mode == "RGB"
 
     def test_full_quad_covers_entire_texture(self):
         """A quad spanning [0,1]x[0,1] should fill most of the texture."""
