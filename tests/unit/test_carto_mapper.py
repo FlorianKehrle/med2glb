@@ -221,10 +221,11 @@ class TestColormaps:
         assert np.all(colors[:, :3] <= 1)
         assert np.all(colors[:, 3] == 1.0)
 
-    def test_lat_nan_transparent(self):
+    def test_lat_nan_opaque_gray(self):
         values = np.array([0, np.nan, 100], dtype=np.float64)
         colors = lat_colormap(values)
-        assert colors[1, 3] < 1.0  # NaN vertex is semi-transparent
+        assert colors[1, 3] == 1.0  # NaN vertex is opaque gray
+        assert abs(colors[1, 0] - 0.5) < 0.01  # neutral gray RGB
 
     def test_bipolar_default_range(self):
         values = np.array([0.05, 0.5, 1.0, 1.5], dtype=np.float64)

@@ -15,6 +15,7 @@ import time
 import numpy as np
 import xatlas
 from PIL import Image
+from scipy.ndimage import distance_transform_edt
 
 logger = logging.getLogger("med2glb")
 
@@ -365,7 +366,19 @@ def _apply_and_encode(
         )
         texture[pixel_y, pixel_x] = colors
 
-    _bleed_gutter(texture, mask.copy(), tex_size, tex_size)
+    bleed_mask = mask.copy()
+    _bleed_gutter(texture, bleed_mask, tex_size, tex_size)
+
+    # Fill any remaining empty pixels with nearest rasterized color.
+    # The 10-iteration gutter bleed handles fine seam padding, but sparse
+    # UV layouts (e.g. 0.1% coverage on 4096x4096) leave large black areas
+    # that bleed into mipmap levels.  Nearest-neighbor fill ensures no
+    # black pixels remain anywhere in the texture.
+    still_empty = ~bleed_mask
+    if np.any(still_empty):
+        _, indices = distance_transform_edt(still_empty, return_indices=True)
+        for c in range(texture.shape[2]):
+            texture[:, :, c][still_empty] = texture[indices[0], indices[1], c][still_empty]
 
     texture_u8 = np.clip(texture * 255 + 0.5, 0, 255).astype(np.uint8)
     buf = io.BytesIO()

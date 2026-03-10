@@ -117,6 +117,17 @@ def _extract_active_lat(
         lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
         lat_values = interpolate_sparse_values(anim_mesh, lat_values)
 
+    # Distance cutoff: blank out vertices far from valid LAT points
+    from med2glb.io.carto_mapper import compute_point_spacing, extract_point_field
+    point_positions, _ = extract_point_field(points, "lat")
+    if len(point_positions) >= 2:
+        spacing = compute_point_spacing(points, "lat")
+        max_distance = spacing * 3
+        from scipy.spatial import KDTree as _KDTree
+        dist_tree = _KDTree(point_positions)
+        distances, _ = dist_tree.query(anim_mesh.vertices)
+        lat_values[distances > max_distance] = np.nan
+
     # Resample to mesh_data vertices (fill-stripping may differ)
     from scipy.spatial import KDTree
     tree = KDTree(anim_mesh.vertices)
@@ -215,6 +226,7 @@ def _write_carto_log(
     variant_outputs: list[tuple[bool, bool, Path]],
     start_time: float,
     step_times: dict[str, float] | None = None,
+    data_coverage_pct: float | None = None,
 ) -> None:
     """Append conversion metadata to the log file in the output directory."""
     from med2glb.io.conversion_log import append_carto_entry
@@ -247,6 +259,7 @@ def _write_carto_log(
         elapsed_seconds=elapsed,
         source_path=str(config.input_path),
         step_times=step_times,
+        data_coverage_pct=data_coverage_pct,
     )
 
 
@@ -389,6 +402,35 @@ def _convert_carto_meshes(
 
             progress.remove_task(task)
 
+        # === Compute data coverage ===
+        data_coverage_pct: float | None = None
+        if points and mesh_data.vertex_colors is not None:
+            n_active = len(mesh_data.vertices)
+            # Count vertices that got a valid color (not gray NaN)
+            # Gray NaN vertices have color (0.5, 0.5, 0.5, 1.0)
+            colors = mesh_data.vertex_colors
+            is_gray = (
+                (np.abs(colors[:, 0] - 0.5) < 0.01)
+                & (np.abs(colors[:, 1] - 0.5) < 0.01)
+                & (np.abs(colors[:, 2] - 0.5) < 0.01)
+            )
+            n_colored = int(np.sum(~is_gray))
+            data_coverage_pct = 100.0 * n_colored / n_active if n_active > 0 else 100.0
+
+            if data_coverage_pct < 50.0:
+                # Count valid measurement points for the warning message
+                if config.coloring == "lat":
+                    n_valid = sum(1 for p in points if not math.isnan(p.lat))
+                elif config.coloring == "bipolar":
+                    n_valid = sum(1 for p in points if not math.isnan(p.bipolar_voltage))
+                else:
+                    n_valid = sum(1 for p in points if not math.isnan(p.unipolar_voltage))
+                console.print(
+                    f"  [yellow]Warning: only {n_valid:,} of {len(points):,} points "
+                    f"({100.0 * n_valid / len(points):.0f}%) have valid {config.coloring.upper()} data "
+                    f"— {data_coverage_pct:.0f}% of mesh colored, rest shown as gray[/yellow]"
+                )
+
         # === Assemble legend metadata ===
         _UNITS = {"lat": "ms", "bipolar": "mV", "unipolar": "mV"}
         _DEFAULT_RANGES: dict[str, tuple[float, float]] = {
@@ -407,19 +449,23 @@ def _convert_carto_meshes(
             clamp_range = (0.0, 1.0)
 
         from datetime import date
+        legend_metadata: dict = {
+            "study_name": study.study_name or "",
+            "carto_version": _carto_version_label(study.version),
+            "structure": mesh.structure_name,
+            "coloring": config.coloring,
+            "clamp_range": list(clamp_range),
+            "unit": unit,
+            "mapping_points": len(points) if points else 0,
+            "export_date": date.today().isoformat(),
+        }
+        if data_coverage_pct is not None and data_coverage_pct < 100.0:
+            legend_metadata["data_coverage"] = f"{data_coverage_pct:.0f}%"
+
         legend_info: dict = {
             "coloring": config.coloring,
             "clamp_range": list(clamp_range),
-            "metadata": {
-                "study_name": study.study_name or "",
-                "carto_version": _carto_version_label(study.version),
-                "structure": mesh.structure_name,
-                "coloring": config.coloring,
-                "clamp_range": list(clamp_range),
-                "unit": unit,
-                "mapping_points": len(points) if points else 0,
-                "export_date": date.today().isoformat(),
-            },
+            "metadata": legend_metadata,
         }
 
         # === Pre-compute animated cache (shared xatlas + textures) ===
@@ -561,6 +607,7 @@ def _convert_carto_meshes(
                 carto_output_dir, study, mesh, mesh_data, points,
                 config, variant_outputs, start_time,
                 step_times=step_times,
+                data_coverage_pct=data_coverage_pct,
             )
 
 

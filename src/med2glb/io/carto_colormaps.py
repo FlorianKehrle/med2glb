@@ -147,8 +147,11 @@ def _apply_colormap(
     colors[valid, 2] = np.interp(t[valid], positions, b_stops).astype(np.float32)
     colors[valid, 3] = 1.0
 
-    # NaN values: fully transparent gray (invisible via MASK)
+    # NaN values: opaque neutral gray (no data region).
+    # CARTO materials use alphaMode OPAQUE, so alpha has no rendering
+    # effect — opaque gray ensures unmapped regions are visibly neutral
+    # rather than being masked by texture interpolation artifacts.
     colors[~valid, :3] = 0.5
-    colors[~valid, 3] = 0.0
+    colors[~valid, 3] = 1.0
 
     return colors

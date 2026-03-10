@@ -39,6 +39,7 @@ def append_carto_entry(
     elapsed_seconds: float,
     source_path: str,
     step_times: dict[str, float] | None = None,
+    data_coverage_pct: float | None = None,
 ) -> None:
     """Append a CARTO conversion entry to the log file."""
     lines: list[str] = []
@@ -56,6 +57,8 @@ def append_carto_entry(
     if subdivide > 0:
         lines.append(f"  Subdivision:     level {subdivide} (~{4 ** subdivide}x face increase)")
     lines.append(f"  Mapping points:  {mapping_points:,}")
+    if data_coverage_pct is not None and data_coverage_pct < 100.0:
+        lines.append(f"  Data coverage:   {data_coverage_pct:.0f}% (gray = no data within range)")
     lines.append(f"  Vertices:        {active_vertices:,} active / {total_vertices:,} total")
     lines.append(f"  Faces:           {face_count:,}")
     lines.append(f"  Computing time:  {_format_duration(elapsed_seconds)}")

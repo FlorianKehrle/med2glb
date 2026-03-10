@@ -19,7 +19,7 @@ from med2glb.io.carto_colormaps import COLORMAPS
 logger = logging.getLogger("med2glb")
 
 
-def _extract_point_field(
+def extract_point_field(
     points: list[CartoPoint],
     field: str,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -43,6 +43,23 @@ def _extract_point_field(
     return point_positions[valid], point_values[valid]
 
 
+def compute_point_spacing(
+    points: list[CartoPoint],
+    field: str = "lat",
+) -> float:
+    """Compute median nearest-neighbor distance between valid points.
+
+    Returns:
+        Median inter-point spacing in mm, or inf if fewer than 2 valid points.
+    """
+    positions, _ = extract_point_field(points, field)
+    if len(positions) < 2:
+        return float("inf")
+    tree = KDTree(positions)
+    dd, _ = tree.query(positions, k=2)  # k=2: closest is self
+    return float(np.median(dd[:, 1]))
+
+
 def map_points_to_vertices(
     mesh: CartoMesh,
     points: list[CartoPoint],
@@ -64,7 +81,7 @@ def map_points_to_vertices(
     if not points:
         return values
 
-    point_positions, point_values = _extract_point_field(points, field)
+    point_positions, point_values = extract_point_field(points, field)
     if len(point_values) == 0:
         return values
 
@@ -106,7 +123,7 @@ def map_points_to_vertices_idw(
     if not points:
         return values
 
-    point_positions, point_values = _extract_point_field(points, field)
+    point_positions, point_values = extract_point_field(points, field)
     if len(point_values) == 0:
         return values
 
@@ -483,6 +500,27 @@ def carto_mesh_to_mesh_data(
         else:
             all_values = map_points_to_vertices(mesh, points, field=coloring)
             all_values = interpolate_sparse_values(mesh, all_values)
+
+        # Distance cutoff: blank out vertices far from any valid measurement
+        # to avoid misleading extrapolation.  Use 3x the median inter-point
+        # spacing of valid measurements as the hard cutoff.
+        point_positions, _ = extract_point_field(points, coloring)
+        if len(point_positions) >= 2:
+            spacing = compute_point_spacing(points, coloring)
+            max_distance = spacing * 3
+            dist_tree = KDTree(point_positions)
+            distances, _ = dist_tree.query(mesh.vertices)
+            too_far = distances > max_distance
+            n_blanked = int(np.sum(too_far))
+            if n_blanked > 0:
+                all_values[too_far] = np.nan
+                pct = 100.0 * n_blanked / len(all_values)
+                logger.info(
+                    "Distance cutoff (%.1f mm): blanked %d / %d vertices (%.0f%%) "
+                    "beyond 3x inter-point spacing",
+                    max_distance, n_blanked, len(all_values), pct,
+                )
+
         active_values = all_values[active_verts]
 
         colormap_fn = COLORMAPS.get(coloring)

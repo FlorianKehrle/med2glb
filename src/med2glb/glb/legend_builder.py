@@ -163,6 +163,7 @@ def render_info_image(
         ("unit", None),  # combined with coloring
         ("clamp_range", "Range"),
         ("mapping_points", "Points"),
+        ("data_coverage", "Coverage"),
         ("carto_version", "CARTO"),
         ("export_date", "Date"),
     ]
