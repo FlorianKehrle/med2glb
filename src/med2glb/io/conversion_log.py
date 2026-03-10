@@ -38,6 +38,7 @@ def append_carto_entry(
     variant_outputs: list[tuple[bool, bool, Path]],
     elapsed_seconds: float,
     source_path: str,
+    step_times: dict[str, float] | None = None,
 ) -> None:
     """Append a CARTO conversion entry to the log file."""
     lines: list[str] = []
@@ -58,6 +59,13 @@ def append_carto_entry(
     lines.append(f"  Vertices:        {active_vertices:,} active / {total_vertices:,} total")
     lines.append(f"  Faces:           {face_count:,}")
     lines.append(f"  Computing time:  {_format_duration(elapsed_seconds)}")
+    if step_times:
+        parts = []
+        for label in ("Subdivide", "Mapping", "xatlas", "Rasterize", "Textures", "KTX2"):
+            if label in step_times and step_times[label] >= 0.5:
+                parts.append(f"{label} {_format_duration(step_times[label])}")
+        if parts:
+            lines.append(f"                   ({', '.join(parts)})")
     lines.append(f"  Output files:")
     for do_animate, do_vectors, out_path in variant_outputs:
         label = "static"

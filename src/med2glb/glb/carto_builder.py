@@ -75,6 +75,7 @@ class AnimatedBakeCache:
     base_texture: bytes
     emissive_textures: list[bytes]
     n_frames: int
+    step_times: dict[str, float] | None = None
 
 
 def prepare_animated_cache(
@@ -152,13 +153,16 @@ def prepare_animated_cache(
     # 1024 is plenty for the ring highlight even on large meshes.
     emissive_tex_size = min(base_tex_size, 1024)
 
+    _step_times: dict[str, float] = {}
+
     eta = _estimate_xatlas_time(n_faces)
     _status(f"UV unwrapping {n_faces:,} faces with xatlas (estimated {eta})...")
     t0 = time.monotonic()
     vmapping, new_faces, shared_uvs = xatlas_unwrap(
         mesh_data.vertices, mesh_data.faces, mesh_data.normals,
     )
-    _status(f"UV unwrap done ({_fmt_duration(time.monotonic() - t0)}). Rasterizing {base_tex_size}x{base_tex_size} texture...")
+    _step_times["xatlas"] = time.monotonic() - t0
+    _status(f"UV unwrap done ({_fmt_duration(_step_times['xatlas'])}). Rasterizing {base_tex_size}x{base_tex_size} texture...")
 
     unwelded_verts, centroid = _center_vertices(
         mesh_data.vertices[vmapping].astype(np.float32),
@@ -170,9 +174,11 @@ def prepare_animated_cache(
     # Precompute rasterization maps — full-res for base, smaller for emissive
     t0 = time.monotonic()
     base_raster_map = precompute_rasterization_map(new_faces, shared_uvs, base_tex_size)
-    _status(f"Rasterization map done ({_fmt_duration(time.monotonic() - t0)}). Baking textures...")
+    _step_times["Rasterize"] = time.monotonic() - t0
+    _status(f"Rasterization done ({_fmt_duration(_step_times['Rasterize'])}). Baking textures...")
 
     # Bake ONE base color texture (same quality as static GLB)
+    t0 = time.monotonic()
     base_colors_remapped = base_colors[vmapping]
     base_texture = apply_rasterization_map(
         base_raster_map, base_colors_remapped,
@@ -189,12 +195,13 @@ def prepare_animated_cache(
 
     emissive_textures: list[bytes] = []
     for fi in range(n_frames):
-        _frame(f"Baking ring textures...", fi, n_frames)
+        _frame(f"Baking textures ({fi + 1}/{n_frames})...", fi, n_frames)
         ring_colors = emissive_rgba[fi, vmapping]
         img_bytes = apply_rasterization_map(
             emissive_raster_map, ring_colors,
         )
         emissive_textures.append(img_bytes)
+    _step_times["Textures"] = time.monotonic() - t0
     del emissive_raster_map
 
     del emissive_rgba
@@ -210,6 +217,7 @@ def prepare_animated_cache(
         base_texture=base_texture,
         emissive_textures=emissive_textures,
         n_frames=n_frames,
+        step_times=_step_times,
     )
 
 
@@ -413,6 +421,7 @@ def build_carto_animated_glb(
             compute_dash_speed_factors,
             assess_streamline_quality,
         )
+        _report("Tracing streamlines...")
         streamlines, face_grads, face_centers = trace_all_streamlines(
             mesh_data.vertices, mesh_data.faces, lat_values,
             mesh_data.normals, target_count=300,

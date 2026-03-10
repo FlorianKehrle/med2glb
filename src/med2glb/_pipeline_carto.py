@@ -146,6 +146,7 @@ def _print_carto_summary(
     subdivide: int,
     variant_outputs: list[tuple[bool, bool, Path]],
     start_time: float,
+    step_times: dict[str, float] | None = None,
 ) -> None:
     """Print a single summary after all variants of a CARTO mesh are built.
 
@@ -195,6 +196,13 @@ def _print_carto_summary(
         console.print(f"    {out_path.name}  [dim]({file_size:.0f} KB, {label})[/dim]")
 
     console.print(f"  Time:       {_format_duration(elapsed)}")
+    if step_times:
+        parts = []
+        for label in ("Subdivide", "Mapping", "xatlas", "Rasterize", "Textures", "KTX2"):
+            if label in step_times and step_times[label] >= 0.5:
+                parts.append(f"{label} {_format_duration(step_times[label])}")
+        if parts:
+            console.print(f"  [dim]          ({', '.join(parts)})[/dim]")
 
 
 def _write_carto_log(
@@ -206,6 +214,7 @@ def _write_carto_log(
     config: "CartoConfig",
     variant_outputs: list[tuple[bool, bool, Path]],
     start_time: float,
+    step_times: dict[str, float] | None = None,
 ) -> None:
     """Append conversion metadata to the log file in the output directory."""
     from med2glb.io.conversion_log import append_carto_entry
@@ -237,6 +246,7 @@ def _write_carto_log(
         variant_outputs=variant_outputs,
         elapsed_seconds=elapsed,
         source_path=str(config.input_path),
+        step_times=step_times,
     )
 
 
@@ -328,6 +338,7 @@ def _convert_carto_meshes(
         points = study.points.get(mesh.structure_name)
 
         # === Shared intermediates — computed ONCE per mesh ===
+        step_times: dict[str, float] = {}
         console.print(
             f"\n[bold]Preparing: {mesh.structure_name}[/bold] "
             f"({len(variants)} variant(s))"
@@ -345,15 +356,19 @@ def _convert_carto_meshes(
 
             # 1. Subdivide once
             subdivided = None
+            t_step = time.monotonic()
             if config.subdivide > 0:
                 subdivided = subdivide_carto_mesh(mesh, iterations=config.subdivide)
+            step_times["Subdivide"] = time.monotonic() - t_step
             progress.update(task, description="Mapping vertices...")
 
             # 2. Mesh data (colors, active filtering) once
+            t_step = time.monotonic()
             mesh_data = carto_mesh_to_mesh_data(
                 mesh, points, coloring=config.coloring,
                 subdivide=config.subdivide, pre_subdivided=subdivided,
             )
+            step_times["Mapping"] = time.monotonic() - t_step
             progress.update(
                 task,
                 description=f"Mapped {len(mesh_data.vertices):,} verts, "
@@ -443,6 +458,7 @@ def _convert_carto_meshes(
                             TextColumn("[progress.description]{task.description}"),
                             BarColumn(bar_width=20),
                             MofNCompleteColumn(),
+                            TimeElapsedColumn(),
                             console=console,
                         )
                         _frame_progress.start()
@@ -457,6 +473,8 @@ def _convert_carto_meshes(
                 _frame_progress.update(_frame_task, completed=_n_frames)
                 _frame_progress.stop()
                 _frame_progress = None
+            if anim_cache is not None and anim_cache.step_times:
+                step_times.update(anim_cache.step_times)
 
         # === Emit each variant from cached state ===
         variant_outputs: list[tuple[bool, bool, Path]] = []
@@ -522,7 +540,9 @@ def _convert_carto_meshes(
 
                 if _variant_written:
                     from med2glb.glb.compress import optimize_textures_ktx2
-                    optimize_textures_ktx2(out_path)
+                    t_ktx = time.monotonic()
+                    if optimize_textures_ktx2(out_path):
+                        step_times["KTX2"] = step_times.get("KTX2", 0) + (time.monotonic() - t_ktx)
                     variant_outputs.append((do_animate, do_vectors, out_path))
                 else:
                     progress.update(
@@ -535,10 +555,12 @@ def _convert_carto_meshes(
             _print_carto_summary(
                 study, mesh, mesh_data, points, config.coloring,
                 config.subdivide, variant_outputs, start_time,
+                step_times=step_times,
             )
             _write_carto_log(
                 carto_output_dir, study, mesh, mesh_data, points,
                 config, variant_outputs, start_time,
+                step_times=step_times,
             )
 
 
