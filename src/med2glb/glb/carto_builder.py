@@ -568,9 +568,13 @@ def build_carto_animated_glb(
         ))
 
         # Node: first frame visible, rest hidden
+        # Tiny z-offset per frame prevents z-fighting on HoloLens when
+        # zero-scaled meshes aren't fully culled by the renderer.
         scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]
+        z_offset = fi * 0.0001  # 0.1mm per frame — invisible but separates geometry
         gltf.nodes.append(pygltflib.Node(
             name=f"wavefront_{fi}", mesh=mesh_idx, scale=scale,
+            translation=[0.0, 0.0, z_offset],
         ))
 
     # Collect all child node indices for the root node

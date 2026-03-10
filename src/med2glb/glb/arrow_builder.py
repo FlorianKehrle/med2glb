@@ -336,12 +336,16 @@ def build_animated_arrow_nodes(
         ))
 
         # Node: first frame visible, rest hidden
+        # Tiny z-offset per frame prevents z-fighting on HoloLens when
+        # zero-scaled meshes aren't fully culled by the renderer.
         scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]
+        z_offset = fi * 0.0001  # 0.1mm per frame
         node_idx = len(gltf.nodes)
         gltf.nodes.append(pygltflib.Node(
             name=f"lat_vectors_{fi}",
             mesh=mesh_idx,
             scale=scale,
+            translation=[0.0, 0.0, z_offset],
         ))
         node_indices.append(node_idx)
 
