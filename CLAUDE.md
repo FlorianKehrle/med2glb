@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2026-03-09
 
 ## Active Technologies
+- Python 3.10+ + Typer/Click (CLI framework), Rich (terminal UI), pydicom (DICOM metadata) (004-wizard-first-ux)
+- File-based (`med2glb_log.txt`) (004-wizard-first-ux)
 
 - **Language**: Python 3.10+
 - **CLI Framework**: typer + rich
@@ -57,6 +59,7 @@ pytest --cov=med2glb
 - ABC for method interface, decorator for registration
 
 ## Recent Changes
+- 004-wizard-first-ux: Added Python 3.10+ + Typer/Click (CLI framework), Rich (terminal UI), pydicom (DICOM metadata)
 
 - **carto-support**: CARTO 3 EP mapping support — .mesh/.car parser, texture-baked heatmaps (LAT/bipolar/unipolar) via xatlas UV unwrap, animated excitation ring via emissive overlay (full-quality mesh shared across static/animated/vector variants), animated LAT streamline vectors with vertex-gradient interpolation + momentum coasting, Loop subdivision with IDW interpolation, auto-detection
 - **1-dicom-glb-converter**: Initial feature — DICOM to GLB conversion with pluggable methods, morph target animation, cardiac segmentation

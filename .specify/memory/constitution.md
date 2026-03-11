@@ -1,50 +1,44 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# med2glb Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Pipeline-First, CLI-Driven
+All conversion features must be implemented as reusable Python modules under `src/med2glb/` and exposed through the Typer CLI. CLI behavior is a stable user contract: flags, defaults, and output semantics must remain backward compatible unless a documented breaking change is approved.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Deterministic Medical Data Handling
+Input parsing and mapping for DICOM and CARTO data must be deterministic and auditable. Transformations must avoid silent data loss, preserve important metadata where practical, and fail with actionable error messages when required input data is missing or malformed.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Test Coverage Is Non-Negotiable
+Every behavior change requires tests. Unit tests are required for algorithmic logic (mapping, meshing, animation, compression), and integration tests are required for end-to-end pipeline behavior. Bug fixes must include a regression test that fails before the fix and passes after it.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Output Quality and Performance Budgets
+Generated GLB output must prioritize correctness first, then size and runtime performance. Changes that significantly increase file size, processing time, or memory use must include justification and, when possible, benchmark evidence on representative data.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Simplicity, Typing, and Documentation
+Public APIs must use type hints and clear docstrings. Prefer simple, explicit implementations over clever abstractions. User-visible changes (CLI options, workflows, outputs) must be reflected in `README.md` in the same change set.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## Technical Standards
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+- Python 3.10+ is the baseline runtime.
+- Core stack: Typer/Rich for CLI, NumPy/SciPy/scikit-image for volume processing, trimesh/pyvista for mesh operations, pygltflib for GLB generation.
+- Optional AI segmentation dependencies must remain optional and must not break non-AI workflows.
+- New dependencies require clear rationale and must not duplicate existing capabilities.
+- Logging and error messages must help users diagnose data and pipeline failures quickly.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+## Development Workflow and Quality Gates
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+1. Define scope in specs before major features or architectural changes.
+2. Implement in small, reviewable increments with tests.
+3. Run relevant test suites (`pytest` and targeted integration tests) before merge.
+4. Update user documentation for any CLI or behavior change.
+5. Reject changes that weaken determinism, reduce test coverage, or introduce undocumented breaking behavior.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
+This constitution supersedes ad hoc local practices. In case of conflict, this file and accepted feature specs are authoritative.
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+- Amendments require a documented rationale and impact summary in the associated planning artifact.
+- Reviews must explicitly verify constitution compliance, especially testing, deterministic behavior, and README alignment.
+- Any temporary exception must include an owner, a reason, and a follow-up task to restore compliance.
+- `CLAUDE.md` provides operational implementation guidance and must stay aligned with this constitution.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-03-11 | **Last Amended**: 2026-03-11

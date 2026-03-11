@@ -129,6 +129,37 @@ def analyze_series(input_path: Path) -> list[SeriesInfo]:
     return result
 
 
+def _extract_spacing(ds: "pydicom.Dataset", n_slices: int) -> str | None:
+    """Extract pixel spacing + slice thickness as 'X × Y × Z mm', or None."""
+    ps = getattr(ds, "PixelSpacing", None)
+    st = getattr(ds, "SliceThickness", None) or getattr(ds, "SpacingBetweenSlices", None)
+    if ps is not None and len(ps) >= 2:
+        x, y = float(ps[0]), float(ps[1])
+        if st is not None and n_slices > 1:
+            return f"{x:.2g} × {y:.2g} × {float(st):.2g} mm"
+        return f"{x:.2g} × {y:.2g} mm"
+    return None
+
+
+def _estimate_dicom_time(method: str, voxel_count: int) -> str | None:
+    """Rough processing time estimate based on method and data size."""
+    from med2glb._utils import fmt_duration
+
+    if voxel_count <= 0:
+        return None
+    # Empirical: classical ~0.5s per million voxels, marching-cubes ~1s,
+    # AI methods ~10-30s base + scale. These are rough ±50% estimates.
+    rates = {
+        "classical": 0.5e-6,
+        "marching-cubes": 1.0e-6,
+        "totalseg": 30.0e-6,
+        "chamber-detect": 20.0e-6,
+    }
+    rate = rates.get(method, 1.0e-6)
+    secs = max(1.0, rate * voxel_count + 2.0)  # +2s base overhead
+    return f"~{fmt_duration(secs)}"
+
+
 def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
     """Classify a DICOM series by inspecting its datasets."""
     ds = datasets[0]
@@ -136,6 +167,8 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
     description = getattr(ds, "SeriesDescription", "")
     rows = int(getattr(ds, "Rows", 0))
     cols = int(getattr(ds, "Columns", 0))
+
+    spacing = _extract_spacing(ds, len(datasets))
 
     # Check for multi-frame files
     multiframe_ds = [
@@ -161,6 +194,7 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
             recommended_output = "textured plane"
 
         method = _recommend_method(modality, data_type)
+        est = _estimate_dicom_time(method, mf_rows * mf_cols * n_frames)
         return SeriesInfo(
             series_uid=uid,
             modality=modality,
@@ -173,6 +207,8 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
             recommended_output=recommended_output,
             is_multiframe=True,
             number_of_frames=n_frames,
+            spacing=spacing,
+            est_time=est,
         )
 
     # Check for temporal tags across separate files
@@ -192,6 +228,8 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
             detail = f"{len(temporal_positions)} frames, {slices_per_frame} slices each"
             dimensions = f"{rows}x{cols}x{slices_per_frame}"
             method = _recommend_method(modality, data_type)
+            voxels = rows * cols * slices_per_frame * len(temporal_positions)
+            est = _estimate_dicom_time(method, voxels)
             return SeriesInfo(
                 series_uid=uid,
                 modality=modality,
@@ -202,6 +240,8 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
                 dimensions=dimensions,
                 recommended_method=method,
                 recommended_output="animated 3D mesh",
+                spacing=spacing,
+                est_time=est,
             )
 
     # Single file, single slice
@@ -210,6 +250,7 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
         detail = "1 file"
         dimensions = f"{rows}x{cols}"
         method = _recommend_method(modality, data_type)
+        est = _estimate_dicom_time(method, rows * cols)
         return SeriesInfo(
             series_uid=uid,
             modality=modality,
@@ -220,6 +261,8 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
             dimensions=dimensions,
             recommended_method=method,
             recommended_output="textured plane",
+            spacing=spacing,
+            est_time=est,
         )
 
     # Multiple files → 3D volume
@@ -227,6 +270,8 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
     detail = f"{len(datasets)} slices"
     dimensions = f"{rows}x{cols}x{len(datasets)}"
     method = _recommend_method(modality, data_type)
+    voxels = rows * cols * len(datasets)
+    est = _estimate_dicom_time(method, voxels)
     return SeriesInfo(
         series_uid=uid,
         modality=modality,
@@ -237,6 +282,8 @@ def _classify_series(uid: str, datasets: list[pydicom.Dataset]) -> SeriesInfo:
         dimensions=dimensions,
         recommended_method=method,
         recommended_output="3D mesh",
+        spacing=spacing,
+        est_time=est,
     )
 
 

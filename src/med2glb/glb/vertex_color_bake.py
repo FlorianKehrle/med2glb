@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import io
 import logging
+import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 import xatlas
@@ -61,6 +63,51 @@ def xatlas_unwrap(
     )
 
     return vmapping, new_faces.astype(np.uint32), uvs.astype(np.float32)
+
+
+def xatlas_unwrap_with_timer(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    normals: np.ndarray | None = None,
+    *,
+    eta_seconds: float = 0.0,
+    on_tick: Callable[[float, float], None] | None = None,
+    tick_interval: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Run xatlas UV unwrap in a background thread with periodic tick callbacks.
+
+    Args:
+        vertices, faces, normals: Same as :func:`xatlas_unwrap`.
+        eta_seconds: Estimated total time (seconds) for progress display.
+        on_tick: Called every *tick_interval* seconds with ``(elapsed, eta_seconds)``.
+            Runs on the **main** thread so it's safe to update Rich widgets.
+        tick_interval: Seconds between tick callbacks (default 1.0).
+
+    Returns:
+        Same ``(vmapping, new_faces, uvs)`` tuple as :func:`xatlas_unwrap`.
+    """
+    result: list[tuple[np.ndarray, np.ndarray, np.ndarray] | None] = [None]
+    error: list[BaseException | None] = [None]
+
+    def _run() -> None:
+        try:
+            result[0] = xatlas_unwrap(vertices, faces, normals)
+        except BaseException as exc:
+            error[0] = exc
+
+    thread = threading.Thread(target=_run, daemon=True)
+    t0 = time.monotonic()
+    thread.start()
+
+    while thread.is_alive():
+        thread.join(timeout=tick_interval)
+        if on_tick is not None:
+            on_tick(time.monotonic() - t0, eta_seconds)
+
+    if error[0] is not None:
+        raise error[0]
+    assert result[0] is not None
+    return result[0]
 
 
 # ---------------------------------------------------------------------------

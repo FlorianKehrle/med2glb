@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pygltflib
 
+from med2glb._utils import fmt_duration
 from med2glb.core.types import MeshData
 from med2glb.glb.builder import _center_vertices, _pad_to_4, write_accessor
 from med2glb.glb.vertex_color_bake import compute_texture_size
@@ -35,16 +36,7 @@ _XATLAS_K = 6.50e-08
 _XATLAS_EXP = 1.79
 
 
-def _fmt_duration(seconds: float) -> str:
-    """Format seconds as human-readable duration."""
-    s = int(seconds)
-    if s < 60:
-        return f"{s}s"
-    m, s = divmod(s, 60)
-    if m < 60:
-        return f"{m}m {s}s"
-    h, m = divmod(m, 60)
-    return f"{h}h {m}m {s}s"
+_fmt_duration = fmt_duration  # backward-compat alias
 
 
 def _estimate_xatlas_time(n_faces: int) -> str:
@@ -143,7 +135,7 @@ def prepare_animated_cache(
 
     # UV unwrap ONCE with xatlas
     from med2glb.glb.vertex_color_bake import (
-        xatlas_unwrap,
+        xatlas_unwrap_with_timer,
         precompute_rasterization_map,
         apply_rasterization_map,
     )
@@ -156,11 +148,22 @@ def prepare_animated_cache(
 
     _step_times: dict[str, float] = {}
 
-    eta = _estimate_xatlas_time(n_faces)
-    _status(f"UV unwrapping {n_faces:,} faces with xatlas (estimated {eta})...")
+    eta_str = _estimate_xatlas_time(n_faces)
+    eta_secs = _XATLAS_K * (n_faces ** _XATLAS_EXP)
+
+    def _xatlas_tick(elapsed: float, eta: float) -> None:
+        pct = min(elapsed / eta * 100, 99) if eta > 0 else 0
+        _status(
+            f"UV unwrapping {n_faces:,} faces with xatlas — "
+            f"{_fmt_duration(elapsed)} / ~{eta_str} ({pct:.0f}%)"
+        )
+
+    _status(f"UV unwrapping {n_faces:,} faces with xatlas (estimated {eta_str})...")
     t0 = time.monotonic()
-    vmapping, new_faces, shared_uvs = xatlas_unwrap(
+    vmapping, new_faces, shared_uvs = xatlas_unwrap_with_timer(
         mesh_data.vertices, mesh_data.faces, mesh_data.normals,
+        eta_seconds=eta_secs,
+        on_tick=_xatlas_tick,
     )
     _step_times["xatlas"] = time.monotonic() - t0
     _status(f"UV unwrap done ({_fmt_duration(_step_times['xatlas'])}). Rasterizing {base_tex_size}x{base_tex_size} texture...")

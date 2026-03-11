@@ -21,7 +21,6 @@ app = typer.Typer(
     name="med2glb",
     help="Convert DICOM medical imaging data to GLB 3D models.",
     add_completion=False,
-    invoke_without_command=True,
 )
 
 logger = logging.getLogger("med2glb")
@@ -50,12 +49,12 @@ def list_methods_callback(value: bool):
         raise typer.Exit()
 
 
-@app.callback(invoke_without_command=True)
+@app.command()
 def main(
     ctx: typer.Context,
     input_path: Path = typer.Argument(
         None,
-        help="Path to a DICOM file or directory containing DICOM files.",
+        help="Path to a DICOM file/directory, or a GLB file (with --compress).",
         exists=True,
     ),
     output: Path = typer.Option(
@@ -68,47 +67,56 @@ def main(
         "classical",
         "-m",
         "--method",
+        hidden=True,
         help="Conversion method: marching-cubes, classical, totalseg, chamber-detect, compare.",
     ),
     format: str = typer.Option(
         "glb",
         "-f",
         "--format",
+        hidden=True,
         help="Output format.",
     ),
     animate: bool = typer.Option(
         False,
         "--animate",
+        hidden=True,
         help="Enable animation for temporal (4D) data.",
     ),
     threshold: float = typer.Option(
         None,
         "--threshold",
+        hidden=True,
         help="Intensity threshold for isosurface extraction.",
     ),
     smoothing: int = typer.Option(
         15,
         "--smoothing",
+        hidden=True,
         help="Taubin smoothing iterations (0 to disable).",
     ),
     faces: int = typer.Option(
         80000,
         "--faces",
+        hidden=True,
         help="Target triangle count after decimation.",
     ),
     alpha: float = typer.Option(
         1.0,
         "--alpha",
+        hidden=True,
         help="Global transparency (0.0-1.0) for non-segmented output.",
     ),
     multi_threshold: str = typer.Option(
         None,
         "--multi-threshold",
+        hidden=True,
         help='Multi-threshold config: "val1:label1:alpha1,val2:label2:alpha2".',
     ),
     series: str = typer.Option(
         None,
         "--series",
+        hidden=True,
         help="Select specific DICOM series by UID (partial match supported).",
     ),
     do_list_methods: bool = typer.Option(
@@ -121,12 +129,14 @@ def main(
     coloring: str = typer.Option(
         "all",
         "--coloring",
+        hidden=True,
         help="CARTO coloring scheme filter: lat, bipolar, unipolar, or all (default). "
              "When 'all', every available coloring is produced.",
     ),
     subdivide: int = typer.Option(
         2,
         "--subdivide",
+        hidden=True,
         help="CARTO mesh subdivision level (0-3). Higher = smoother color maps, more vertices.",
         min=0,
         max=3,
@@ -134,21 +144,25 @@ def main(
     vectors: bool = typer.Option(
         False,
         "--vectors",
+        hidden=True,
         help="Add animated LAT streamline arrows (CARTO LAT maps only).",
     ),
     gallery: bool = typer.Option(
         False,
         "--gallery",
+        hidden=True,
         help="Gallery mode: individual GLBs, lightbox grid, and spatial fan.",
     ),
     columns: int = typer.Option(
         6,
         "--columns",
+        hidden=True,
         help="Number of columns in the lightbox grid (gallery mode).",
     ),
     no_animate: bool = typer.Option(
         False,
         "--no-animate",
+        hidden=True,
         help="Force static output even if temporal data is detected.",
     ),
     do_list_series: bool = typer.Option(
@@ -160,6 +174,21 @@ def main(
         False,
         "--batch",
         help="Batch mode: find all CARTO exports in subdirectories and convert with shared settings.",
+    ),
+    do_compress: bool = typer.Option(
+        False,
+        "--compress",
+        help="Compress a GLB file to fit a target size (use with --max-size, --strategy).",
+    ),
+    max_size: int = typer.Option(
+        25,
+        "--max-size",
+        help="Target size in MB for --compress.",
+    ),
+    strategy: str = typer.Option(
+        "ktx2",
+        "--strategy",
+        help="Compression strategy for --compress: ktx2, draco, downscale, jpeg.",
     ),
     verbose: bool = typer.Option(
         False,
@@ -176,14 +205,71 @@ def main(
     ),
 ):
     """Convert DICOM medical imaging data to GLB 3D models."""
-    # If a subcommand is being invoked, skip the main logic
-    if ctx.invoked_subcommand is not None:
-        return
-
-    # input_path is required when running the main command (not subcommands)
+    # input_path is required
     if input_path is None:
         err_console.print("[red]Error: Missing argument 'INPUT_PATH'.[/red]")
         raise typer.Exit(code=2)
+
+    # --compress mode: compress an existing GLB file
+    if do_compress:
+        if input_path.suffix.lower() != ".glb":
+            err_console.print(f"[red]Error: {input_path} is not a GLB file.[/red]")
+            raise typer.Exit(code=1)
+
+        from med2glb.glb.compress import constrain_glb_size, _has_toktx
+
+        if strategy == "ktx2" and not _has_toktx():
+            console.print(
+                "[yellow]toktx not found — falling back to downscale strategy.[/yellow]\n"
+                "💡 Install KTX-Software for best compression: "
+                "https://github.com/KhronosGroup/KTX-Software/releases"
+            )
+
+        # Determine the effective strategy name for the output filename
+        effective_strategy = strategy
+        if strategy == "ktx2" and not _has_toktx():
+            effective_strategy = "downscale"
+
+        # Default output: model_compressed_ktx2.glb (never overwrite original)
+        if output is not None:
+            target_path = output
+        else:
+            target_path = input_path.with_name(
+                f"{input_path.stem}_compressed_{effective_strategy}{input_path.suffix}"
+            )
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(input_path, target_path)
+
+        original_size = target_path.stat().st_size
+        max_bytes = max_size * 1024 * 1024
+
+        if original_size <= max_bytes:
+            console.print(
+                f"[green]Already within limit:[/green] "
+                f"{original_size / 1024:.0f} KB <= {max_size} MB"
+            )
+            raise typer.Exit()
+
+        console.print(
+            f"Compressing {target_path.name} "
+            f"({original_size / 1024:.0f} KB → {max_size} MB target, "
+            f"strategy: {strategy})..."
+        )
+
+        applied = constrain_glb_size(target_path, max_bytes, strategy=strategy)
+
+        new_size = target_path.stat().st_size
+        if applied and new_size < original_size:
+            console.print(
+                f"[green]Compressed:[/green] "
+                f"{original_size / 1024:.0f} KB → {new_size / 1024:.0f} KB"
+            )
+        else:
+            console.print(
+                f"[yellow]No further compression possible:[/yellow] "
+                f"{new_size / 1024:.0f} KB"
+            )
+        raise typer.Exit()
 
     from med2glb._pipeline_carto import run_carto_from_config, run_carto_pipeline
     from med2glb._pipeline_dicom import run_dicom_from_config, run_pipeline, print_series_table
@@ -381,6 +467,7 @@ def main(
             raise typer.Exit()
 
     # Derive output path from input name when not fully specified
+    _print_hidden_flag_hint(ctx)
     stem = input_path.stem if input_path.is_file() else input_path.name
     parent = input_path.parent if input_path.is_file() else input_path.parent
     # Default output dir: "glb" subfolder keeps generated files together
@@ -527,74 +614,6 @@ def main(
         raise typer.Exit(code=1)
 
 
-@app.command()
-def compress(
-    glb_path: Path = typer.Argument(
-        ...,
-        exists=True,
-        help="GLB file to compress.",
-    ),
-    max_size: int = typer.Option(
-        25,
-        "--max-size",
-        "-s",
-        help="Target size in MB.",
-    ),
-    strategy: str = typer.Option(
-        "ktx2",
-        "--strategy",
-        help="Compression strategy: ktx2, draco, downscale, jpeg.",
-    ),
-    output: Path = typer.Option(
-        None,
-        "-o",
-        "--output",
-        help="Output path (default: compress in-place).",
-    ),
-):
-    """Compress a GLB file to fit a target size."""
-    if glb_path.suffix.lower() != ".glb":
-        err_console.print(f"[red]Error: {glb_path} is not a GLB file.[/red]")
-        raise typer.Exit(code=1)
-
-    from med2glb.glb.compress import constrain_glb_size
-
-    target_path = output if output is not None else glb_path
-    if output is not None:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(glb_path, target_path)
-
-    original_size = target_path.stat().st_size
-    max_bytes = max_size * 1024 * 1024
-
-    if original_size <= max_bytes:
-        console.print(
-            f"[green]Already within limit:[/green] "
-            f"{original_size / 1024:.0f} KB <= {max_size} MB"
-        )
-        raise typer.Exit()
-
-    console.print(
-        f"Compressing {target_path.name} "
-        f"({original_size / 1024:.0f} KB → {max_size} MB target, "
-        f"strategy: {strategy})..."
-    )
-
-    applied = constrain_glb_size(target_path, max_bytes, strategy=strategy)
-
-    new_size = target_path.stat().st_size
-    if applied and new_size < original_size:
-        console.print(
-            f"[green]Compressed:[/green] "
-            f"{original_size / 1024:.0f} KB → {new_size / 1024:.0f} KB"
-        )
-    else:
-        console.print(
-            f"[yellow]No further compression possible:[/yellow] "
-            f"{new_size / 1024:.0f} KB"
-        )
-
-
 def _was_option_provided(ctx: typer.Context, param_name: str) -> bool:
     """Check if a CLI option was explicitly provided by the user."""
     # typer/click stores the source of each parameter value
@@ -612,10 +631,28 @@ def _has_pipeline_flags(ctx: typer.Context) -> bool:
     the wizard runs instead.
     """
     pipeline_params = [
-        "method", "coloring", "animate", "threshold", "gallery",
-        "no_animate", "vectors", "multi_threshold", "batch",
+        "method", "format", "animate", "threshold", "smoothing", "faces",
+        "alpha", "multi_threshold", "series", "coloring", "subdivide",
+        "vectors", "gallery", "columns", "no_animate", "batch",
     ]
     return any(_was_option_provided(ctx, p) for p in pipeline_params)
+
+
+def _print_hidden_flag_hint(ctx: typer.Context) -> None:
+    """Print a hint suggesting the wizard when hidden flags are used on a TTY."""
+    from med2glb.cli_wizard import is_interactive as _is_interactive
+
+    if not _is_interactive():
+        return
+    hidden_params = [
+        "method", "format", "animate", "threshold", "smoothing", "faces",
+        "alpha", "multi_threshold", "series", "coloring", "subdivide",
+        "vectors", "gallery", "columns", "no_animate",
+    ]
+    provided = [p for p in hidden_params if _was_option_provided(ctx, p)]
+    if provided:
+        flags = ", ".join(f"--{p.replace('_', '-')}" for p in provided)
+        console.print(f"[dim]💡 Tip: run without flags ({flags}) to use the interactive wizard[/dim]")
 
 
 def _data_type_label(modality: str, data_type: str) -> str:

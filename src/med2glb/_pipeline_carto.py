@@ -13,6 +13,7 @@ import numpy as np
 import typer
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import Prompt
+from rich.status import Status
 from rich.table import Table
 
 from med2glb._console import console, err_console
@@ -136,17 +137,7 @@ def _extract_active_lat(
     return lat_values[idx]
 
 
-def _format_duration(seconds: float) -> str:
-    """Format seconds as human-readable duration (e.g. '2.3s', '1m 23s', '1h 5m')."""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    minutes = int(seconds // 60)
-    secs = int(seconds % 60)
-    if minutes < 60:
-        return f"{minutes}m {secs}s"
-    hours = minutes // 60
-    mins = minutes % 60
-    return f"{hours}h {mins}m"
+from med2glb._utils import fmt_duration as _format_duration
 
 
 def _print_carto_summary(
@@ -232,6 +223,7 @@ def _write_carto_log(
     source_path: Path,
     step_times: dict[str, float] | None = None,
     data_coverage_pct: float | None = None,
+    equivalent_command: str | None = None,
 ) -> None:
     """Append conversion metadata to the log file in the output directory."""
     from med2glb.io.conversion_log import append_carto_entry
@@ -264,6 +256,7 @@ def _write_carto_log(
         source_path=str(source_path),
         step_times=step_times,
         data_coverage_pct=data_coverage_pct,
+        equivalent_command=equivalent_command,
     )
 
 
@@ -279,6 +272,7 @@ def _load_carto_study(input_path: Path) -> "CartoStudy":
         TextColumn("[progress.description]{task.description}"),
         BarColumn(bar_width=20),
         MofNCompleteColumn(),
+        TimeElapsedColumn(),
         console=console,
     ) as progress:
         task = progress.add_task("Loading CARTO data...", total=_n_mesh_files)
@@ -437,16 +431,25 @@ def _convert_carto_meshes(
 
             _frame_progress: Progress | None = None
             _frame_task = None
+            _status_obj: Status | None = None
 
             def _cache_progress(desc: str, current: int, total: int) -> None:
-                nonlocal _frame_progress, _frame_task
+                nonlocal _frame_progress, _frame_task, _status_obj
                 if total == 0:
+                    # Blocking step — use a live spinner that updates in-place
                     if _frame_progress is not None:
                         _frame_progress.stop()
                         _frame_progress = None
                         _frame_task = None
-                    console.print(f"  {desc}")
+                    if _status_obj is None:
+                        _status_obj = Status(desc, spinner="dots", console=console)
+                        _status_obj.start()
+                    _status_obj.update(desc)
                 else:
+                    # Frame-based step — switch to progress bar
+                    if _status_obj is not None:
+                        _status_obj.stop()
+                        _status_obj = None
                     if _frame_progress is None:
                         _frame_progress = Progress(
                             SpinnerColumn(),
@@ -464,6 +467,9 @@ def _convert_carto_meshes(
                 lat_mesh_data, active_lat, n_frames=_n_frames,
                 progress=_cache_progress,
             )
+            if _status_obj is not None:
+                _status_obj.stop()
+                _status_obj = None
             if _frame_progress is not None:
                 _frame_progress.update(_frame_task, completed=_n_frames)
                 _frame_progress.stop()
@@ -673,12 +679,15 @@ def _convert_carto_meshes(
                 config.subdivide, all_outputs, start_time,
                 step_times=step_times,
             )
+            from med2glb.cli_wizard import build_carto_equiv_command
+            equiv_cmd = build_carto_equiv_command(config)
             _write_carto_log(
                 carto_output_dir, study, mesh, lat_mesh_data, points,
                 produced_colorings, config.subdivide, all_outputs, start_time,
                 source_path=config.input_path,
                 step_times=step_times,
                 data_coverage_pct=last_data_coverage,
+                equivalent_command=equiv_cmd,
             )
 
 
@@ -696,6 +705,12 @@ def run_carto_from_config(config: "CartoConfig") -> None:
         raise typer.Exit(code=1)
 
     _convert_carto_meshes(config, study, start_time)
+
+    # Print equivalent command for reproducibility
+    from med2glb.cli_wizard import build_carto_equiv_command
+    equiv_cmd = build_carto_equiv_command(config)
+    console.print(f"\n[dim]💡 Equivalent command:[/dim]")
+    console.print(f"[dim]   {equiv_cmd}[/dim]")
 
 
 def run_carto_pipeline(
