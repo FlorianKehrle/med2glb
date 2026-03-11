@@ -18,11 +18,15 @@ logger = logging.getLogger(__name__)
 def constrain_glb_size(
     path: Path,
     max_bytes: int,
-    strategy: str = "draco",
+    strategy: str = "auto",
 ) -> bool:
     """Compress a GLB file to fit under max_bytes.
 
     Strategies (tried in order within each):
+      - auto: Automatically picks the best strategy based on GLB content.
+              Animated GLBs → gltfpack + KTX2; static → Draco + KTX2.
+      - gltfpack: Meshopt quantization + compression (requires gltfpack CLI).
+                  Best for animated GLBs with morph targets.
       - draco: Draco mesh compression, then texture downscaling if needed.
       - downscale: Progressively reduce texture resolution (lossless PNG).
       - jpeg: Re-encode textures as JPEG with decreasing quality.
@@ -34,7 +38,11 @@ def constrain_glb_size(
     if not path.exists() or path.stat().st_size <= max_bytes:
         return False
 
-    if strategy == "draco":
+    if strategy == "auto":
+        return _strategy_auto(path, max_bytes)
+    elif strategy == "gltfpack":
+        return _strategy_gltfpack(path, max_bytes)
+    elif strategy == "draco":
         return _strategy_draco(path, max_bytes)
     elif strategy == "downscale":
         return _strategy_downscale(path, max_bytes)
@@ -44,6 +52,172 @@ def constrain_glb_size(
         return _strategy_ktx2(path, max_bytes)
     else:
         raise ValueError(f"Unknown compression strategy: {strategy}")
+
+
+# ---------------------------------------------------------------------------
+# Strategy: Auto (picks best strategy based on GLB content)
+# ---------------------------------------------------------------------------
+
+def _glb_has_animations(path: Path) -> bool:
+    """Check if a GLB contains animations (morph targets, skeletal, etc.)."""
+    try:
+        gltf = pygltflib.GLTF2.load(str(path))
+        return bool(gltf.animations)
+    except Exception:
+        return False
+
+
+def _strategy_auto(path: Path, max_bytes: int) -> bool:
+    """Auto-select best compression strategy based on GLB content.
+
+    Animated GLBs (morph targets) → gltfpack + KTX2.
+    Static GLBs → Draco + KTX2.
+    Falls back gracefully when tools are unavailable.
+    """
+    has_anim = _glb_has_animations(path)
+
+    if has_anim:
+        # Animated: gltfpack handles morph targets, then KTX2 for textures
+        if _has_gltfpack():
+            logger.info("Auto strategy: animated GLB detected → gltfpack + KTX2")
+            return _strategy_gltfpack_ktx2(path, max_bytes)
+        elif _has_toktx():
+            logger.info("Auto strategy: animated GLB, gltfpack unavailable → KTX2 only")
+            return _strategy_ktx2(path, max_bytes)
+        else:
+            logger.info("Auto strategy: animated GLB, no tools → downscale")
+            return _strategy_downscale(path, max_bytes)
+    else:
+        # Static: Draco for mesh, then KTX2 for textures
+        applied = False
+        if _has_draco():
+            applied = _strategy_draco(path, max_bytes)
+            if path.stat().st_size <= max_bytes:
+                return applied
+        if _has_toktx():
+            if _strategy_ktx2(path, max_bytes):
+                applied = True
+        elif _strategy_downscale(path, max_bytes):
+            applied = True
+        return applied
+
+
+# ---------------------------------------------------------------------------
+# Strategy: gltfpack (meshopt quantization + compression)
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=1)
+def _has_gltfpack() -> bool:
+    """Check if the ``gltfpack`` CLI tool is on PATH."""
+    return shutil.which("gltfpack") is not None
+
+
+def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
+    """Run gltfpack on a GLB for meshopt compression with quantization.
+
+    Handles animated GLBs correctly (morph targets, keyframe animations).
+    Writes to *output* if given, otherwise compresses in-place.
+    """
+    if not _has_gltfpack():
+        return False
+
+    target = output or path
+    use_temp = output is None
+    if use_temp:
+        target = path.with_suffix(".gltfpack.glb")
+
+    try:
+        subprocess.run(
+            [
+                "gltfpack",
+                "-i", str(path),
+                "-o", str(target),
+                "-cc",              # meshopt buffer compression
+                "-vp", "14",        # position quantization bits
+                "-vt", "12",        # texcoord quantization bits
+                "-vn", "8",         # normal quantization bits
+            ],
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("gltfpack timed out after 300s")
+        if use_temp and target.exists():
+            target.unlink()
+        return False
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"gltfpack failed: {e.stderr.decode(errors='replace')}")
+        if use_temp and target.exists():
+            target.unlink()
+        return False
+
+    if not target.exists():
+        return False
+
+    if use_temp:
+        original_size = path.stat().st_size
+        new_size = target.stat().st_size
+        if new_size < original_size:
+            shutil.move(str(target), str(path))
+            logger.info(
+                f"gltfpack compression: {_fmt(original_size)} → {_fmt(new_size)} "
+                f"({100 - new_size * 100 // original_size}% reduction)"
+            )
+            return True
+        else:
+            target.unlink()
+            logger.debug("gltfpack did not reduce file size")
+            return False
+
+    return True
+
+
+def _strategy_gltfpack(path: Path, max_bytes: int) -> bool:
+    """Meshopt compression via gltfpack, with KTX2 fallback for textures."""
+    if not _has_gltfpack():
+        logger.warning(
+            "gltfpack not found on PATH — falling back to downscale strategy. "
+            "Install meshoptimizer for best compression: "
+            "https://github.com/zeux/meshoptimizer/releases"
+        )
+        return _strategy_downscale(path, max_bytes)
+
+    original_size = path.stat().st_size
+    applied = _apply_gltfpack(path)
+
+    if applied and path.stat().st_size <= max_bytes:
+        return True
+
+    # Gltfpack alone wasn't enough — try KTX2 for remaining texture savings
+    if _has_toktx():
+        if _strategy_ktx2(path, max_bytes):
+            applied = True
+    elif _strategy_downscale(path, max_bytes):
+        applied = True
+
+    return applied
+
+
+def _strategy_gltfpack_ktx2(path: Path, max_bytes: int) -> bool:
+    """Combined gltfpack (geometry) + KTX2 (textures) for maximum compression."""
+    applied = False
+    original_size = path.stat().st_size
+
+    # Step 1: gltfpack for mesh/morph target compression
+    if _has_gltfpack() and _apply_gltfpack(path):
+        applied = True
+        if path.stat().st_size <= max_bytes:
+            return True
+
+    # Step 2: KTX2 for texture compression
+    if _has_toktx():
+        if _strategy_ktx2(path, max_bytes):
+            applied = True
+    elif _strategy_downscale(path, max_bytes):
+        applied = True
+
+    return applied
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +582,7 @@ def optimize_textures_ktx2(path: Path) -> bool:
         logger.debug("toktx not available — skipping KTX2 texture optimization")
         return False
 
-    gltf, blob, image_bv_set = _load_and_identify_images(path)
+    gltf, blob, image_bv_set = _load_and_identify_images(path, skip_small=False)
     if not image_bv_set:
         return False
 
@@ -429,13 +603,38 @@ def optimize_textures_ktx2(path: Path) -> bool:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+# Threshold for skipping small images (legend/info cards) during compression.
+# These are too small to benefit and text quality degrades significantly.
+_SMALL_IMAGE_THRESHOLD = 50 * 1024  # 50 KB
+
+
 def _load_and_identify_images(
     path: Path,
+    *,
+    skip_small: bool = True,
 ) -> tuple[pygltflib.GLTF2, bytes, set[int]]:
-    """Load a GLB and identify which bufferViews hold image data."""
+    """Load a GLB and identify which bufferViews hold image data.
+
+    When *skip_small* is True (default), images smaller than
+    ``_SMALL_IMAGE_THRESHOLD`` are excluded — these are typically
+    legend or info card textures where compression degrades text
+    readability with negligible size savings.
+    """
     gltf = pygltflib.GLTF2.load(str(path))
     blob = gltf.binary_blob() or b""
-    image_bv_set = {img.bufferView for img in gltf.images if img.bufferView is not None}
+    image_bv_set: set[int] = set()
+    for img in gltf.images:
+        if img.bufferView is None:
+            continue
+        if skip_small:
+            bv = gltf.bufferViews[img.bufferView]
+            if bv.byteLength < _SMALL_IMAGE_THRESHOLD:
+                logger.debug(
+                    f"Skipping small image (bufferView {img.bufferView}, "
+                    f"{bv.byteLength} bytes) — likely legend/info card"
+                )
+                continue
+        image_bv_set.add(img.bufferView)
     return gltf, blob, image_bv_set
 
 

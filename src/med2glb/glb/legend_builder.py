@@ -67,8 +67,8 @@ def _interpolate_color(
 def render_legend_wrap_image(
     coloring: str,
     clamp_range: tuple[float, float],
-    width: int = 512,
-    height: int = 256,
+    width: int = 1024,
+    height: int = 512,
 ) -> bytes:
     """Render a cylinder wrap-around color scale legend as a PNG image.
 
@@ -94,10 +94,10 @@ def render_legend_wrap_image(
 
     # Opaque label strips at U=0.25 and U=0.75 (front & back of cylinder)
     draw = ImageDraw.Draw(img)
-    font = ImageFont.load_default(size=22)
-    font_sm = ImageFont.load_default(size=20)
+    font = ImageFont.load_default(size=44)
+    font_sm = ImageFont.load_default(size=40)
 
-    strip_width = 120
+    strip_width = 240
     strip_centers = [width // 4, 3 * width // 4]  # U=0.25 and U=0.75
 
     for cx in strip_centers:
@@ -106,14 +106,14 @@ def render_legend_wrap_image(
         draw.rectangle([(x0, 0), (x1, height - 1)], fill=(20, 20, 20, 255))
 
         # Title at top (bold via stroke outline)
-        draw.text((cx, 10), title, fill=(255, 255, 255, 255),
+        draw.text((cx, 20), title, fill=(255, 255, 255, 255),
                   font=font, anchor="mt",
-                  stroke_width=2, stroke_fill=(20, 20, 20, 255))
+                  stroke_width=3, stroke_fill=(20, 20, 20, 255))
 
         # 5 tick labels along gradient height
         n_ticks = 5
-        margin_top = 38
-        margin_bottom = 10
+        margin_top = 76
+        margin_bottom = 20
         for i in range(n_ticks):
             frac = i / (n_ticks - 1)
             y = (height - margin_bottom) - frac * (height - margin_top - margin_bottom)
@@ -129,7 +129,7 @@ def render_legend_wrap_image(
             # Bold via stroke outline for AR readability
             draw.text((cx, int(y)), label,
                       fill=(255, 255, 255, 255), font=font_sm, anchor="mm",
-                      stroke_width=2, stroke_fill=(20, 20, 20, 255))
+                      stroke_width=3, stroke_fill=(20, 20, 20, 255))
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -138,8 +138,8 @@ def render_legend_wrap_image(
 
 def render_info_image(
     metadata: dict,
-    width: int = 320,
-    height: int = 224,
+    width: int = 640,
+    height: int = 448,
 ) -> bytes:
     """Render an opaque metadata info card as a PNG image.
 
@@ -147,11 +147,11 @@ def render_info_image(
     """
     img = Image.new("RGBA", (width, height), (30, 30, 30, 255))
     draw = ImageDraw.Draw(img)
-    font = ImageFont.load_default(size=13)
-    font_title = ImageFont.load_default(size=15)
+    font = ImageFont.load_default(size=26)
+    font_title = ImageFont.load_default(size=30)
 
     # Title
-    draw.text((width // 2, 14), "Study Info", fill=(255, 255, 255, 255),
+    draw.text((width // 2, 28), "Study Info", fill=(255, 255, 255, 255),
               font=font_title, anchor="mt")
 
     # Build lines from metadata
@@ -203,17 +203,17 @@ def render_info_image(
             lines.append((label, str(val)))
 
     # Render lines
-    y = 38
-    line_height = 22
+    y = 76
+    line_height = 44
     for label, value in lines:
-        if y + line_height > height - 8:
+        if y + line_height > height - 16:
             break
         if label:
-            draw.text((12, y), f"{label}:", fill=(180, 180, 180, 255), font=font)
-            draw.text((92, y), value, fill=(240, 240, 240, 255), font=font)
+            draw.text((24, y), f"{label}:", fill=(180, 180, 180, 255), font=font)
+            draw.text((184, y), value, fill=(240, 240, 240, 255), font=font)
         else:
             # Continuation line (e.g. "(file format v5)")
-            draw.text((92, y), value, fill=(240, 240, 240, 255), font=font)
+            draw.text((184, y), value, fill=(240, 240, 240, 255), font=font)
         y += line_height
 
     buf = io.BytesIO()

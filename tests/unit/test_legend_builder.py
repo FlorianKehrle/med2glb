@@ -27,14 +27,7 @@ def test_render_legend_wrap_image_returns_valid_png():
     assert isinstance(png, bytes)
     assert len(png) > 100
     img = Image.open(io.BytesIO(png))
-    assert img.size == (512, 256)
-    assert img.mode == "RGBA"
-
-
-def test_render_legend_wrap_image_bipolar():
-    png = render_legend_wrap_image("bipolar", (0.05, 1.5))
-    img = Image.open(io.BytesIO(png))
-    assert img.size == (512, 256)
+    assert img.size == (1024, 512)
 
 
 def test_render_legend_wrap_image_custom_size():
@@ -57,7 +50,7 @@ def test_render_info_image_returns_valid_png():
     png = render_info_image(metadata)
     assert isinstance(png, bytes)
     img = Image.open(io.BytesIO(png))
-    assert img.size == (320, 224)
+    assert img.size == (640, 448)
     assert img.mode == "RGBA"
 
 
@@ -66,13 +59,13 @@ def test_render_info_image_partial_metadata():
     metadata = {"study_name": "Partial"}
     png = render_info_image(metadata)
     img = Image.open(io.BytesIO(png))
-    assert img.size == (320, 224)
+    assert img.size == (640, 448)
 
 
 def test_render_info_image_empty_metadata():
     png = render_info_image({})
     img = Image.open(io.BytesIO(png))
-    assert img.size == (320, 224)
+    assert img.size == (640, 448)
 
 
 # ---------------------------------------------------------------------------

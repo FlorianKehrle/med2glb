@@ -40,14 +40,24 @@ cd med2glb
 pip install -e ".[dev]"
 ```
 
-### Optional: KTX2 texture compression
+### Optional: Compression tools
 
-For best GLB compression, install the [Khronos KTX-Software](https://github.com/KhronosGroup/KTX-Software/releases) (`toktx`). Without it, `--compress` falls back to texture downscaling.
+For best GLB compression (especially animated models for HoloLens/AR), install these external tools:
 
-1. Download the installer from [KTX-Software releases](https://github.com/KhronosGroup/KTX-Software/releases) (`KTX-Software-x.x.x-Windows-x64.exe`)
+**KTX2 texture compression** — [Khronos KTX-Software](https://github.com/KhronosGroup/KTX-Software/releases) (`toktx`)
+
+1. Download from [KTX-Software releases](https://github.com/KhronosGroup/KTX-Software/releases) (`KTX-Software-x.x.x-Windows-x64.exe`)
 2. Run the installer — installs to `C:\Program Files\KTX-Software\bin`
 3. Add to PATH if not done automatically: **System Environment Variables → Path → New →** `C:\Program Files\KTX-Software\bin`
-4. Open a new terminal and verify: `toktx --version`
+4. Verify: `toktx --version`
+
+**Meshopt compression** — [meshoptimizer / gltfpack](https://github.com/zeux/meshoptimizer/releases) (`gltfpack`)
+
+1. Download from [meshoptimizer releases](https://github.com/zeux/meshoptimizer/releases) (`gltfpack-x.xx-windows.exe`)
+2. Rename to `gltfpack.exe` and place in a directory on your PATH
+3. Verify: `gltfpack`
+
+> Both tools are optional. Without them, `--compress` falls back to texture downscaling.
 
 ---
 
@@ -188,11 +198,11 @@ The wizard automatically assesses vector quality (minimum 30 points, ≥20 ms LA
 5. **Rasterize** — vertex colors baked into texture with 10-iteration gutter bleeding
 6. **Encode** — lossless PNG textures
 7. **Build GLB** — geometry, textures, PBR materials, animation keyframes
-8. **KTX2 compress** (optional) — GPU-compressed textures via `toktx` for smaller files
+8. **Compress** (optional) — auto-selects best strategy: meshopt geometry compression + KTX2 textures for animated models, Draco + KTX2 for static
 
 Texture resolution scales with face count: 512px (≤5k), 1024px (≤20k), 2048px (≤80k), 4096px (>80k). For animated output, the full mesh is shared across all 30 frames — only the emissive texture changes per frame.
 
-> **Tip:** Install the [Khronos `toktx` tool](https://github.com/KhronosGroup/KTX-Software/releases) for automatic KTX2 GPU texture compression. Without it, textures remain as lossless PNG (larger files, same visual quality).
+> **Tip:** Install [`gltfpack`](https://github.com/zeux/meshoptimizer/releases) and [`toktx`](https://github.com/KhronosGroup/KTX-Software/releases) for optimal compression. Animated GLBs (morph targets) benefit most from gltfpack's meshopt compression — KTX2 alone only compresses textures (~15% of total size).
 
 #### Batch Processing
 
@@ -361,21 +371,28 @@ med2glb ./data/ --method compare  # Compare all methods
 
 ## GLB Compression
 
-Shrink GLB files to a target size with four strategies:
+Shrink GLB files to a target size with automatic strategy selection:
 
 ```bash
-med2glb model.glb --compress                    # → model_compressed_ktx2.glb
-med2glb model.glb --compress --max-size 10      # Custom target
-med2glb model.glb --compress -o small.glb       # Explicit output path
-med2glb model.glb --compress --strategy draco   # → model_compressed_draco.glb
+med2glb model.glb --compress                          # Auto-selects best strategy
+med2glb model.glb --compress --max-size 10            # Custom target (MB)
+med2glb model.glb --compress -o small.glb             # Explicit output path
+med2glb model.glb --compress --strategy gltfpack      # Force meshopt compression
+med2glb model.glb --compress --strategy ktx2          # Force KTX2 textures only
 ```
 
-| Strategy | Method | Quality | Speed |
+| Strategy | Method | Best For | Requires |
 |---|---|---|---|
-| `ktx2` (default) | KTX2 GPU textures via Basis Universal (requires `toktx`) | Best | Moderate |
-| `draco` | Draco mesh compression + texture downscale fallback | Good | Moderate |
-| `downscale` | Progressive texture resolution reduction (lossless PNG) | High | Fast |
-| `jpeg` | JPEG re-encoding with decreasing quality | Lower | Fast |
+| `auto` (default) | Picks best strategy based on content | Everything | — |
+| `gltfpack` | Meshopt geometry + buffer compression | Animated GLBs (morph targets) | `gltfpack` |
+| `ktx2` | KTX2 GPU textures via Basis Universal | Texture-heavy static models | `toktx` |
+| `draco` | Draco mesh compression (static only) | Static models | — |
+| `downscale` | Progressive texture resolution reduction | No tools available | — |
+| `jpeg` | JPEG re-encoding with decreasing quality | Quick size reduction | — |
+
+**Auto strategy** selects: animated GLB → gltfpack + KTX2, static GLB → Draco + KTX2, graceful fallback if tools aren't installed.
+
+> **HoloLens/AR note:** Animated CARTO GLBs are typically 50+ MB with 80%+ morph target data. KTX2 alone achieves only ~15% reduction. Install `gltfpack` for meshopt compression to reach 70-85% reduction.
 
 ---
 
@@ -392,7 +409,7 @@ Options:
   --batch                 Batch mode: convert all CARTO exports in subdirectories
   --compress              Compress a GLB file to fit a target size
   --max-size INTEGER      Target size in MB for --compress (default: 25)
-  --strategy TEXT         Compression strategy: ktx2, draco, downscale, jpeg (default: ktx2)
+  --strategy TEXT         Compression strategy: auto, gltfpack, ktx2, draco, downscale, jpeg (default: auto)
   --list-methods          List available methods and exit
   --list-series           List DICOM series and exit
   -v, --verbose           Show detailed processing information
