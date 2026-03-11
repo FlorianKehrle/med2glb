@@ -113,9 +113,10 @@ def _has_gltfpack() -> bool:
 
 
 def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
-    """Run gltfpack on a GLB for meshopt compression with quantization.
+    """Run gltfpack on a GLB for vertex quantization.
 
-    Handles animated GLBs correctly (morph targets, keyframe animations).
+    Uses KHR_mesh_quantization (widely supported) without EXT_meshopt_compression
+    to maximize compatibility with HoloLens, Windows 3D Viewer, and other runtimes.
     Writes to *output* if given, otherwise compresses in-place.
     """
     if not _has_gltfpack():
@@ -132,7 +133,6 @@ def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
                 "gltfpack",
                 "-i", str(path),
                 "-o", str(target),
-                "-cc",              # meshopt buffer compression
                 "-vp", "14",        # position quantization bits
                 "-vt", "12",        # texcoord quantization bits
                 "-vn", "8",         # normal quantization bits
