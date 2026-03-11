@@ -40,6 +40,15 @@ cd med2glb
 pip install -e ".[dev]"
 ```
 
+### Optional: KTX2 texture compression
+
+For best GLB compression, install the [Khronos KTX-Software](https://github.com/KhronosGroup/KTX-Software/releases) (`toktx`). Without it, `--compress` falls back to texture downscaling.
+
+1. Download the installer from [KTX-Software releases](https://github.com/KhronosGroup/KTX-Software/releases) (`KTX-Software-x.x.x-Windows-x64.exe`)
+2. Run the installer — installs to `C:\Program Files\KTX-Software\bin`
+3. Add to PATH if not done automatically: **System Environment Variables → Path → New →** `C:\Program Files\KTX-Software\bin`
+4. Open a new terminal and verify: `toktx --version`
+
 ---
 
 ## Quick Start
@@ -183,7 +192,7 @@ The wizard automatically assesses vector quality (minimum 30 points, ≥20 ms LA
 
 Texture resolution scales with face count: 512px (≤5k), 1024px (≤20k), 2048px (≤80k), 4096px (>80k). For animated output, the full mesh is shared across all 30 frames — only the emissive texture changes per frame.
 
-> **Tip:** Install the [Khronos `toktx` tool](https://github.com/KhronosGroup/KTX-Software) for automatic KTX2 GPU texture compression. Without it, textures remain as lossless PNG (larger files, same visual quality).
+> **Tip:** Install the [Khronos `toktx` tool](https://github.com/KhronosGroup/KTX-Software/releases) for automatic KTX2 GPU texture compression. Without it, textures remain as lossless PNG (larger files, same visual quality).
 
 #### Batch Processing
 
@@ -355,10 +364,10 @@ med2glb ./data/ --method compare  # Compare all methods
 Shrink GLB files to a target size with four strategies:
 
 ```bash
-med2glb compress model.glb                    # Default: KTX2, 25 MB target
-med2glb compress model.glb --max-size 10      # Custom target
-med2glb compress model.glb -o small.glb       # Output to different file
-med2glb compress model.glb --strategy draco   # Choose strategy
+med2glb model.glb --compress                    # → model_compressed_ktx2.glb
+med2glb model.glb --compress --max-size 10      # Custom target
+med2glb model.glb --compress -o small.glb       # Explicit output path
+med2glb model.glb --compress --strategy draco   # → model_compressed_draco.glb
 ```
 
 | Strategy | Method | Quality | Speed |
@@ -380,40 +389,19 @@ Arguments:
 
 Options:
   -o, --output PATH       Output file path (default: <input>/glb/<name>.glb)
-  -m, --method TEXT        Conversion method: classical, marching-cubes, totalseg, chamber-detect, compare
-  --coloring TEXT         CARTO coloring filter: lat, bipolar, unipolar, or all (default: all)
-  --subdivide INTEGER     CARTO mesh subdivision level 0-3 (default: 2)
-  --vectors               Add animated LAT streamline arrows (CARTO LAT maps)
-  --animate               Enable animation for temporal data
-  --no-animate            Force static output
-  --threshold FLOAT       Intensity threshold for isosurface extraction
-  --smoothing INTEGER     Taubin smoothing iterations, 0 to disable (default: 15)
-  --faces INTEGER         Target triangle count after decimation (default: 80000)
-  --alpha FLOAT           Global transparency 0.0-1.0 (default: 1.0)
-  --multi-threshold TEXT   Multi-threshold config: "val:label:alpha,..."
   --batch                 Batch mode: convert all CARTO exports in subdirectories
-  --gallery               Gallery mode: individual GLBs, lightbox grid, spatial fan
-  --columns INTEGER       Lightbox grid columns (default: 6)
-  --series TEXT           Select DICOM series by UID (partial match)
+  --compress              Compress a GLB file to fit a target size
+  --max-size INTEGER      Target size in MB for --compress (default: 25)
+  --strategy TEXT         Compression strategy: ktx2, draco, downscale, jpeg (default: ktx2)
   --list-methods          List available methods and exit
   --list-series           List DICOM series and exit
   -v, --verbose           Show detailed processing information
   --version               Show version and exit
 ```
 
-```
-med2glb compress [OPTIONS] GLB_PATH
+The wizard is the primary interface — just run `med2glb ./your-data/` and follow the prompts. All pipeline-specific flags (`--method`, `--coloring`, `--animate`, `--subdivide`, `--vectors`, `--threshold`, `--smoothing`, `--faces`, etc.) are accepted but hidden from `--help` to keep the CLI clean. Passing any of these flags bypasses the wizard and runs directly with a hint suggesting the interactive mode.
 
-Arguments:
-  GLB_PATH                GLB file to compress
-
-Options:
-  -s, --max-size INTEGER  Target size in MB (default: 25)
-  --strategy TEXT         Compression strategy: ktx2, draco, downscale, jpeg (default: ktx2)
-  -o, --output PATH       Output path (default: compress in-place)
-```
-
-Passing any pipeline flag (`--method`, `--coloring`, `--animate`, `--vectors`, etc.) bypasses the interactive wizard and runs directly.
+After each wizard-guided conversion, an **equivalent command** is printed that reproduces the same result non-interactively — useful for scripting, CI pipelines, or sharing with colleagues. The equivalent command is also logged to `med2glb_log.txt`.
 
 ---
 

@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -226,8 +226,13 @@ def _parse_multi_threshold(spec: str) -> list[ThresholdLayer]:
 
 def run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
     """Execute the DICOM pipeline from a wizard-produced config."""
+    from med2glb.cli_wizard import build_dicom_equiv_command
+    equiv_cmd = build_dicom_equiv_command(config, output)
+
     if config.method == "compare":
         run_compare_mode(config, output.parent, output.stem)
+        console.print(f"\n[dim]💡 Equivalent command:[/dim]")
+        console.print(f"[dim]   {equiv_cmd}[/dim]")
         return
 
     convert_series(
@@ -243,7 +248,11 @@ def run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
         multi_threshold=None,
         series_uid=config.series_uid,
         verbose=config.verbose,
+        equivalent_command=equiv_cmd,
     )
+
+    console.print(f"\n[dim]💡 Equivalent command:[/dim]")
+    console.print(f"[dim]   {equiv_cmd}[/dim]")
 
 
 def run_pipeline(
@@ -377,6 +386,7 @@ def convert_series(
     multi_threshold: str | None,
     series_uid: str | None,
     verbose: bool = False,
+    equivalent_command: str | None = None,
 ) -> ConversionStats | None:
     """Execute the full conversion pipeline for a single series."""
     from med2glb.io.dicom_reader import InputType, load_dicom_directory
@@ -402,6 +412,7 @@ def convert_series(
         TextColumn("[progress.description]{task.description}"),
         BarColumn(bar_width=20),
         MofNCompleteColumn(),
+        TimeElapsedColumn(),
         console=console,
     ) as progress:
         # Step 1: Load DICOM
@@ -567,6 +578,7 @@ def convert_series(
         animated=animate,
         elapsed_seconds=elapsed,
         warnings=result.warnings or None,
+        equivalent_command=equivalent_command,
     )
 
     return ConversionStats(

@@ -345,8 +345,12 @@ def _try_ktx2_compress(
 def _strategy_ktx2(path: Path, max_bytes: int) -> bool:
     """KTX2 GPU-compressed textures, with progressive downscale fallback."""
     if not _has_toktx():
-        logger.warning("toktx not found on PATH — cannot apply KTX2 compression")
-        return False
+        logger.warning(
+            "toktx not found on PATH — falling back to downscale strategy. "
+            "Install KTX-Software for best compression: "
+            "https://github.com/KhronosGroup/KTX-Software/releases"
+        )
+        return _strategy_downscale(path, max_bytes)
 
     gltf, blob, image_bv_set = _load_and_identify_images(path)
     if not image_bv_set:

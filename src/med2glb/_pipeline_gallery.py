@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from med2glb._console import console
 from med2glb._pipeline_dicom import (
@@ -98,6 +98,7 @@ def run_gallery_mode(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(bar_width=20),
             MofNCompleteColumn(),
+            TimeElapsedColumn(),
             console=console,
         ) as progress:
             # Step 1: Load all slices

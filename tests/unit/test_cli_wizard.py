@@ -553,3 +553,290 @@ class TestRunBatchCartoWizard:
         )
 
         assert configs[0].vectors == "no"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _utils.py fmt_duration
+# ---------------------------------------------------------------------------
+
+
+class TestFmtDuration:
+    def test_seconds_only(self):
+        from med2glb._utils import fmt_duration
+        assert fmt_duration(5.3) == "5.3s"
+        assert fmt_duration(0.0) == "0.0s"
+        assert fmt_duration(59.9) == "59.9s"
+
+    def test_minutes_and_seconds(self):
+        from med2glb._utils import fmt_duration
+        assert fmt_duration(65) == "1m 5s"
+        assert fmt_duration(3599) == "59m 59s"
+
+    def test_hours(self):
+        from med2glb._utils import fmt_duration
+        assert fmt_duration(3661) == "1h 1m 1s"
+        assert fmt_duration(7200) == "2h 0m 0s"
+
+
+# ---------------------------------------------------------------------------
+# Tests for equivalent command builders
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCartoEquivCommand:
+    def test_basic_carto_command(self):
+        from med2glb.cli_wizard import build_carto_equiv_command
+
+        config = CartoConfig(
+            input_path=Path("/data/carto"),
+            colorings=["lat", "bipolar"],
+            subdivide=2,
+            animate=True,
+            static=True,
+            vectors="no",
+        )
+        cmd = build_carto_equiv_command(config)
+        assert "med2glb" in cmd
+        assert "--coloring lat" in cmd
+        assert "--coloring bipolar" in cmd
+        assert "--subdivide 2" in cmd
+        # Both animate and static → default behavior, neither flag needed
+        assert "--animate" not in cmd
+        assert "--no-animate" not in cmd
+
+    def test_animate_only(self):
+        from med2glb.cli_wizard import build_carto_equiv_command
+
+        config = CartoConfig(
+            input_path=Path("/data/carto"),
+            colorings=["lat"],
+            subdivide=1,
+            animate=True,
+            static=False,
+        )
+        cmd = build_carto_equiv_command(config)
+        assert "--animate" in cmd
+
+    def test_static_only(self):
+        from med2glb.cli_wizard import build_carto_equiv_command
+
+        config = CartoConfig(
+            input_path=Path("/data/carto"),
+            colorings=["lat"],
+            subdivide=1,
+            animate=False,
+            static=True,
+        )
+        cmd = build_carto_equiv_command(config)
+        assert "--no-animate" in cmd
+
+    def test_vectors(self):
+        from med2glb.cli_wizard import build_carto_equiv_command
+
+        config = CartoConfig(
+            input_path=Path("/data/carto"),
+            colorings=["lat"],
+            subdivide=2,
+            vectors="yes",
+        )
+        cmd = build_carto_equiv_command(config)
+        assert "--vectors" in cmd
+
+    def test_batch_mode(self):
+        from med2glb.cli_wizard import build_carto_equiv_command
+
+        config = CartoConfig(
+            input_path=Path("/data/carto"),
+            colorings=["lat"],
+            subdivide=2,
+        )
+        cmd = build_carto_equiv_command(config, batch=True)
+        assert "--batch" in cmd
+
+    def test_output_path(self):
+        from med2glb.cli_wizard import build_carto_equiv_command
+
+        config = CartoConfig(
+            input_path=Path("/data/carto"),
+            colorings=["lat"],
+            subdivide=2,
+        )
+        cmd = build_carto_equiv_command(config, output_path=Path("/out/result.glb"))
+        assert "-o" in cmd
+
+
+class TestBuildDicomEquivCommand:
+    def test_basic_dicom_command(self):
+        from med2glb.cli_wizard import build_dicom_equiv_command
+
+        config = DicomConfig(
+            input_path=Path("/data/dicom"),
+            method="classical",
+        )
+        cmd = build_dicom_equiv_command(config)
+        assert "med2glb" in cmd
+        assert "--method classical" in cmd
+        # Defaults not included
+        assert "--smoothing" not in cmd
+        assert "--faces" not in cmd
+
+    def test_non_default_params(self):
+        from med2glb.cli_wizard import build_dicom_equiv_command
+
+        config = DicomConfig(
+            input_path=Path("/data/dicom"),
+            method="marching-cubes",
+            smoothing=5,
+            target_faces=50000,
+            threshold=200.0,
+            alpha=0.8,
+            animate=True,
+        )
+        cmd = build_dicom_equiv_command(config)
+        assert "--method marching-cubes" in cmd
+        assert "--smoothing 5" in cmd
+        assert "--faces 50000" in cmd
+        assert "--threshold 200.0" in cmd
+        assert "--alpha 0.8" in cmd
+        assert "--animate" in cmd
+
+    def test_series_uid(self):
+        from med2glb.cli_wizard import build_dicom_equiv_command
+
+        config = DicomConfig(
+            input_path=Path("/data/dicom"),
+            method="classical",
+            series_uid="1.2.3.4",
+        )
+        cmd = build_dicom_equiv_command(config)
+        assert "--series 1.2.3.4" in cmd
+
+    def test_output_path(self):
+        from med2glb.cli_wizard import build_dicom_equiv_command
+
+        config = DicomConfig(
+            input_path=Path("/data/dicom"),
+            method="classical",
+        )
+        cmd = build_dicom_equiv_command(config, output_path=Path("/out/result.glb"))
+        assert "-o" in cmd
+
+
+# ---------------------------------------------------------------------------
+# Tests for conversion log with equivalent command
+# ---------------------------------------------------------------------------
+
+
+class TestConversionLogEquivCommand:
+    def test_carto_log_includes_equiv_command(self, tmp_path):
+        from med2glb.io.conversion_log import append_carto_entry
+
+        append_carto_entry(
+            tmp_path,
+            structure_name="LA",
+            carto_version="7.2",
+            study_name="Test",
+            coloring="lat",
+            color_range="lat",
+            subdivide=2,
+            active_vertices=1000,
+            total_vertices=1200,
+            face_count=2000,
+            mapping_points=500,
+            variant_outputs=[],
+            elapsed_seconds=10.5,
+            source_path="/data/carto",
+            equivalent_command='med2glb "/data/carto" --coloring lat --subdivide 2',
+        )
+
+        log = (tmp_path / "med2glb_log.txt").read_text()
+        assert "Equivalent command:" in log
+        assert "--coloring lat" in log
+
+    def test_carto_log_no_equiv_command(self, tmp_path):
+        from med2glb.io.conversion_log import append_carto_entry
+
+        append_carto_entry(
+            tmp_path,
+            structure_name="LA",
+            carto_version="7.2",
+            study_name="Test",
+            coloring="lat",
+            color_range="lat",
+            subdivide=2,
+            active_vertices=1000,
+            total_vertices=1200,
+            face_count=2000,
+            mapping_points=500,
+            variant_outputs=[],
+            elapsed_seconds=10.5,
+            source_path="/data/carto",
+        )
+
+        log = (tmp_path / "med2glb_log.txt").read_text()
+        assert "Equivalent command:" not in log
+
+    def test_dicom_log_includes_equiv_command(self, tmp_path):
+        from med2glb.io.conversion_log import append_dicom_entry
+
+        out_file = tmp_path / "test.glb"
+        out_file.write_bytes(b"\x00" * 100)
+
+        append_dicom_entry(
+            tmp_path,
+            output_path=out_file,
+            method_name="classical",
+            input_path="/data/dicom",
+            input_type="3D volume",
+            series_uid=None,
+            mesh_count=1,
+            vertex_count=500,
+            face_count=1000,
+            file_size_kb=0.1,
+            animated=False,
+            elapsed_seconds=5.2,
+            equivalent_command='med2glb "/data/dicom" --method classical',
+        )
+
+        log = (tmp_path / "med2glb_log.txt").read_text()
+        assert "Equivalent command:" in log
+        assert "--method classical" in log
+
+
+# ---------------------------------------------------------------------------
+# Tests for SeriesInfo with new fields
+# ---------------------------------------------------------------------------
+
+
+class TestSeriesInfoNewFields:
+    def test_default_none(self):
+        info = SeriesInfo(
+            series_uid="1.2.3",
+            modality="CT",
+            description="Test",
+            file_count=10,
+            data_type="3D volume",
+            detail="10 slices",
+            dimensions="512x512x10",
+            recommended_method="classical",
+            recommended_output="3D mesh",
+        )
+        assert info.spacing is None
+        assert info.est_time is None
+
+    def test_with_spacing_and_time(self):
+        info = SeriesInfo(
+            series_uid="1.2.3",
+            modality="CT",
+            description="Test",
+            file_count=10,
+            data_type="3D volume",
+            detail="10 slices",
+            dimensions="512x512x10",
+            recommended_method="classical",
+            recommended_output="3D mesh",
+            spacing="0.5 × 0.5 × 1.0 mm",
+            est_time="~3.3s",
+        )
+        assert info.spacing == "0.5 × 0.5 × 1.0 mm"
+        assert info.est_time == "~3.3s"

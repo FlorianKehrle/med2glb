@@ -76,6 +76,8 @@ class SeriesInfo:
     recommended_output: str  # "textured plane", "3D mesh", "animated 3D mesh"
     is_multiframe: bool = False
     number_of_frames: int = 0
+    spacing: str | None = None  # e.g. "0.5 × 0.5 × 1.0 mm"
+    est_time: str | None = None  # e.g. "~30s", "~2m 0s"
 
 
 @dataclass

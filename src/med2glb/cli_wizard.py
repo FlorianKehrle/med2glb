@@ -809,8 +809,12 @@ def run_dicom_wizard(
     table.add_column("Modality", style="green")
     table.add_column("Description", max_width=40)
     table.add_column("Type", style="cyan")
+    table.add_column("Dimensions")
+    table.add_column("Spacing")
+    table.add_column("Files", justify="right")
     table.add_column("Detail", justify="right")
     table.add_column("Recommended", style="magenta")
+    table.add_column("Est Time", justify="right")
 
     for i, info in enumerate(series_list, 1):
         table.add_row(
@@ -818,8 +822,12 @@ def run_dicom_wizard(
             info.modality,
             info.description or "(no desc)",
             info.data_type,
+            info.dimensions or "—",
+            info.spacing or "—",
+            str(info.file_count),
             info.detail,
             info.recommended_method,
+            info.est_time or "—",
         )
 
     console.print(table)
@@ -946,3 +954,105 @@ def _check_ai_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Equivalent command builders
+# ---------------------------------------------------------------------------
+
+def _quote_path(p: str | Path) -> str:
+    """Quote a path for shell usage, platform-aware."""
+    import os
+    s = str(p)
+    if os.name == "nt":
+        # Windows: double-quote if spaces or special chars
+        if " " in s or "&" in s or "(" in s or ")" in s:
+            return f'"{s}"'
+        return s
+    else:
+        import shlex
+        return shlex.quote(s)
+
+
+def build_carto_equiv_command(
+    config: CartoConfig,
+    output_path: Path | None = None,
+    *,
+    batch: bool = False,
+) -> str:
+    """Build the equivalent CLI command for a CARTO wizard conversion."""
+    parts = ["med2glb", _quote_path(config.input_path)]
+
+    if batch:
+        parts.append("--batch")
+
+    # Coloring
+    if config.colorings:
+        for c in config.colorings:
+            parts.extend(["--coloring", c])
+
+    # Subdivision
+    parts.extend(["--subdivide", str(config.subdivide)])
+
+    # Animation flags
+    if config.animate and not config.static:
+        parts.append("--animate")
+    elif config.static and not config.animate:
+        parts.append("--no-animate")
+
+    # Vectors
+    if config.vectors in ("yes", "only"):
+        parts.append("--vectors")
+
+    # Output
+    out = output_path or config.output_dir
+    if out is not None:
+        parts.extend(["-o", _quote_path(out)])
+
+    return " ".join(parts)
+
+
+def build_dicom_equiv_command(
+    config: DicomConfig,
+    output_path: Path | None = None,
+) -> str:
+    """Build the equivalent CLI command for a DICOM wizard conversion."""
+    parts = ["med2glb", _quote_path(config.input_path)]
+
+    # Method
+    parts.extend(["--method", config.method])
+
+    # Smoothing (only if non-default)
+    if config.smoothing != 15:
+        parts.extend(["--smoothing", str(config.smoothing)])
+
+    # Faces (only if non-default)
+    if config.target_faces != 80000:
+        parts.extend(["--faces", str(config.target_faces)])
+
+    # Threshold
+    if config.threshold is not None:
+        parts.extend(["--threshold", str(config.threshold)])
+
+    # Alpha (only if non-default)
+    if config.alpha != 1.0:
+        parts.extend(["--alpha", str(config.alpha)])
+
+    # Series
+    if config.series_uid:
+        parts.extend(["--series", config.series_uid])
+
+    # Animation
+    if config.animate:
+        parts.append("--animate")
+
+    # Gallery
+    if config.gallery:
+        parts.append("--gallery")
+
+    # Output
+    out = output_path or config.output
+    if out is not None:
+        parts.extend(["-o", _quote_path(out)])
+
+    return " ".join(parts)

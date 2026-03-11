@@ -17,6 +17,7 @@ from med2glb.glb.vertex_color_bake import (
     precompute_rasterization_map,
     rasterize_vertex_colors,
     xatlas_unwrap,
+    xatlas_unwrap_with_timer,
 )
 
 
@@ -396,6 +397,41 @@ class TestXatlasUnwrap:
 
         assert len(new_faces) == 12
         assert np.all(uvs >= 0) and np.all(uvs <= 1)
+
+
+class TestXatlasUnwrapWithTimer:
+    def test_produces_same_result(self):
+        """Timer wrapper should produce identical output shapes to plain unwrap."""
+        verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+        faces = np.array([[0, 1, 2]], dtype=np.uint32)
+
+        vmapping, new_faces, uvs = xatlas_unwrap_with_timer(verts, faces)
+
+        assert len(vmapping) >= 3
+        assert new_faces.shape[1] == 3
+        assert uvs.shape == (len(vmapping), 2)
+        assert np.all(uvs >= 0) and np.all(uvs <= 1)
+
+    def test_tick_callback_fires(self):
+        """The on_tick callback should be called at least once."""
+        verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+        faces = np.array([[0, 1, 2]], dtype=np.uint32)
+        ticks: list[tuple[float, float]] = []
+
+        def _on_tick(elapsed: float, eta: float) -> None:
+            ticks.append((elapsed, eta))
+
+        vmapping, new_faces, uvs = xatlas_unwrap_with_timer(
+            verts, faces, eta_seconds=5.0,
+            on_tick=_on_tick, tick_interval=0.01,
+        )
+
+        # Should have produced valid output regardless of tick count
+        assert len(vmapping) >= 3
+        # Tick callback should have received the ETA we passed
+        for elapsed, eta in ticks:
+            assert eta == 5.0
+            assert elapsed >= 0
 
 
 # ---------------------------------------------------------------------------

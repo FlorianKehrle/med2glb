@@ -9,17 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-
-def _format_duration(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    mins = int(seconds) // 60
-    secs = int(seconds) % 60
-    if mins < 60:
-        return f"{mins}m {secs}s"
-    hours = mins // 60
-    mins = mins % 60
-    return f"{hours}h {mins}m"
+from med2glb._utils import fmt_duration as _format_duration
 
 
 def append_carto_entry(
@@ -40,6 +30,7 @@ def append_carto_entry(
     source_path: str,
     step_times: dict[str, float] | None = None,
     data_coverage_pct: float | None = None,
+    equivalent_command: str | None = None,
 ) -> None:
     """Append a CARTO conversion entry to the log file."""
     lines: list[str] = []
@@ -76,6 +67,9 @@ def append_carto_entry(
             label = "animated + vectors" if do_vectors else "animated"
         size_kb = out_path.stat().st_size / 1024 if out_path.exists() else 0
         lines.append(f"    {out_path.name}  ({size_kb:.0f} KB, {label})")
+    if equivalent_command:
+        lines.append(f"  Equivalent command:")
+        lines.append(f"    {equivalent_command}")
     lines.append("")
 
     log_path = output_dir / "med2glb_log.txt"
@@ -98,6 +92,7 @@ def append_dicom_entry(
     animated: bool,
     elapsed_seconds: float,
     warnings: list[str] | None = None,
+    equivalent_command: str | None = None,
 ) -> None:
     """Append a DICOM conversion entry to the log file."""
     lines: list[str] = []
@@ -120,6 +115,9 @@ def append_dicom_entry(
         lines.append(f"  Warnings:")
         for w in warnings:
             lines.append(f"    - {w}")
+    if equivalent_command:
+        lines.append(f"  Equivalent command:")
+        lines.append(f"    {equivalent_command}")
     lines.append("")
 
     log_path = output_dir / "med2glb_log.txt"
