@@ -186,9 +186,9 @@ def main(
         help="Target size in MB for --compress.",
     ),
     strategy: str = typer.Option(
-        "ktx2",
+        "auto",
         "--strategy",
-        help="Compression strategy for --compress: ktx2, draco, downscale, jpeg.",
+        help="Compression strategy for --compress: auto, gltfpack, ktx2, draco, downscale, jpeg.",
     ),
     verbose: bool = typer.Option(
         False,
@@ -216,21 +216,40 @@ def main(
             err_console.print(f"[red]Error: {input_path} is not a GLB file.[/red]")
             raise typer.Exit(code=1)
 
-        from med2glb.glb.compress import constrain_glb_size, _has_toktx
+        from med2glb.glb.compress import (
+            constrain_glb_size, _has_toktx, _has_gltfpack, _glb_has_animations,
+        )
 
-        if strategy == "ktx2" and not _has_toktx():
+        # Show tool availability warnings
+        if strategy in ("ktx2", "auto") and not _has_toktx():
             console.print(
-                "[yellow]toktx not found — falling back to downscale strategy.[/yellow]\n"
-                "💡 Install KTX-Software for best compression: "
+                "[yellow]toktx not found — KTX2 texture compression unavailable.[/yellow]\n"
+                "💡 Install KTX-Software: "
                 "https://github.com/KhronosGroup/KTX-Software/releases"
+            )
+        if strategy in ("gltfpack", "auto") and not _has_gltfpack():
+            console.print(
+                "[yellow]gltfpack not found — meshopt compression unavailable.[/yellow]\n"
+                "💡 Install meshoptimizer: "
+                "https://github.com/zeux/meshoptimizer/releases"
             )
 
         # Determine the effective strategy name for the output filename
         effective_strategy = strategy
-        if strategy == "ktx2" and not _has_toktx():
+        if strategy == "auto":
+            has_anim = _glb_has_animations(input_path)
+            if has_anim and _has_gltfpack():
+                effective_strategy = "gltfpack_ktx2"
+            elif _has_toktx():
+                effective_strategy = "ktx2"
+            else:
+                effective_strategy = "downscale"
+        elif strategy == "ktx2" and not _has_toktx():
+            effective_strategy = "downscale"
+        elif strategy == "gltfpack" and not _has_gltfpack():
             effective_strategy = "downscale"
 
-        # Default output: model_compressed_ktx2.glb (never overwrite original)
+        # Default output: model_compressed_auto.glb (never overwrite original)
         if output is not None:
             target_path = output
         else:
@@ -246,13 +265,13 @@ def main(
         if original_size <= max_bytes:
             console.print(
                 f"[green]Already within limit:[/green] "
-                f"{original_size / 1024:.0f} KB <= {max_size} MB"
+                f"{original_size / 1024 / 1024:.1f} MB ≤ {max_size} MB"
             )
             raise typer.Exit()
 
         console.print(
             f"Compressing {target_path.name} "
-            f"({original_size / 1024:.0f} KB → {max_size} MB target, "
+            f"({original_size / 1024 / 1024:.1f} MB → {max_size} MB target, "
             f"strategy: {strategy})..."
         )
 
@@ -260,14 +279,16 @@ def main(
 
         new_size = target_path.stat().st_size
         if applied and new_size < original_size:
+            pct = 100 - new_size * 100 // original_size
             console.print(
                 f"[green]Compressed:[/green] "
-                f"{original_size / 1024:.0f} KB → {new_size / 1024:.0f} KB"
+                f"{original_size / 1024 / 1024:.1f} MB → {new_size / 1024 / 1024:.1f} MB "
+                f"({pct}% reduction)"
             )
         else:
             console.print(
                 f"[yellow]No further compression possible:[/yellow] "
-                f"{new_size / 1024:.0f} KB"
+                f"{new_size / 1024 / 1024:.1f} MB"
             )
         raise typer.Exit()
 

@@ -488,3 +488,136 @@ class TestKtx2Compression:
         assert "KHR_texture_basisu" in gltf.extensionsUsed
         for img in gltf.images:
             assert img.mimeType == "image/ktx2"
+
+
+# ---------------------------------------------------------------------------
+# gltfpack + auto strategy tests
+# ---------------------------------------------------------------------------
+
+class TestGltfpackDetection:
+    def test_has_gltfpack_returns_bool(self):
+        from med2glb.glb.compress import _has_gltfpack
+        assert isinstance(_has_gltfpack(), bool)
+
+    def test_glb_has_animations_static(self, tmp_path):
+        """Static GLB should not be detected as animated."""
+        from med2glb.glb.compress import _glb_has_animations
+        path = tmp_path / "static.glb"
+        _build_textured_glb(path, num_textures=1, size=32)
+        assert _glb_has_animations(path) is False
+
+
+class TestAutoStrategy:
+    def test_auto_strategy_picks_downscale_no_tools(self, tmp_path, monkeypatch):
+        """Without gltfpack or toktx, auto should fall back to downscale."""
+        from med2glb.glb import compress
+        monkeypatch.setattr(compress, "_has_gltfpack", lambda: False)
+        monkeypatch.setattr(compress, "_has_toktx", lambda: False)
+        monkeypatch.setattr(compress, "_has_draco", lambda: False)
+
+        path = tmp_path / "test.glb"
+        _build_textured_glb(path, num_textures=5, size=256)
+        original_size = path.stat().st_size
+
+        result = constrain_glb_size(path, original_size // 2, strategy="auto")
+        assert result is True
+        assert path.stat().st_size < original_size
+
+    def test_auto_strategy_valid(self, tmp_path):
+        """Auto strategy should not raise for any GLB."""
+        path = tmp_path / "test.glb"
+        _build_textured_glb(path, num_textures=3, size=128)
+        original_size = path.stat().st_size
+
+        # Should not raise
+        constrain_glb_size(path, original_size // 2, strategy="auto")
+
+    def test_gltfpack_strategy_fallback(self, tmp_path, monkeypatch):
+        """Without gltfpack, strategy should fall back to downscale."""
+        from med2glb.glb import compress
+        monkeypatch.setattr(compress, "_has_gltfpack", lambda: False)
+
+        path = tmp_path / "test.glb"
+        _build_textured_glb(path, num_textures=5, size=256)
+        original_size = path.stat().st_size
+
+        result = constrain_glb_size(path, original_size // 2, strategy="gltfpack")
+        assert result is True
+        assert path.stat().st_size < original_size
+
+
+class TestSmallImageExclusion:
+    def test_skip_small_identifies_large_images_only(self, tmp_path):
+        """With skip_small=True, small images (<50KB) should be excluded."""
+        from med2glb.glb.compress import _load_and_identify_images, _SMALL_IMAGE_THRESHOLD
+
+        # Build GLB with one large (256x256) and one tiny (8x8) texture
+        path = tmp_path / "mixed.glb"
+        _build_mixed_size_glb(path)
+
+        # With skip_small=True (default)
+        gltf, blob, image_bv_set = _load_and_identify_images(path)
+        # Only the large image should be included
+        large_count = 0
+        for bv_idx in image_bv_set:
+            bv = gltf.bufferViews[bv_idx]
+            assert bv.byteLength >= _SMALL_IMAGE_THRESHOLD
+            large_count += 1
+        assert large_count >= 1
+
+    def test_no_skip_includes_all_images(self, tmp_path):
+        """With skip_small=False, all images should be included."""
+        from med2glb.glb.compress import _load_and_identify_images
+
+        path = tmp_path / "mixed.glb"
+        _build_mixed_size_glb(path)
+
+        _, _, all_set = _load_and_identify_images(path, skip_small=False)
+        _, _, skip_set = _load_and_identify_images(path, skip_small=True)
+        assert len(all_set) >= len(skip_set)
+
+
+def _build_mixed_size_glb(path: Path) -> None:
+    """Build a GLB with one large texture (256x256) and one tiny (4x4)."""
+    from med2glb.glb.builder import _pad_to_4
+    from PIL import Image as PILImage
+    import io as _io
+
+    gltf = pygltflib.GLTF2(
+        scene=0,
+        scenes=[pygltflib.Scene(nodes=[])],
+        nodes=[],
+        meshes=[],
+        accessors=[],
+        bufferViews=[],
+        buffers=[],
+        materials=[],
+        textures=[],
+        images=[],
+        samplers=[pygltflib.Sampler()],
+    )
+    binary_data = bytearray()
+
+    for size in [256, 4]:
+        rng = np.random.RandomState(42)
+        arr = rng.randint(0, 255, (size, size, 3), dtype=np.uint8)
+        img = PILImage.fromarray(arr)
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        png_bytes = buf.getvalue()
+
+        offset = len(binary_data)
+        binary_data.extend(png_bytes)
+        _pad_to_4(binary_data)
+
+        bv_idx = len(gltf.bufferViews)
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0, byteOffset=offset, byteLength=len(png_bytes),
+        ))
+        idx = len(gltf.images)
+        gltf.images.append(pygltflib.Image(bufferView=bv_idx, mimeType="image/png"))
+        gltf.textures.append(pygltflib.Texture(sampler=0, source=idx))
+
+    gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
+    gltf.set_binary_blob(bytes(binary_data))
+    gltf.save(str(path))
