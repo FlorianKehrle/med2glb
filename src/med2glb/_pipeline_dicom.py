@@ -563,6 +563,7 @@ def convert_series(
         err_console.print(f"[yellow]Warning: {w}[/yellow]")
 
     # Append to conversion log
+    from datetime import datetime
     from med2glb.io.conversion_log import append_dicom_entry
     append_dicom_entry(
         output.parent,
@@ -577,6 +578,8 @@ def convert_series(
         file_size_kb=file_size,
         animated=animate,
         elapsed_seconds=elapsed,
+        start_time=datetime.fromtimestamp(start_time),
+        end_time=datetime.fromtimestamp(start_time + elapsed),
         warnings=result.warnings or None,
         equivalent_command=equivalent_command,
     )

@@ -12,7 +12,7 @@ from rich.console import Console
 from med2glb.cli_wizard import (
     _assess_vector_quality,
     _check_ai_available,
-    _estimate_time,
+    estimate_time,
     _mesh_bbox_mm,
     _parse_mesh_selection,
     run_batch_carto_wizard,
@@ -147,16 +147,16 @@ class TestMeshBboxMm:
 
 class TestEstimateTime:
     def test_small_mesh_seconds(self):
-        result = _estimate_time(1000, 10, has_lat=False)
+        result = estimate_time(1000, 10, has_lat=False)
         assert "s" in result
 
     def test_large_mesh_minutes(self):
-        result = _estimate_time(200_000, 2000, has_lat=True)
+        result = estimate_time(200_000, 2000, has_lat=True)
         assert "min" in result
 
     def test_no_points_no_vectors(self):
         # With 0 points and no LAT, should still return a time
-        result = _estimate_time(500, 0, has_lat=False)
+        result = estimate_time(500, 0, has_lat=False)
         assert "s" in result or "min" in result
 
 

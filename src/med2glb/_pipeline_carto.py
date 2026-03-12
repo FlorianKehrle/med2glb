@@ -231,11 +231,14 @@ def _write_carto_log(
     step_times: dict[str, float] | None = None,
     data_coverage_pct: float | None = None,
     equivalent_command: str | None = None,
+    estimated_time: str | None = None,
 ) -> None:
     """Append conversion metadata to the log file in the output directory."""
+    from datetime import datetime
     from med2glb.io.conversion_log import append_carto_entry
 
-    elapsed = time.time() - start_time
+    end_now = time.time()
+    elapsed = end_now - start_time
 
     # For the log, summarize all colorings produced
     color_range = ", ".join(colorings)
@@ -261,6 +264,9 @@ def _write_carto_log(
         variant_outputs=variant_outputs,
         elapsed_seconds=elapsed,
         source_path=str(source_path),
+        start_time=datetime.fromtimestamp(start_time),
+        end_time=datetime.fromtimestamp(end_now),
+        estimated_time=estimated_time,
         step_times=step_times,
         data_coverage_pct=data_coverage_pct,
         equivalent_command=equivalent_command,
@@ -334,6 +340,7 @@ def _convert_carto_meshes(
     vec_meshes = set(config.vector_mesh_indices) if config.vector_mesh_indices is not None else None
 
     for mesh_idx in selected:
+        mesh_start_time = time.time()
         mesh = study.meshes[mesh_idx]
         points = study.points.get(mesh.structure_name)
         mesh_has_vec = has_vectors and (vec_meshes is None or mesh_idx in vec_meshes)
@@ -375,6 +382,14 @@ def _convert_carto_meshes(
 
         # === Shared intermediates — computed ONCE per mesh ===
         step_times: dict[str, float] = {}
+
+        # Compute time estimate for this mesh
+        n_triangles = len(mesh.faces)
+        n_points = len(points) if points else 0
+        has_lat = "lat" in available_colorings
+        from med2glb.cli_wizard import estimate_time
+        estimated_time = estimate_time(n_triangles, n_points, has_lat)
+
         console.print(
             f"\n[bold]Preparing: {mesh.structure_name}[/bold] "
             f"({n_variants} variant(s) across {len(available_colorings)} coloring(s))"
@@ -694,18 +709,19 @@ def _convert_carto_meshes(
             _print_carto_summary(
                 study, mesh, lat_mesh_data, points,
                 produced_colorings,
-                config.subdivide, all_outputs, start_time,
+                config.subdivide, all_outputs, mesh_start_time,
                 step_times=step_times,
             )
             from med2glb.cli_wizard import build_carto_equiv_command
             equiv_cmd = build_carto_equiv_command(config)
             _write_carto_log(
                 carto_output_dir, study, mesh, lat_mesh_data, points,
-                produced_colorings, config.subdivide, all_outputs, start_time,
+                produced_colorings, config.subdivide, all_outputs, mesh_start_time,
                 source_path=config.input_path,
                 step_times=step_times,
                 data_coverage_pct=last_data_coverage,
                 equivalent_command=equiv_cmd,
+                estimated_time=estimated_time,
             )
 
 

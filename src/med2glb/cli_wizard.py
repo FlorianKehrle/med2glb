@@ -50,7 +50,7 @@ def _mesh_bbox_mm(mesh: CartoMesh) -> str:
     return f"{extent[0]:.0f}×{extent[1]:.0f}×{extent[2]:.0f} mm"
 
 
-def _estimate_time(
+def estimate_time(
     n_triangles: int,
     n_points: int,
     has_lat: bool,
@@ -454,7 +454,7 @@ def run_carto_wizard(
         bbox = _mesh_bbox_mm(mesh)
 
         # Time estimate
-        est_time = _estimate_time(n_triangles, len(pts), has_lat)
+        est_time = estimate_time(n_triangles, len(pts), has_lat)
 
         table.add_row(
             str(i),

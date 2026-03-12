@@ -28,14 +28,20 @@ def append_carto_entry(
     variant_outputs: list[tuple[bool, bool, Path]],
     elapsed_seconds: float,
     source_path: str,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    estimated_time: str | None = None,
     step_times: dict[str, float] | None = None,
     data_coverage_pct: float | None = None,
     equivalent_command: str | None = None,
 ) -> None:
     """Append a CARTO conversion entry to the log file."""
+    _start = start_time or datetime.now()
+    _end = end_time or datetime.now()
+
     lines: list[str] = []
     lines.append(f"{'=' * 60}")
-    lines.append(f"CARTO Conversion — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"CARTO Conversion — {_start.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"{'=' * 60}")
     lines.append(f"  Source:          {source_path}")
     lines.append(f"  Structure:       {structure_name}")
@@ -52,6 +58,10 @@ def append_carto_entry(
         lines.append(f"  Data coverage:   {data_coverage_pct:.0f}% (gray = no data within range)")
     lines.append(f"  Vertices:        {active_vertices:,} active / {total_vertices:,} total")
     lines.append(f"  Faces:           {face_count:,}")
+    if estimated_time:
+        lines.append(f"  Estimated time:  {estimated_time}")
+    lines.append(f"  Started:         {_start.strftime('%H:%M:%S')}")
+    lines.append(f"  Finished:        {_end.strftime('%H:%M:%S')}")
     lines.append(f"  Computing time:  {_format_duration(elapsed_seconds)}")
     if step_times:
         parts = []
@@ -91,13 +101,18 @@ def append_dicom_entry(
     file_size_kb: float,
     animated: bool,
     elapsed_seconds: float,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     warnings: list[str] | None = None,
     equivalent_command: str | None = None,
 ) -> None:
     """Append a DICOM conversion entry to the log file."""
+    _start = start_time or datetime.now()
+    _end = end_time or datetime.now()
+
     lines: list[str] = []
     lines.append(f"{'=' * 60}")
-    lines.append(f"DICOM Conversion — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"DICOM Conversion — {_start.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"{'=' * 60}")
     lines.append(f"  Source:          {input_path}")
     lines.append(f"  Input type:      {input_type}")
@@ -108,6 +123,8 @@ def append_dicom_entry(
     lines.append(f"  Meshes:          {mesh_count}")
     lines.append(f"  Vertices:        {vertex_count:,}")
     lines.append(f"  Faces:           {face_count:,}")
+    lines.append(f"  Started:         {_start.strftime('%H:%M:%S')}")
+    lines.append(f"  Finished:        {_end.strftime('%H:%M:%S')}")
     lines.append(f"  Computing time:  {_format_duration(elapsed_seconds)}")
     lines.append(f"  Output file:")
     lines.append(f"    {output_path.name}  ({file_size_kb:.0f} KB)")
