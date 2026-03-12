@@ -387,34 +387,56 @@ def _convert_carto_meshes(
         n_triangles = len(mesh.faces)
         n_points = len(points) if points else 0
         has_lat = "lat" in available_colorings
-        from med2glb.cli_wizard import estimate_time
+        from med2glb.cli_wizard import estimate_time, estimate_time_details
         estimated_time = estimate_time(n_triangles, n_points, has_lat)
+        step_est = estimate_time_details(
+            n_triangles, n_points, has_lat, config.subdivide,
+        )
 
+        # Show preparation header with estimated total time + step breakdown
         console.print(
             f"\n[bold]Preparing: {mesh.structure_name}[/bold] "
             f"({n_variants} variant(s) across {len(available_colorings)} coloring(s))"
+            f" — estimated {estimated_time}"
         )
+        _est_parts: list[str] = []
+        for _label, _key in [
+            ("subdivide", "subdivide"), ("mapping", "mapping"),
+            ("xatlas", "xatlas"), ("rasterize", "rasterize"),
+            ("bake textures", "bake"), ("vectors", "vectors"),
+        ]:
+            if step_est[_key] >= 1:
+                from med2glb.cli_wizard import _format_est
+                _est_parts.append(f"{_label} ~{_format_est(step_est[_key])}")
+        if _est_parts:
+            console.print(f"  [dim]{' → '.join(_est_parts)}[/dim]")
 
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=20),
-            MofNCompleteColumn(),
             TimeElapsedColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("Subdividing mesh...", total=None)
-
             # 1. Subdivide once (coloring-independent)
+            post_sub_count = n_triangles * (4 ** config.subdivide) if config.subdivide > 0 else n_triangles
+            sub_est = _format_duration(step_est["subdivide"])
+            task = progress.add_task(
+                f"Subdividing {n_triangles:,} → {post_sub_count:,} faces (~{sub_est})..."
+                if config.subdivide > 0
+                else "Preparing mesh...",
+                total=None,
+            )
+
             subdivided = None
             t_step = time.monotonic()
             if config.subdivide > 0:
                 subdivided = subdivide_carto_mesh(mesh, iterations=config.subdivide)
             step_times["Subdivide"] = time.monotonic() - t_step
-            progress.update(task, description="Extracting LAT values...")
 
             # 2. Compute LAT mesh data first — needed for animation cache
             #    which is shared across LAT variants
+            map_est = _format_duration(step_est["mapping"])
+            progress.update(task, description=f"Mapping vertices (~{map_est})...")
             t_step = time.monotonic()
             lat_mesh_data = carto_mesh_to_mesh_data(
                 mesh, points, coloring="lat",

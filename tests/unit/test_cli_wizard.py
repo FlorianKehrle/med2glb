@@ -13,6 +13,7 @@ from med2glb.cli_wizard import (
     _assess_vector_quality,
     _check_ai_available,
     estimate_time,
+    estimate_time_details,
     _mesh_bbox_mm,
     _parse_mesh_selection,
     run_batch_carto_wizard,
@@ -158,6 +159,30 @@ class TestEstimateTime:
         # With 0 points and no LAT, should still return a time
         result = estimate_time(500, 0, has_lat=False)
         assert "s" in result or "min" in result
+
+
+class TestEstimateTimeDetails:
+    def test_returns_all_keys(self):
+        details = estimate_time_details(10_000, 500, has_lat=True)
+        expected_keys = {"subdivide", "mapping", "xatlas", "rasterize", "bake", "vectors", "total"}
+        assert set(details.keys()) == expected_keys
+
+    def test_total_is_sum_of_parts(self):
+        details = estimate_time_details(10_000, 500, has_lat=True)
+        parts_sum = sum(v for k, v in details.items() if k != "total")
+        assert abs(details["total"] - parts_sum) < 0.01
+
+    def test_no_lat_skips_xatlas(self):
+        details = estimate_time_details(10_000, 500, has_lat=False)
+        assert details["xatlas"] == 0.0
+        assert details["rasterize"] == 0.0
+        assert details["bake"] == 0.0
+
+    def test_respects_subdivide_level(self):
+        d0 = estimate_time_details(10_000, 100, has_lat=True, subdivide=0)
+        d2 = estimate_time_details(10_000, 100, has_lat=True, subdivide=2)
+        assert d2["xatlas"] > d0["xatlas"]
+        assert d0["subdivide"] == 0.0
 
 
 class TestRunCartoWizard:

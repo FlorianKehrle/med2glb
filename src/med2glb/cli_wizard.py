@@ -50,43 +50,60 @@ def _mesh_bbox_mm(mesh: CartoMesh) -> str:
     return f"{extent[0]:.0f}×{extent[1]:.0f}×{extent[2]:.0f} mm"
 
 
+def estimate_time_details(
+    n_triangles: int,
+    n_points: int,
+    has_lat: bool,
+    subdivide: int = 2,
+    n_frames: int = 30,
+) -> dict[str, float]:
+    """Per-step time estimates in seconds.
+
+    Returns a dict with keys: subdivide, mapping, xatlas, rasterize, bake,
+    vectors, total.  Values are wall-clock seconds (float).
+
+    Heuristic derived from observed timings on typical hardware.
+    """
+    post_sub = n_triangles * (4 ** subdivide) if subdivide > 0 else n_triangles
+
+    t_subdivide = post_sub / 100_000 * 1.0 if subdivide > 0 else 0.0
+    t_mapping = n_points / 1_000 * 0.5
+    # xatlas: power-law model from carto_builder benchmarks (superlinear)
+    t_xatlas = 6.50e-08 * (post_sub ** 1.79) if has_lat else 0.0
+    # Rasterization: ~3.5s per 100k faces
+    t_rasterize = post_sub / 100_000 * 3.5 if has_lat else 0.0
+    # Texture baking: ~0.3s per 100k post-sub triangles × n_frames
+    t_bake = post_sub / 100_000 * 0.3 * n_frames if has_lat else 0.0
+    t_vectors = 30.0 if has_lat and n_points >= 30 else 0.0
+
+    return {
+        "subdivide": t_subdivide,
+        "mapping": t_mapping,
+        "xatlas": t_xatlas,
+        "rasterize": t_rasterize,
+        "bake": t_bake,
+        "vectors": t_vectors,
+        "total": t_subdivide + t_mapping + t_xatlas + t_rasterize + t_bake + t_vectors,
+    }
+
+
+def _format_est(seconds: float) -> str:
+    """Format an estimate as a short human-readable string."""
+    if seconds < 60:
+        return f"{max(seconds, 1):.0f}s"
+    return f"{seconds / 60:.0f}min"
+
+
 def estimate_time(
     n_triangles: int,
     n_points: int,
     has_lat: bool,
 ) -> str:
-    """Rough processing time estimate based on triangle/point counts.
+    """Rough total processing time estimate (formatted string).
 
-    Heuristic derived from observed timings on typical hardware:
-    - Subdivision dominates for large meshes (~16x faces at level 2)
-    - xatlas UV unwrap is the single biggest step (superlinear scaling)
-    - Texture baking scales with frame count × vertex count
-    - Vector generation adds ~30-60s for meshes with points
-
-    The estimate assumes default settings (subdivide=2, 30 animation frames,
-    both static+animated output).
+    Assumes default settings (subdivide=2, 30 animation frames).
     """
-    # Post-subdivision triangle count (default subdivide=2 → ~16x)
-    post_sub = n_triangles * 16
-
-    # Base: subdivision + mapping + mesh processing
-    # ~1s per 100k post-sub triangles for subdivision
-    t_subdivide = post_sub / 100_000 * 1.0
-
-    # xatlas: power-law model matching carto_builder._estimate_xatlas_time
-    # Coefficients fitted from real xatlas benchmarks (superlinear scaling)
-    t_xatlas = 6.50e-08 * (post_sub ** 1.79)
-
-    # Texture baking: ~0.3s per 100k post-sub triangles × 30 frames
-    t_bake = post_sub / 100_000 * 0.3 * 30
-
-    # Point mapping: ~0.5s per 1k points (KDTree + IDW)
-    t_mapping = n_points / 1_000 * 0.5
-
-    # Vector generation for meshes with LAT data and enough points
-    t_vectors = 30.0 if has_lat and n_points >= 30 else 0.0
-
-    total = t_subdivide + t_xatlas + t_bake + t_mapping + t_vectors
+    total = estimate_time_details(n_triangles, n_points, has_lat)["total"]
 
     if total < 10:
         return "~{:.0f} s".format(max(total, 1))
