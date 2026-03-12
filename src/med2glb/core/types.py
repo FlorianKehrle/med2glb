@@ -164,6 +164,13 @@ class CartoMesh:
     color_names: list[str]  # names of per-vertex color channels
     transparent_group_ids: list[int] = field(default_factory=list)
     structure_name: str = ""
+    vertex_color_values: dict[str, np.ndarray] = field(default_factory=dict)
+    """Per-vertex scalar values from the mesh [VerticesColorsSection].
+
+    Keys are lowercase coloring names (e.g. "lat", "bipolar", "unipolar").
+    Values are float64 arrays [N] with NaN for sentinel/invalid entries.
+    Empty dict when the section is absent or has no valid channels.
+    """
 
 
 @dataclass

@@ -83,8 +83,9 @@ def _extract_active_lat(
 ) -> np.ndarray:
     """Map LAT values from sparse points to mesh_data vertices via KDTree.
 
-    Handles subdivision-dependent interpolation (IDW for subdivided,
-    NN + linear for raw) and resamples to the active vertex set in mesh_data.
+    Prefers pre-computed vertex values from the mesh file's
+    [VerticesColorsSection] when available (matches CARTO display exactly).
+    Falls back to IDW/NN interpolation from car-file points.
 
     Args:
         mesh: Original CARTO mesh (pre-subdivision).
@@ -110,25 +111,31 @@ def _extract_active_lat(
     else:
         anim_mesh = mesh
 
-    if progress_cb:
-        progress_cb("Mapping LAT values...")
-    if subdivide > 0:
-        lat_values = map_points_to_vertices_idw(anim_mesh, points, field="lat")
+    # Prefer CARTO's own pre-computed vertex LAT values
+    mesh_lat = anim_mesh.vertex_color_values.get("lat")
+    if mesh_lat is not None and len(mesh_lat) == len(anim_mesh.vertices):
+        lat_values = mesh_lat.copy()
     else:
-        lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
-        lat_values = interpolate_sparse_values(anim_mesh, lat_values)
+        # Fallback: interpolate from sparse car-file points
+        if progress_cb:
+            progress_cb("Mapping LAT values...")
+        if subdivide > 0:
+            lat_values = map_points_to_vertices_idw(anim_mesh, points, field="lat")
+        else:
+            lat_values = map_points_to_vertices(anim_mesh, points, field="lat")
+            lat_values = interpolate_sparse_values(anim_mesh, lat_values)
 
-    # Distance cutoff for sparse LAT data (same logic as carto_mapper)
-    from med2glb.io.carto_mapper import extract_point_field
-    point_positions, point_values = extract_point_field(points, "lat")
-    valid_ratio = len(point_values) / len(points) if points else 1.0
-    if valid_ratio < 0.4 and len(point_positions) >= 2:
-        from scipy.spatial import KDTree as _KDTree
-        dist_tree = _KDTree(point_positions)
-        distances, _ = dist_tree.query(anim_mesh.vertices)
-        cutoff_pct = min(80, max(20, valid_ratio * 150))
-        max_distance = float(np.percentile(distances, cutoff_pct))
-        lat_values[distances > max_distance] = np.nan
+        # Distance cutoff for sparse LAT data (same logic as carto_mapper)
+        from med2glb.io.carto_mapper import extract_point_field
+        point_positions, point_values = extract_point_field(points, "lat")
+        valid_ratio = len(point_values) / len(points) if points else 1.0
+        if valid_ratio < 0.4 and len(point_positions) >= 2:
+            from scipy.spatial import KDTree as _KDTree
+            dist_tree = _KDTree(point_positions)
+            distances, _ = dist_tree.query(anim_mesh.vertices)
+            cutoff_pct = min(80, max(20, valid_ratio * 150))
+            max_distance = float(np.percentile(distances, cutoff_pct))
+            lat_values[distances > max_distance] = np.nan
 
     # Resample to mesh_data vertices (fill-stripping may differ)
     from scipy.spatial import KDTree
@@ -529,11 +536,22 @@ def _convert_carto_meshes(
             unit = _UNITS.get(coloring, "")
             if coloring in _DEFAULT_RANGES:
                 clamp_range = _DEFAULT_RANGES[coloring]
-            elif active_lat is not None and is_lat:
-                clamp_range = (
-                    float(np.nanmin(active_lat)),
-                    float(np.nanmax(active_lat)),
-                )
+            elif is_lat:
+                # Use CARTO's own pre-computed vertex values for the range
+                # (matches the CARTO viewer display exactly).
+                mesh_lat = mesh.vertex_color_values.get("lat")
+                if mesh_lat is not None and np.any(~np.isnan(mesh_lat)):
+                    clamp_range = (
+                        float(np.nanmin(mesh_lat)),
+                        float(np.nanmax(mesh_lat)),
+                    )
+                elif active_lat is not None:
+                    clamp_range = (
+                        float(np.nanmin(active_lat)),
+                        float(np.nanmax(active_lat)),
+                    )
+                else:
+                    clamp_range = (0.0, 1.0)
             else:
                 clamp_range = (0.0, 1.0)
 

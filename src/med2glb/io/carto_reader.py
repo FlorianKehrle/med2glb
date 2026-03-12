@@ -155,6 +155,13 @@ def parse_mesh_file(path: Path) -> CartoMesh:
     # Parse triangles
     faces, face_group_ids = _parse_triangles_section(text, num_triangle)
 
+    # Parse per-vertex color values (LAT, bipolar, unipolar from CARTO's
+    # own interpolation — used for coloring instead of re-interpolating
+    # from sparse car-file points).
+    vertex_color_values = _parse_vertices_colors_section(
+        text, color_names, num_vertex,
+    )
+
     structure_name = path.stem
 
     return CartoMesh(
@@ -168,6 +175,7 @@ def parse_mesh_file(path: Path) -> CartoMesh:
         color_names=color_names,
         transparent_group_ids=transparent_group_ids,
         structure_name=structure_name,
+        vertex_color_values=vertex_color_values,
     )
 
 
@@ -284,6 +292,73 @@ def _extract_section(text: str, section_name: str) -> str:
     if next_section == -1:
         return text[start:]
     return text[start:next_section]
+
+
+# Canonical lowercase names for the coloring channels we use.
+_COLOR_NAME_MAP: dict[str, str] = {
+    "lat": "lat",
+    "bipolar": "bipolar",
+    "unipolar": "unipolar",
+}
+
+
+def _parse_vertices_colors_section(
+    text: str,
+    color_names: list[str],
+    num_vertex: int,
+) -> dict[str, np.ndarray]:
+    """Parse [VerticesColorsSection] into per-vertex scalar arrays.
+
+    Each row: ``ID = val0 val1 val2 ...`` with one column per color channel
+    listed in *color_names* (from [GeneralAttributes] ColorsNames).
+
+    Returns a dict mapping lowercase coloring name → float64 array [N] with
+    NaN where the original value was the -10000 sentinel.  Only channels
+    present in ``_COLOR_NAME_MAP`` are returned.
+    """
+    section = _extract_section(text, "VerticesColorsSection")
+    if not section:
+        return {}
+
+    # Determine which column indices to keep
+    col_map: dict[int, str] = {}  # column_index → canonical name
+    for idx, name in enumerate(color_names):
+        canonical = _COLOR_NAME_MAP.get(name.lower())
+        if canonical is not None:
+            col_map[idx] = canonical
+
+    if not col_map:
+        return {}
+
+    # Parse data lines
+    data_lines: list[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+        parts = stripped.split("=", 1)
+        if len(parts) == 2:
+            data_lines.append(parts[1])
+
+    if not data_lines:
+        return {}
+
+    from io import StringIO
+    block = "\n".join(data_lines)
+    data = np.genfromtxt(StringIO(block), dtype=np.float64)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+
+    result: dict[str, np.ndarray] = {}
+    sentinel = float(CARTO_LAT_SENTINEL)  # -10000
+    for col_idx, canonical in col_map.items():
+        if col_idx >= data.shape[1]:
+            continue
+        values = data[:, col_idx].copy()
+        values[values == sentinel] = np.nan
+        result[canonical] = values
+
+    return result
 
 
 def _parse_vertices_section(

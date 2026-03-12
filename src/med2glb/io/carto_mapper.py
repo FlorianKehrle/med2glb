@@ -361,6 +361,13 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
     _, nn_idx = tree.query(new_vertices)
     new_group_ids = clean_group_ids[nn_idx]
 
+    # Propagate per-vertex color values (LAT, bipolar, unipolar) via NN
+    new_color_values: dict[str, np.ndarray] = {}
+    if mesh.vertex_color_values:
+        for name, orig_vals in mesh.vertex_color_values.items():
+            clean_vals = orig_vals[used_verts]
+            new_color_values[name] = clean_vals[nn_idx]
+
     # Mark fill-only vertices as inactive so carto_mesh_to_mesh_data
     # strips them.  Fill faces overlap the visible surface and cause
     # z-fighting / pinch artifacts if rendered.
@@ -392,6 +399,7 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
         color_names=mesh.color_names,
         transparent_group_ids=mesh.transparent_group_ids,
         structure_name=mesh.structure_name,
+        vertex_color_values=new_color_values,
     )
 
 
@@ -476,8 +484,20 @@ def carto_mesh_to_mesh_data(
 
     # Compute vertex colors
     vertex_colors = None
-    if points:
-        # Map sparse points to all mesh vertices first, then filter
+
+    # Prefer pre-computed vertex values from the mesh file's
+    # [VerticesColorsSection] — these match what CARTO displays.
+    mesh_color_vals = mesh.vertex_color_values.get(coloring)
+    has_mesh_colors = mesh_color_vals is not None and len(mesh_color_vals) > 0
+
+    if has_mesh_colors:
+        active_values = mesh_color_vals[active_verts]
+        colormap_fn = COLORMAPS.get(coloring)
+        if colormap_fn:
+            vertex_colors = colormap_fn(active_values, clamp_range=clamp_range)
+    elif points:
+        # Fallback: map sparse car-file points via IDW (for meshes
+        # without a VerticesColorsSection).
         if actually_subdivided:
             all_values = map_points_to_vertices_idw(mesh, points, field=coloring)
         else:
