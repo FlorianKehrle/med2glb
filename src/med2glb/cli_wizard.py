@@ -89,9 +89,15 @@ def estimate_time_details(
 
 def _format_est(seconds: float) -> str:
     """Format an estimate as a short human-readable string."""
+    seconds = max(seconds, 1)
     if seconds < 60:
-        return f"{max(seconds, 1):.0f}s"
-    return f"{seconds / 60:.0f}min"
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        m, s = divmod(int(seconds), 60)
+        return f"{m}m {s}s" if s else f"{m}m"
+    h, rem = divmod(int(seconds), 3600)
+    m = rem // 60
+    return f"{h}h {m}m" if m else f"{h}h"
 
 
 def estimate_time(
@@ -105,12 +111,14 @@ def estimate_time(
     """
     total = estimate_time_details(n_triangles, n_points, has_lat)["total"]
 
-    if total < 10:
+    if total < 60:
         return "~{:.0f} s".format(max(total, 1))
-    elif total < 120:
-        return "~{:.0f} s".format(total)
-    else:
-        return "~{:.0f} min".format(total / 60)
+    if total < 3600:
+        m, s = divmod(int(total), 60)
+        return "~{}m {}s".format(m, s) if s else "~{}m".format(m)
+    h, rem = divmod(int(total), 3600)
+    m = rem // 60
+    return "~{}h {}m".format(h, m) if m else "~{}h".format(h)
 
 
 @dataclass

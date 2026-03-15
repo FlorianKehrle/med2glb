@@ -153,12 +153,12 @@ class TestEstimateTime:
 
     def test_large_mesh_minutes(self):
         result = estimate_time(200_000, 2000, has_lat=True)
-        assert "min" in result
+        assert "m" in result
 
     def test_no_points_no_vectors(self):
         # With 0 points and no LAT, should still return a time
         result = estimate_time(500, 0, has_lat=False)
-        assert "s" in result or "min" in result
+        assert "s" in result or "m" in result
 
 
 class TestEstimateTimeDetails:
