@@ -25,9 +25,9 @@ from med2glb.glb.vertex_color_bake import compute_texture_size
 
 logger = logging.getLogger("med2glb")
 
-# Highlight ring parameters (tuned to match CARTO PRIME V7 "Map Replay" video)
-_RING_WIDTH = 0.025  # sigma of Gaussian -- narrow, sharp band like the real CARTO system
-_HIGHLIGHT_ADD = np.array([0.55, 0.55, 0.55], dtype=np.float32)  # additive white brightness
+# Highlight ring parameters (tuned to match CARTO3 excitation ring)
+_RING_WIDTH = 0.10  # sigma of Gaussian — wide, soft gradient like the real CARTO system
+_RING_WHITE_BLEND = 0.55  # how much to brighten LAT color toward white (0=pure LAT, 1=pure white)
 
 # xatlas time estimation — empirical power-law model: t = k * n_faces^exp
 # Fitted from 5 real CARTO meshes (v7.1 + v7.2, subdiv 0-2, 18K-506K faces).
@@ -121,17 +121,23 @@ def prepare_animated_cache(
     else:
         base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
 
-    # Generate emissive ring colors for each frame (ring only, no base)
+    # Generate emissive ring colors for each frame.
+    # The ring adapts to the local LAT color: each vertex's base color is
+    # brightened toward white, so the ring glows red-white in red regions,
+    # blue-white in blue regions, etc. — matching CARTO3 reference behavior.
     t_values = np.linspace(0, 1, n_frames).reshape(-1, 1)  # (F, 1)
     sigma_sq_2 = 2 * _RING_WIDTH ** 2
     ring_all = np.exp(-((lat_norm[np.newaxis, :] - t_values) ** 2) / sigma_sq_2)  # (F, N)
     ring_all[:, ~valid_lat] = 0.0
-    # Emissive colors: ring intensity * highlight color, as RGBA with A=1
-    emissive_all = ring_all[:, :, np.newaxis] * _HIGHLIGHT_ADD[np.newaxis, np.newaxis, :]  # (F, N, 3)
+    # Per-vertex highlight color: lerp base LAT color toward white
+    base_rgb = base_colors[:, :3]  # (N, 3)
+    highlight_rgb = base_rgb + _RING_WHITE_BLEND * (1.0 - base_rgb)  # (N, 3)
+    # Emissive = ring_intensity * highlight_color, as RGBA with A=1
+    emissive_all = ring_all[:, :, np.newaxis] * highlight_rgb[np.newaxis, :, :]  # (F, N, 3)
     emissive_rgba = np.zeros((n_frames, n_verts, 4), dtype=np.float32)
     emissive_rgba[:, :, :3] = emissive_all
     emissive_rgba[:, :, 3] = 1.0
-    del ring_all, emissive_all
+    del ring_all, emissive_all, highlight_rgb
 
     # UV unwrap ONCE with xatlas
     from med2glb.glb.vertex_color_bake import (
