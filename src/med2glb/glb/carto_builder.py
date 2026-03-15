@@ -280,7 +280,7 @@ def build_carto_static_glb(
             baseColorTexture=pygltflib.TextureInfo(index=0),
             baseColorFactor=[1.0, 1.0, 1.0, 1.0],
             metallicFactor=0.0,
-            roughnessFactor=0.7,
+            roughnessFactor=0.45,
         ),
         doubleSided=True,
     )
@@ -433,7 +433,7 @@ def build_carto_recolored_static_glb(
             baseColorTexture=pygltflib.TextureInfo(index=0),
             baseColorFactor=[1.0, 1.0, 1.0, 1.0],
             metallicFactor=0.0,
-            roughnessFactor=0.7,
+            roughnessFactor=0.45,
         ),
         doubleSided=True,
     )
@@ -697,7 +697,7 @@ def build_carto_animated_glb(
                 baseColorTexture=pygltflib.TextureInfo(index=base_tex_idx),
                 baseColorFactor=[1.0, 1.0, 1.0, 1.0],
                 metallicFactor=0.0,
-                roughnessFactor=0.7,
+                roughnessFactor=0.45,
             ),
             emissiveTexture=pygltflib.TextureInfo(index=emissive_tex_indices[fi]),
             emissiveFactor=[1.0, 1.0, 1.0],

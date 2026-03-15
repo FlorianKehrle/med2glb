@@ -63,7 +63,7 @@ _LAT_STOPS = [
     (0.4, 0.0, 1.0, 0.0),    # green
     (0.6, 0.0, 1.0, 1.0),    # cyan
     (0.8, 0.0, 0.0, 1.0),    # blue
-    (1.0, 0.5, 0.0, 1.0),    # purple — latest
+    (1.0, 0.8, 0.0, 1.0),    # purple/magenta — latest
 ]
 
 # Bipolar voltage: red (scar) → yellow → green → cyan → purple (healthy)
@@ -72,7 +72,7 @@ _BIPOLAR_STOPS = [
     (0.25, 1.0, 1.0, 0.0),   # yellow
     (0.5, 0.0, 1.0, 0.0),    # green
     (0.75, 0.0, 1.0, 1.0),   # cyan
-    (1.0, 0.5, 0.0, 1.0),    # purple — normal voltage
+    (1.0, 0.8, 0.0, 1.0),    # purple/magenta — normal voltage
 ]
 
 # Unipolar voltage: red (low) → yellow → green → blue (high)

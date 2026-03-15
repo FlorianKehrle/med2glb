@@ -361,12 +361,31 @@ def subdivide_carto_mesh(mesh: CartoMesh, iterations: int) -> CartoMesh:
     _, nn_idx = tree.query(new_vertices)
     new_group_ids = clean_group_ids[nn_idx]
 
-    # Propagate per-vertex color values (LAT, bipolar, unipolar) via NN
+    # Propagate per-vertex color values (LAT, bipolar, unipolar) via IDW
+    # interpolation from K nearest original vertices.  Pure NN creates
+    # Voronoi-cell boundaries with sharp color jumps visible as banding
+    # artifacts after subdivision.
     new_color_values: dict[str, np.ndarray] = {}
     if mesh.vertex_color_values:
+        k = min(8, len(clean_vertices))
+        dist_k, idx_k = tree.query(new_vertices, k=k)
+        if k == 1:
+            dist_k = dist_k[:, np.newaxis]
+            idx_k = idx_k[:, np.newaxis]
         for name, orig_vals in mesh.vertex_color_values.items():
             clean_vals = orig_vals[used_verts]
-            new_color_values[name] = clean_vals[nn_idx]
+            vals_k = clean_vals[idx_k]
+            valid_k = ~np.isnan(vals_k)
+            raw_w = 1.0 / np.maximum(dist_k, 1e-10)
+            weights = np.where(valid_k, raw_w, 0.0)
+            w_sum = weights.sum(axis=1)
+            safe_vals = np.where(valid_k, vals_k, 0.0)
+            interpolated = np.where(
+                w_sum > 0,
+                np.sum(weights * safe_vals, axis=1) / w_sum,
+                np.nan,
+            )
+            new_color_values[name] = interpolated
 
     # Mark fill-only vertices as inactive so carto_mesh_to_mesh_data
     # strips them.  Fill faces overlap the visible surface and cause
@@ -556,7 +575,7 @@ def carto_mesh_to_mesh_data(
             base_color=(1.0, 1.0, 1.0),
             alpha=1.0,
             metallic=0.0,
-            roughness=0.7,
+            roughness=0.45,
             name=mesh.structure_name,
             unlit=False,
         ),
