@@ -25,6 +25,12 @@ _CARTO_VERSION_LABELS: dict[str, str] = {
     "6.0": "CARTO 3 v7.2+",
 }
 
+# Minimum valid measurement points required for full conversion
+# (subdivision + xatlas UV unwrap + texture baking).  Below this
+# threshold the data is too sparse for meaningful color mapping;
+# output a plain mesh with the default CARTO mesh color instead.
+_MIN_VALID_POINTS = 50
+
 
 def _carto_version_label(version: str) -> str:
     """Map file-format version to a human-readable CARTO system label."""
@@ -360,6 +366,51 @@ def _convert_carto_meshes(
                 f"\n[yellow]Skipping {mesh.structure_name}: "
                 f"no valid data for any coloring[/yellow]"
             )
+            continue
+
+        # Guard: skip expensive pipeline when data is too sparse.
+        # Count max valid measurement points across all requested colorings.
+        _max_valid = 0
+        if points:
+            for c in available_colorings:
+                _, _vv = extract_point_field(points, c)
+                _max_valid = max(_max_valid, len(_vv))
+        if _max_valid < _MIN_VALID_POINTS:
+            # Also check mesh-embedded vertex colors (VerticesColorsSection)
+            for c in available_colorings:
+                _vcv = mesh.vertex_color_values.get(c)
+                if _vcv is not None:
+                    _max_valid = max(_max_valid, int(np.sum(~np.isnan(_vcv))))
+        if _max_valid < _MIN_VALID_POINTS:
+            console.print(
+                f"\n[yellow]⚠ {mesh.structure_name}: only {_max_valid} valid "
+                f"measurement points (minimum {_MIN_VALID_POINTS}) — "
+                f"outputting default-color mesh[/yellow]"
+            )
+            import logging
+            logging.getLogger("med2glb").warning(
+                "Insufficient data for '%s': %d valid points (min %d). "
+                "Skipping subdivision + xatlas. Using default mesh color.",
+                mesh.structure_name, _max_valid, _MIN_VALID_POINTS,
+            )
+            # Build plain mesh with default color (no subdivision, no xatlas)
+            plain_mesh = carto_mesh_to_mesh_data(
+                mesh, None, coloring="lat", subdivide=0,
+            )
+            # Clear vertex colors so build_glb skips expensive xatlas baking
+            from dataclasses import replace as dc_replace
+            plain_mesh = dc_replace(
+                plain_mesh,
+                vertex_colors=None,
+                material=dc_replace(
+                    plain_mesh.material,
+                    base_color=mesh.mesh_color[:3],
+                ),
+            )
+            out_path = carto_output_dir / f"{mesh.structure_name}.glb"
+            build_glb([plain_mesh], out_path, source_units="mm")
+            file_kb = out_path.stat().st_size // 1024
+            console.print(f"  → {out_path.name}  ({file_kb:,} KB, default color)")
             continue
 
         # Count total variants for the status message
