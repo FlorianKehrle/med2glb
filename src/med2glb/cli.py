@@ -287,9 +287,11 @@ def main(
                 f"({pct}% reduction)"
             )
         else:
+            # Remove the copy — no useful compression was achieved
+            target_path.unlink(missing_ok=True)
             console.print(
                 f"[yellow]No further compression possible:[/yellow] "
-                f"{new_size / 1024 / 1024:.1f} MB"
+                f"{original_size / 1024 / 1024:.1f} MB"
             )
         raise typer.Exit()
 

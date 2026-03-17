@@ -115,9 +115,12 @@ def _has_gltfpack() -> bool:
 def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
     """Run gltfpack on a GLB for mesh quantization + compression.
 
-    Uses KHR_mesh_quantization for vertex attribute quantization and
-    EXT_meshopt_compression for buffer-level compression.  Both are
-    supported by glTFast (Unity) with the meshoptimizer package.
+    Uses KHR_mesh_quantization for vertex attribute quantization.
+    For **static** GLBs, also applies EXT_meshopt_compression (``-cc``)
+    for buffer-level compression.  Animated GLBs skip ``-cc`` because
+    gltfpack's meshopt encoding of animation buffers (especially STEP
+    interpolation scale toggles) causes playback artefacts on glTFast /
+    HoloLens with the experimental meshopt decompressor package.
 
     Legend/info nodes are stripped before gltfpack (which would damage
     their text textures via quantization and texture transforms) and
@@ -133,22 +136,28 @@ def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
     if use_temp:
         target = path.with_suffix(".gltfpack.glb")
 
+    # Detect animations — skip meshopt (-cc) for animated GLBs
+    has_anim = _glb_has_animations(path)
+
     # Strip legend/info nodes before gltfpack (it damages text textures)
     stripped_path = path.with_suffix(".stripped.glb")
     legend_bytes = _strip_metadata_nodes(path, stripped_path)
     gltfpack_input = stripped_path if legend_bytes else path
 
+    cmd = [
+        "gltfpack",
+        "-i", str(gltfpack_input),
+        "-o", str(target),
+        "-vp", "14",        # position quantization bits
+        "-vt", "12",        # texcoord quantization bits
+        "-vn", "8",         # normal quantization bits
+    ]
+    if not has_anim:
+        cmd.append("-cc")   # meshopt compression (static GLBs only)
+
     try:
         subprocess.run(
-            [
-                "gltfpack",
-                "-i", str(gltfpack_input),
-                "-o", str(target),
-                "-vp", "14",        # position quantization bits
-                "-vt", "12",        # texcoord quantization bits
-                "-vn", "8",         # normal quantization bits
-                "-cc",              # meshopt compression (EXT_meshopt_compression)
-            ],
+            cmd,
             check=True,
             capture_output=True,
             timeout=300,
