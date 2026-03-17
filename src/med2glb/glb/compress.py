@@ -70,22 +70,25 @@ def _glb_has_animations(path: Path) -> bool:
 def _strategy_auto(path: Path, max_bytes: int) -> bool:
     """Auto-select best compression strategy based on GLB content.
 
-    Animated GLBs (morph targets) → gltfpack + KTX2.
-    Static GLBs → Draco + KTX2.
+    Animated GLBs → KTX2 only.  gltfpack is skipped because it wraps
+    every mesh node in an unnamed parent with compensating scale, which
+    doubles the node count and breaks CARTO's scale-toggle animation
+    pattern on HoloLens (phantom "controller" meshes appear).
+
+    Static GLBs → Draco + KTX2 (unchanged).
     Falls back gracefully when tools are unavailable.
     """
     has_anim = _glb_has_animations(path)
 
     if has_anim:
-        # Animated: gltfpack handles morph targets, then KTX2 for textures
-        if _has_gltfpack():
-            logger.info("Auto strategy: animated GLB detected → gltfpack + KTX2")
-            return _strategy_gltfpack_ktx2(path, max_bytes)
-        elif _has_toktx():
-            logger.info("Auto strategy: animated GLB, gltfpack unavailable → KTX2 only")
+        # Animated: KTX2 only — gltfpack restructures nodes (wraps every
+        # mesh in an unnamed child with 6e-05 scale), doubling node count
+        # and creating phantom objects on HoloLens.
+        if _has_toktx():
+            logger.info("Auto strategy: animated GLB → KTX2 only")
             return _strategy_ktx2(path, max_bytes)
         else:
-            logger.info("Auto strategy: animated GLB, no tools → downscale")
+            logger.info("Auto strategy: animated GLB, no toktx → downscale")
             return _strategy_downscale(path, max_bytes)
     else:
         # Static: Draco for mesh, then KTX2 for textures

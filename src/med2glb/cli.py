@@ -238,8 +238,8 @@ def main(
         effective_strategy = strategy
         if strategy == "auto":
             has_anim = _glb_has_animations(input_path)
-            if has_anim and _has_gltfpack():
-                effective_strategy = "gltfpack_ktx2"
+            if has_anim:
+                effective_strategy = "ktx2" if _has_toktx() else "downscale"
             elif _has_toktx():
                 effective_strategy = "ktx2"
             else:
