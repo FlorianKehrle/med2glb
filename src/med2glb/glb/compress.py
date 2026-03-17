@@ -118,6 +118,11 @@ def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
     Uses KHR_mesh_quantization for vertex attribute quantization and
     EXT_meshopt_compression for buffer-level compression.  Both are
     supported by glTFast (Unity) with the meshoptimizer package.
+
+    Legend/info nodes are stripped before gltfpack (which would damage
+    their text textures via quantization and texture transforms) and
+    merged back into the result afterwards.
+
     Writes to *output* if given, otherwise compresses in-place.
     """
     if not _has_gltfpack():
@@ -128,11 +133,16 @@ def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
     if use_temp:
         target = path.with_suffix(".gltfpack.glb")
 
+    # Strip legend/info nodes before gltfpack (it damages text textures)
+    stripped_path = path.with_suffix(".stripped.glb")
+    legend_bytes = _strip_metadata_nodes(path, stripped_path)
+    gltfpack_input = stripped_path if legend_bytes else path
+
     try:
         subprocess.run(
             [
                 "gltfpack",
-                "-i", str(path),
+                "-i", str(gltfpack_input),
                 "-o", str(target),
                 "-vp", "14",        # position quantization bits
                 "-vt", "12",        # texcoord quantization bits
@@ -147,12 +157,20 @@ def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
         logger.warning("gltfpack timed out after 300s")
         if use_temp and target.exists():
             target.unlink()
+        _cleanup_temp(stripped_path, legend_bytes)
         return False
     except subprocess.CalledProcessError as e:
         logger.warning(f"gltfpack failed: {e.stderr.decode(errors='replace')}")
         if use_temp and target.exists():
             target.unlink()
+        _cleanup_temp(stripped_path, legend_bytes)
         return False
+
+    # Re-add legend/info nodes to the gltfpacked result
+    if legend_bytes and target.exists():
+        _restore_metadata_nodes(target, legend_bytes)
+
+    _cleanup_temp(stripped_path, legend_bytes)
 
     if not target.exists():
         return False
@@ -173,6 +191,267 @@ def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
             return False
 
     return True
+
+
+def _cleanup_temp(stripped_path: Path, legend_bytes: bytes | None) -> None:
+    """Remove temporary stripped GLB if it was created."""
+    if legend_bytes and stripped_path.exists():
+        stripped_path.unlink()
+
+
+def _strip_metadata_nodes(
+    src: Path,
+    dst: Path,
+) -> bytes | None:
+    """Strip legend/info nodes from a GLB, saving the original for later restore.
+
+    Returns the original GLB bytes if metadata nodes were found and stripped,
+    or None if no metadata nodes were present (dst is not created).
+    """
+    gltf = pygltflib.GLTF2.load(str(src))
+    if not gltf.nodes:
+        return None
+
+    # Find metadata node indices
+    metadata_node_indices: set[int] = set()
+    for i, node in enumerate(gltf.nodes):
+        if node.name is None:
+            continue
+        name_lower = node.name.lower()
+        if any(kw in name_lower for kw in _METADATA_NODE_NAMES):
+            metadata_node_indices.add(i)
+
+    if not metadata_node_indices:
+        return None
+
+    # Save original for restore
+    original_bytes = src.read_bytes()
+
+    # Remove metadata nodes from scene roots
+    for scene in gltf.scenes:
+        if scene.nodes:
+            scene.nodes = [n for n in scene.nodes if n not in metadata_node_indices]
+
+    # Also remove from any parent node's children list
+    for node in gltf.nodes:
+        if node.children:
+            node.children = [c for c in node.children if c not in metadata_node_indices]
+
+    gltf.save(str(dst))
+    logger.debug(
+        "Stripped %d legend/info node(s) before gltfpack",
+        len(metadata_node_indices),
+    )
+    return original_bytes
+
+
+def _restore_metadata_nodes(packed_path: Path, original_bytes: bytes) -> None:
+    """Merge legend/info nodes from original GLB back into gltfpacked result.
+
+    Loads the original (pre-gltfpack) GLB, extracts legend/info nodes with
+    their full resource chains (meshes, materials, textures, images, bufferViews),
+    and appends them to the gltfpacked GLB.
+    """
+    orig_gltf = pygltflib.GLTF2.load_from_bytes(original_bytes)
+    packed_gltf = pygltflib.GLTF2.load(str(packed_path))
+    orig_blob = orig_gltf.binary_blob() or b""
+    packed_blob = bytearray(packed_gltf.binary_blob() or b"")
+
+    # Find metadata nodes in the original
+    metadata_node_indices: list[int] = []
+    for i, node in enumerate(orig_gltf.nodes):
+        if node.name is None:
+            continue
+        name_lower = node.name.lower()
+        if any(kw in name_lower for kw in _METADATA_NODE_NAMES):
+            metadata_node_indices.append(i)
+
+    if not metadata_node_indices:
+        return
+
+    # Track resource remapping
+    bv_remap: dict[int, int] = {}
+    acc_remap: dict[int, int] = {}
+    img_remap: dict[int, int] = {}
+    tex_remap: dict[int, int] = {}
+    mat_remap: dict[int, int] = {}
+    mesh_remap: dict[int, int] = {}
+    sampler_remap: dict[int, int] = {}
+
+    def _copy_bufferviews(bv_indices: set[int]) -> None:
+        for bv_idx in bv_indices:
+            if bv_idx in bv_remap:
+                continue
+            bv = orig_gltf.bufferViews[bv_idx]
+            data = orig_blob[bv.byteOffset:bv.byteOffset + bv.byteLength]
+            new_offset = len(packed_blob)
+            packed_blob.extend(data)
+            # 4-byte alignment
+            while len(packed_blob) % 4:
+                packed_blob.extend(b"\x00")
+            new_bv = pygltflib.BufferView(
+                buffer=0, byteOffset=new_offset, byteLength=bv.byteLength,
+                byteStride=bv.byteStride, target=bv.target,
+            )
+            bv_remap[bv_idx] = len(packed_gltf.bufferViews)
+            packed_gltf.bufferViews.append(new_bv)
+
+    def _copy_accessor(acc_idx: int) -> int:
+        if acc_idx in acc_remap:
+            return acc_remap[acc_idx]
+        acc = orig_gltf.accessors[acc_idx]
+        if acc.bufferView is not None:
+            _copy_bufferviews({acc.bufferView})
+        new_acc = pygltflib.Accessor(
+            bufferView=bv_remap.get(acc.bufferView, acc.bufferView),
+            byteOffset=acc.byteOffset,
+            componentType=acc.componentType,
+            count=acc.count,
+            type=acc.type,
+            max=acc.max,
+            min=acc.min,
+            normalized=acc.normalized,
+        )
+        new_idx = len(packed_gltf.accessors)
+        acc_remap[acc_idx] = new_idx
+        packed_gltf.accessors.append(new_acc)
+        return new_idx
+
+    def _copy_sampler(sampler_idx: int) -> int:
+        if sampler_idx in sampler_remap:
+            return sampler_remap[sampler_idx]
+        s = orig_gltf.samplers[sampler_idx]
+        new_idx = len(packed_gltf.samplers)
+        sampler_remap[sampler_idx] = new_idx
+        packed_gltf.samplers.append(pygltflib.Sampler(
+            magFilter=s.magFilter, minFilter=s.minFilter,
+            wrapS=s.wrapS, wrapT=s.wrapT,
+        ))
+        return new_idx
+
+    def _copy_image(img_idx: int) -> int:
+        if img_idx in img_remap:
+            return img_remap[img_idx]
+        img = orig_gltf.images[img_idx]
+        if img.bufferView is not None:
+            _copy_bufferviews({img.bufferView})
+        new_img = pygltflib.Image(
+            bufferView=bv_remap.get(img.bufferView, img.bufferView),
+            mimeType=img.mimeType,
+            name=img.name,
+        )
+        new_idx = len(packed_gltf.images)
+        img_remap[img_idx] = new_idx
+        packed_gltf.images.append(new_img)
+        return new_idx
+
+    def _copy_texture(tex_idx: int) -> int:
+        if tex_idx in tex_remap:
+            return tex_remap[tex_idx]
+        tex = orig_gltf.textures[tex_idx]
+        new_source = _copy_image(tex.source) if tex.source is not None else None
+        new_sampler = _copy_sampler(tex.sampler) if tex.sampler is not None else None
+        new_idx = len(packed_gltf.textures)
+        tex_remap[tex_idx] = new_idx
+        packed_gltf.textures.append(pygltflib.Texture(
+            sampler=new_sampler, source=new_source,
+        ))
+        return new_idx
+
+    def _copy_texinfo(ti: pygltflib.TextureInfo | None) -> pygltflib.TextureInfo | None:
+        if ti is None:
+            return None
+        return pygltflib.TextureInfo(index=_copy_texture(ti.index), texCoord=ti.texCoord)
+
+    def _copy_material(mat_idx: int) -> int:
+        if mat_idx in mat_remap:
+            return mat_remap[mat_idx]
+        mat = orig_gltf.materials[mat_idx]
+        pbr = None
+        if mat.pbrMetallicRoughness:
+            p = mat.pbrMetallicRoughness
+            pbr = pygltflib.PbrMetallicRoughness(
+                baseColorFactor=p.baseColorFactor,
+                baseColorTexture=_copy_texinfo(p.baseColorTexture),
+                metallicFactor=p.metallicFactor,
+                roughnessFactor=p.roughnessFactor,
+                metallicRoughnessTexture=_copy_texinfo(p.metallicRoughnessTexture),
+            )
+        new_mat = pygltflib.Material(
+            name=mat.name,
+            pbrMetallicRoughness=pbr,
+            emissiveTexture=_copy_texinfo(mat.emissiveTexture),
+            emissiveFactor=mat.emissiveFactor,
+            alphaMode=mat.alphaMode,
+            alphaCutoff=mat.alphaCutoff,
+            doubleSided=mat.doubleSided,
+            extensions=mat.extensions,
+        )
+        new_idx = len(packed_gltf.materials)
+        mat_remap[mat_idx] = new_idx
+        packed_gltf.materials.append(new_mat)
+        return new_idx
+
+    def _copy_mesh(mesh_idx: int) -> int:
+        if mesh_idx in mesh_remap:
+            return mesh_remap[mesh_idx]
+        mesh = orig_gltf.meshes[mesh_idx]
+        new_prims = []
+        for prim in mesh.primitives:
+            # Copy accessors
+            new_attrs = pygltflib.Attributes()
+            if prim.attributes.POSITION is not None:
+                new_attrs.POSITION = _copy_accessor(prim.attributes.POSITION)
+            if prim.attributes.NORMAL is not None:
+                new_attrs.NORMAL = _copy_accessor(prim.attributes.NORMAL)
+            if prim.attributes.TEXCOORD_0 is not None:
+                new_attrs.TEXCOORD_0 = _copy_accessor(prim.attributes.TEXCOORD_0)
+            if prim.attributes.COLOR_0 is not None:
+                new_attrs.COLOR_0 = _copy_accessor(prim.attributes.COLOR_0)
+            new_indices = _copy_accessor(prim.indices) if prim.indices is not None else None
+            new_mat = _copy_material(prim.material) if prim.material is not None else None
+            new_prims.append(pygltflib.Primitive(
+                attributes=new_attrs, indices=new_indices, material=new_mat,
+                mode=prim.mode,
+            ))
+        new_idx = len(packed_gltf.meshes)
+        mesh_remap[mesh_idx] = new_idx
+        packed_gltf.meshes.append(pygltflib.Mesh(name=mesh.name, primitives=new_prims))
+        return new_idx
+
+    # Copy each metadata node with its full resource chain
+    for node_idx in metadata_node_indices:
+        node = orig_gltf.nodes[node_idx]
+        new_mesh = _copy_mesh(node.mesh) if node.mesh is not None else None
+        new_node = pygltflib.Node(
+            name=node.name,
+            mesh=new_mesh,
+            translation=node.translation,
+            rotation=node.rotation,
+            scale=node.scale,
+        )
+        new_node_idx = len(packed_gltf.nodes)
+        packed_gltf.nodes.append(new_node)
+        # Add to first scene
+        if packed_gltf.scenes:
+            packed_gltf.scenes[0].nodes.append(new_node_idx)
+
+    # Update buffer length and save
+    packed_gltf.buffers[0].byteLength = len(packed_blob)
+    packed_gltf.set_binary_blob(bytes(packed_blob))
+
+    # Preserve KHR_materials_unlit extension (used by legend/info)
+    ext = "KHR_materials_unlit"
+    if packed_gltf.extensionsUsed is None:
+        packed_gltf.extensionsUsed = []
+    if ext not in packed_gltf.extensionsUsed:
+        packed_gltf.extensionsUsed.append(ext)
+
+    packed_gltf.save(str(packed_path))
+    logger.debug(
+        "Restored %d legend/info node(s) after gltfpack",
+        len(metadata_node_indices),
+    )
 
 
 def _strategy_gltfpack(path: Path, max_bytes: int) -> bool:
@@ -647,9 +926,68 @@ def optimize_textures_ktx2(path: Path) -> bool:
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-# Threshold for skipping small images (legend/info cards) during compression.
-# These are too small to benefit and text quality degrades significantly.
+# Node names that identify legend/info panels.  These are matched
+# case-insensitively via substring — matching the HL app's
+# ``IsMetadataObject`` logic (Loader.cs).
+_METADATA_NODE_NAMES = ("legend", "info")
+
+# Threshold for skipping small images during compression (safety net).
 _SMALL_IMAGE_THRESHOLD = 50 * 1024  # 50 KB
+
+
+def _classify_metadata_images(gltf: pygltflib.GLTF2) -> set[int]:
+    """Return the set of image bufferView indices belonging to legend/info nodes.
+
+    Traces node → mesh → primitive → material → texture → image to find
+    every image referenced by nodes whose name contains "legend" or "info".
+    """
+    # Collect material indices used by metadata nodes
+    metadata_mat_indices: set[int] = set()
+    for node in gltf.nodes:
+        if node.name is None or node.mesh is None:
+            continue
+        name_lower = node.name.lower()
+        if not any(kw in name_lower for kw in _METADATA_NODE_NAMES):
+            continue
+        mesh = gltf.meshes[node.mesh]
+        for prim in mesh.primitives:
+            if prim.material is not None:
+                metadata_mat_indices.add(prim.material)
+
+    if not metadata_mat_indices:
+        return set()
+
+    # Collect texture indices used by those materials
+    metadata_tex_indices: set[int] = set()
+    for mat_idx in metadata_mat_indices:
+        mat = gltf.materials[mat_idx]
+        if mat.pbrMetallicRoughness and mat.pbrMetallicRoughness.baseColorTexture:
+            metadata_tex_indices.add(mat.pbrMetallicRoughness.baseColorTexture.index)
+        if mat.emissiveTexture:
+            metadata_tex_indices.add(mat.emissiveTexture.index)
+        if mat.normalTexture:
+            metadata_tex_indices.add(mat.normalTexture.index)
+        if mat.occlusionTexture:
+            metadata_tex_indices.add(mat.occlusionTexture.index)
+
+    # Collect image bufferView indices
+    metadata_bvs: set[int] = set()
+    for tex_idx in metadata_tex_indices:
+        if tex_idx >= len(gltf.textures):
+            continue
+        img_idx = gltf.textures[tex_idx].source
+        if img_idx is None or img_idx >= len(gltf.images):
+            continue
+        bv = gltf.images[img_idx].bufferView
+        if bv is not None:
+            metadata_bvs.add(bv)
+
+    if metadata_bvs:
+        logger.debug(
+            "Excluding %d legend/info image(s) from compression (bufferViews: %s)",
+            len(metadata_bvs), metadata_bvs,
+        )
+    return metadata_bvs
 
 
 def _load_and_identify_images(
@@ -657,25 +995,29 @@ def _load_and_identify_images(
     *,
     skip_small: bool = True,
 ) -> tuple[pygltflib.GLTF2, bytes, set[int]]:
-    """Load a GLB and identify which bufferViews hold image data.
+    """Load a GLB and identify which bufferViews hold compressible image data.
 
-    When *skip_small* is True (default), images smaller than
-    ``_SMALL_IMAGE_THRESHOLD`` are excluded — these are typically
-    legend or info card textures where compression degrades text
-    readability with negligible size savings.
+    Excludes legend/info panel textures (identified by node name) which
+    contain rendered text that degrades under compression.  Also excludes
+    very small images when *skip_small* is True as a safety net.
     """
     gltf = pygltflib.GLTF2.load(str(path))
     blob = gltf.binary_blob() or b""
+
+    metadata_bvs = _classify_metadata_images(gltf)
+
     image_bv_set: set[int] = set()
     for img in gltf.images:
         if img.bufferView is None:
+            continue
+        if img.bufferView in metadata_bvs:
             continue
         if skip_small:
             bv = gltf.bufferViews[img.bufferView]
             if bv.byteLength < _SMALL_IMAGE_THRESHOLD:
                 logger.debug(
                     f"Skipping small image (bufferView {img.bufferView}, "
-                    f"{bv.byteLength} bytes) — likely legend/info card"
+                    f"{bv.byteLength} bytes)"
                 )
                 continue
         image_bv_set.add(img.bufferView)

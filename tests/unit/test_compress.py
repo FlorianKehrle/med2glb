@@ -12,6 +12,7 @@ from med2glb.glb.compress import (
     constrain_glb_size,
     optimize_textures_ktx2,
     _classify_emissive_textures,
+    _classify_metadata_images,
     _has_toktx,
     _image_to_ktx2,
     _reencode_image,
@@ -778,3 +779,179 @@ class TestEmissiveTextureClassification:
         assert uastc[:7] == b"\xabKTX 20"
         assert etc1s[:7] == b"\xabKTX 20"
         assert uastc != etc1s
+
+
+def _build_glb_with_legend(path: Path, size: int = 128) -> None:
+    """Build a GLB with a mesh node + legend node + info node."""
+    from med2glb.glb.builder import _pad_to_4
+    from med2glb.glb.texture import pixel_data_to_png
+
+    gltf = pygltflib.GLTF2(
+        scene=0,
+        scenes=[pygltflib.Scene(nodes=[])],
+        nodes=[],
+        meshes=[],
+        accessors=[],
+        bufferViews=[],
+        buffers=[],
+        materials=[],
+        textures=[],
+        images=[],
+        samplers=[pygltflib.Sampler(
+            magFilter=pygltflib.LINEAR,
+            minFilter=pygltflib.LINEAR,
+        )],
+    )
+    binary_data = bytearray()
+
+    # Helper: add a textured quad node
+    def _add_textured_node(name: str, tex_size: int):
+        rng = np.random.RandomState(42 + len(gltf.nodes))
+        pixel_data = rng.randint(0, 255, (tex_size, tex_size), dtype=np.uint8)
+        png_bytes = pixel_data_to_png(pixel_data.astype(np.float32))
+
+        img_offset = len(binary_data)
+        binary_data.extend(png_bytes)
+        _pad_to_4(binary_data)
+
+        img_bv = len(gltf.bufferViews)
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0, byteOffset=img_offset, byteLength=len(png_bytes),
+        ))
+        img_idx = len(gltf.images)
+        gltf.images.append(pygltflib.Image(bufferView=img_bv, mimeType="image/png"))
+        tex_idx = len(gltf.textures)
+        gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
+        mat_idx = len(gltf.materials)
+        gltf.materials.append(pygltflib.Material(
+            name=f"mat_{name}",
+            pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+                baseColorTexture=pygltflib.TextureInfo(index=tex_idx),
+                metallicFactor=0.0, roughnessFactor=1.0,
+            ),
+            doubleSided=True,
+        ))
+
+        # Geometry
+        vertices = np.array([[-0.5, -0.5, 0], [0.5, -0.5, 0], [0.5, 0.5, 0], [-0.5, 0.5, 0]], dtype=np.float32)
+        texcoords = np.array([[0, 1], [1, 1], [1, 0], [0, 0]], dtype=np.float32)
+        indices_arr = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint16)
+
+        acc_indices = []
+        for arr, target in [
+            (vertices, pygltflib.ARRAY_BUFFER),
+            (texcoords, pygltflib.ARRAY_BUFFER),
+            (indices_arr, pygltflib.ELEMENT_ARRAY_BUFFER),
+        ]:
+            off = len(binary_data)
+            raw = arr.tobytes()
+            binary_data.extend(raw)
+            _pad_to_4(binary_data)
+            bv_idx = len(gltf.bufferViews)
+            gltf.bufferViews.append(pygltflib.BufferView(
+                buffer=0, byteOffset=off, byteLength=len(raw), target=target,
+            ))
+            acc_idx = len(gltf.accessors)
+            if arr.dtype == np.float32 and arr.ndim == 2 and arr.shape[1] == 3:
+                gltf.accessors.append(pygltflib.Accessor(
+                    bufferView=bv_idx, componentType=pygltflib.FLOAT, count=len(arr),
+                    type=pygltflib.VEC3,
+                    max=arr.max(axis=0).tolist(), min=arr.min(axis=0).tolist(),
+                ))
+            elif arr.dtype == np.float32 and arr.ndim == 2 and arr.shape[1] == 2:
+                gltf.accessors.append(pygltflib.Accessor(
+                    bufferView=bv_idx, componentType=pygltflib.FLOAT, count=len(arr),
+                    type=pygltflib.VEC2,
+                ))
+            else:
+                gltf.accessors.append(pygltflib.Accessor(
+                    bufferView=bv_idx, componentType=pygltflib.UNSIGNED_SHORT,
+                    count=len(arr), type=pygltflib.SCALAR,
+                    max=[int(arr.max())], min=[int(arr.min())],
+                ))
+            acc_indices.append(acc_idx)
+
+        mesh_idx = len(gltf.meshes)
+        gltf.meshes.append(pygltflib.Mesh(
+            name=name,
+            primitives=[pygltflib.Primitive(
+                attributes=pygltflib.Attributes(POSITION=acc_indices[0], TEXCOORD_0=acc_indices[1]),
+                indices=acc_indices[2], material=mat_idx,
+            )],
+        ))
+        node_idx = len(gltf.nodes)
+        gltf.nodes.append(pygltflib.Node(name=name, mesh=mesh_idx))
+        gltf.scenes[0].nodes.append(node_idx)
+
+    _add_textured_node("heart_mesh", size)
+    _add_textured_node("legend", 64)
+    _add_textured_node("info", 64)
+
+    gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
+    gltf.set_binary_blob(bytes(binary_data))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    gltf.save(str(path))
+
+
+class TestMetadataExclusion:
+    """Tests for excluding legend/info nodes from compression."""
+
+    def test_classify_metadata_images_finds_legend_info(self, tmp_path):
+        """Should identify bufferViews belonging to legend and info nodes."""
+        path = tmp_path / "with_legend.glb"
+        _build_glb_with_legend(path)
+        gltf = pygltflib.GLTF2.load(str(path))
+
+        metadata_bvs = _classify_metadata_images(gltf)
+        # Should find 2 metadata images (legend + info)
+        assert len(metadata_bvs) == 2
+        # The heart_mesh image should NOT be in metadata set
+        heart_img_bv = gltf.images[0].bufferView  # first image = heart_mesh
+        assert heart_img_bv not in metadata_bvs
+
+    def test_classify_metadata_images_empty_without_legend(self, tmp_path):
+        """GLB without legend/info nodes should return empty set."""
+        path = tmp_path / "no_legend.glb"
+        _build_textured_glb(path, num_textures=2, size=32)
+        gltf = pygltflib.GLTF2.load(str(path))
+        assert _classify_metadata_images(gltf) == set()
+
+    def test_load_and_identify_excludes_metadata(self, tmp_path):
+        """_load_and_identify_images should exclude legend/info textures."""
+        from med2glb.glb.compress import _load_and_identify_images
+
+        path = tmp_path / "with_legend.glb"
+        _build_glb_with_legend(path, size=256)
+
+        gltf, blob, image_bv_set = _load_and_identify_images(path, skip_small=False)
+        # 3 images total, but only 1 (heart_mesh) should be compressible
+        assert len(gltf.images) == 3
+        assert len(image_bv_set) == 1
+
+    def test_jpeg_preserves_legend_texture(self, tmp_path):
+        """JPEG compression should not touch legend/info textures."""
+        path = tmp_path / "with_legend.glb"
+        _build_glb_with_legend(path, size=256)
+
+        gltf_before = pygltflib.GLTF2.load(str(path))
+        blob_before = gltf_before.binary_blob()
+        # Save original legend image bytes
+        legend_bv = gltf_before.bufferViews[gltf_before.images[1].bufferView]
+        legend_bytes_before = blob_before[legend_bv.byteOffset:legend_bv.byteOffset + legend_bv.byteLength]
+
+        original_size = path.stat().st_size
+        constrain_glb_size(path, max_bytes=original_size - 1, strategy="jpeg")
+
+        gltf_after = pygltflib.GLTF2.load(str(path))
+        blob_after = gltf_after.binary_blob()
+        # Legend image should be unchanged (still PNG)
+        legend_img = None
+        for node in gltf_after.nodes:
+            if node.name and "legend" in node.name.lower() and node.mesh is not None:
+                mat_idx = gltf_after.meshes[node.mesh].primitives[0].material
+                tex_idx = gltf_after.materials[mat_idx].pbrMetallicRoughness.baseColorTexture.index
+                img_idx = gltf_after.textures[tex_idx].source
+                legend_img = gltf_after.images[img_idx]
+                break
+        assert legend_img is not None
+        assert legend_img.mimeType == "image/png"
