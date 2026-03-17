@@ -249,6 +249,17 @@ def main(
         elif strategy == "gltfpack" and not _has_gltfpack():
             effective_strategy = "downscale"
 
+        # Check size before creating any output file
+        original_size = input_path.stat().st_size
+        max_bytes = max_size * 1024 * 1024
+
+        if original_size <= max_bytes:
+            console.print(
+                f"[green]Already within limit:[/green] "
+                f"{original_size / 1024 / 1024:.1f} MB ≤ {max_size} MB"
+            )
+            raise typer.Exit()
+
         # Default output: model_compressed_auto.glb (never overwrite original)
         if output is not None:
             target_path = output
@@ -258,16 +269,6 @@ def main(
             )
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(input_path, target_path)
-
-        original_size = target_path.stat().st_size
-        max_bytes = max_size * 1024 * 1024
-
-        if original_size <= max_bytes:
-            console.print(
-                f"[green]Already within limit:[/green] "
-                f"{original_size / 1024 / 1024:.1f} MB ≤ {max_size} MB"
-            )
-            raise typer.Exit()
 
         console.print(
             f"Compressing {target_path.name} "
