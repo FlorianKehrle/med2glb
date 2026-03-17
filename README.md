@@ -198,7 +198,7 @@ The wizard automatically assesses vector quality (minimum 30 points, ≥20 ms LA
 5. **Rasterize** — vertex colors baked into texture with 10-iteration gutter bleeding
 6. **Encode** — lossless PNG textures
 7. **Build GLB** — geometry, textures, PBR materials, animation keyframes
-8. **Compress** (optional) — auto-selects best strategy: meshopt geometry compression + KTX2 textures for animated models, Draco + KTX2 for static
+8. **Compress** (optional) — auto-selects best strategy: meshopt quantization + compression (`-cc`) + KTX2 textures for animated models, Draco + KTX2 for static
 
 Texture resolution scales with face count: 512px (≤5k), 1024px (≤20k), 2048px (≤80k), 4096px (>80k). For animated output, the full mesh is shared across all 30 frames — only the emissive texture changes per frame.
 
@@ -371,7 +371,7 @@ med2glb ./data/ --method compare  # Compare all methods
 
 ## GLB Compression
 
-Shrink GLB files to a target size with automatic strategy selection:
+Shrink GLB files to a target size with automatic strategy selection.  Optimized for **glTFast** (Unity/HoloLens):
 
 ```bash
 med2glb model.glb --compress                          # Auto-selects best strategy
@@ -384,15 +384,20 @@ med2glb model.glb --compress --strategy ktx2          # Force KTX2 textures only
 | Strategy | Method | Best For | Requires |
 |---|---|---|---|
 | `auto` (default) | Picks best strategy based on content | Everything | — |
-| `gltfpack` | Meshopt geometry + buffer compression | Animated GLBs (morph targets) | `gltfpack` |
-| `ktx2` | KTX2 GPU textures via Basis Universal | Texture-heavy static models | `toktx` |
+| `gltfpack` | Meshopt quantization + compression (`-cc`) | Animated GLBs (morph targets, CARTO) | `gltfpack` |
+| `ktx2` | KTX2 GPU textures — UASTC for base color, ETC1S for emissive | Texture-heavy models | `toktx` |
 | `draco` | Draco mesh compression (static only) | Static models | — |
 | `downscale` | Progressive texture resolution reduction | No tools available | — |
 | `jpeg` | JPEG re-encoding with decreasing quality | Quick size reduction | — |
 
-**Auto strategy** selects: animated GLB → gltfpack + KTX2, static GLB → Draco + KTX2, graceful fallback if tools aren't installed.
+**Auto strategy** selects: animated GLB → gltfpack (`-cc` meshopt) + KTX2, static GLB → Draco + KTX2, graceful fallback if tools aren't installed.
 
-> **HoloLens/AR note:** Animated CARTO GLBs are typically 50+ MB with 80%+ morph target data. KTX2 alone achieves only ~15% reduction. Install `gltfpack` for meshopt compression to reach 70-85% reduction.
+**glTF extensions used:**
+- `KHR_mesh_quantization` + `EXT_meshopt_compression` — vertex quantization and buffer compression via gltfpack
+- `KHR_texture_basisu` — GPU-compressed textures (UASTC for base color, ETC1S for emissive ring frames)
+- `KHR_draco_mesh_compression` — static mesh compression
+
+> **HoloLens/glTFast note:** Requires Unity packages: `com.unity.cloud.gltfast`, `com.unity.cloud.ktx`, `com.unity.cloud.draco`, `com.unity.meshopt.decompress`.  Animated CARTO GLBs with 30 frames typically compress from ~50 MB to ~10-15 MB with meshopt + KTX2.  Emissive ring textures use ETC1S encoding which transcodes to BC1 (4bpp) — half the GPU memory of UASTC→BC7.
 
 ---
 

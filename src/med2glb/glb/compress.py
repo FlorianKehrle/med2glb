@@ -113,10 +113,11 @@ def _has_gltfpack() -> bool:
 
 
 def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
-    """Run gltfpack on a GLB for vertex quantization.
+    """Run gltfpack on a GLB for mesh quantization + compression.
 
-    Uses KHR_mesh_quantization (widely supported) without EXT_meshopt_compression
-    to maximize compatibility with HoloLens, Windows 3D Viewer, and other runtimes.
+    Uses KHR_mesh_quantization for vertex attribute quantization and
+    EXT_meshopt_compression for buffer-level compression.  Both are
+    supported by glTFast (Unity) with the meshoptimizer package.
     Writes to *output* if given, otherwise compresses in-place.
     """
     if not _has_gltfpack():
@@ -136,6 +137,7 @@ def _apply_gltfpack(path: Path, output: Path | None = None) -> bool:
                 "-vp", "14",        # position quantization bits
                 "-vt", "12",        # texcoord quantization bits
                 "-vn", "8",         # normal quantization bits
+                "-cc",              # meshopt compression (EXT_meshopt_compression)
             ],
             check=True,
             capture_output=True,
@@ -387,8 +389,14 @@ def _has_toktx() -> bool:
     return shutil.which("toktx") is not None
 
 
-def _image_to_ktx2(image_bytes: bytes) -> bytes | None:
-    """Convert image bytes (PNG or JPEG) to KTX2 (UASTC + Zstandard) via ``toktx``.
+def _image_to_ktx2(image_bytes: bytes, encoding: str = "uastc") -> bytes | None:
+    """Convert image bytes (PNG or JPEG) to KTX2 via ``toktx``.
+
+    Encoding modes:
+      - ``"uastc"``: High-quality UASTC + Zstandard.  Best for base color
+        textures where detail matters.  Transcodes to BC7 on HoloLens.
+      - ``"etc1s"``: Smaller ETC1S + Zstandard.  Best for emissive ring
+        textures that are mostly black with a thin highlight band.
 
     Returns the KTX2 file bytes, or None on failure.
     """
@@ -405,8 +413,18 @@ def _image_to_ktx2(image_bytes: bytes) -> bytes | None:
             out_path = Path(td) / "output.ktx2"
             in_path.write_bytes(image_bytes)
 
-            subprocess.run(
-                [
+            if encoding == "etc1s":
+                cmd = [
+                    "toktx",
+                    "--t2",
+                    "--encode", "etc1s",
+                    "--clevel", "2",
+                    "--qlevel", "128",
+                    str(out_path),
+                    str(in_path),
+                ]
+            else:
+                cmd = [
                     "toktx",
                     "--t2",
                     "--encode", "uastc",
@@ -414,11 +432,9 @@ def _image_to_ktx2(image_bytes: bytes) -> bytes | None:
                     "--zcmp", "5",
                     str(out_path),
                     str(in_path),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=60,
-            )
+                ]
+
+            subprocess.run(cmd, check=True, capture_output=True, timeout=60)
 
             if out_path.exists():
                 return out_path.read_bytes()
@@ -426,6 +442,29 @@ def _image_to_ktx2(image_bytes: bytes) -> bytes | None:
         logger.debug(f"toktx encoding failed: {e}")
 
     return None
+
+
+def _classify_emissive_textures(gltf: pygltflib.GLTF2) -> set[int]:
+    """Return the set of image bufferView indices used as emissive textures.
+
+    Emissive textures (e.g. CARTO excitation ring frames) are mostly black
+    with a thin highlight band, so they compress much better with ETC1S than
+    the higher-quality UASTC used for base color textures.
+    """
+    emissive_bvs: set[int] = set()
+    for mat in gltf.materials:
+        if mat.emissiveTexture is None:
+            continue
+        tex_idx = mat.emissiveTexture.index
+        if tex_idx is None or tex_idx >= len(gltf.textures):
+            continue
+        img_idx = gltf.textures[tex_idx].source
+        if img_idx is None or img_idx >= len(gltf.images):
+            continue
+        bv = gltf.images[img_idx].bufferView
+        if bv is not None:
+            emissive_bvs.add(bv)
+    return emissive_bvs
 
 
 def _try_ktx2_compress(
@@ -436,10 +475,14 @@ def _try_ktx2_compress(
 ) -> tuple[bytearray, bool]:
     """Convert all images in the GLB to KTX2.
 
+    Uses UASTC for base color textures (high quality) and ETC1S for
+    emissive textures (mostly black, compresses much smaller).
     If *scale* < 1.0, downscale images before KTX2 encoding.
     Returns (new_blob, converted) where *converted* is True if any
     image was successfully converted.
     """
+    emissive_bvs = _classify_emissive_textures(gltf)
+
     new_blob = bytearray()
     new_offsets: dict[int, tuple[int, int]] = {}
     converted_bvs: set[int] = set()
@@ -460,7 +503,8 @@ def _try_ktx2_compress(
             if scale < 1.0:
                 src_data = _reencode_image(old_data, "PNG", 0, scale)
 
-            ktx2_data = _image_to_ktx2(src_data)
+            encoding = "etc1s" if bv_idx in emissive_bvs else "uastc"
+            ktx2_data = _image_to_ktx2(src_data, encoding=encoding)
             if ktx2_data is not None:
                 new_data = ktx2_data
                 converted_bvs.add(bv_idx)

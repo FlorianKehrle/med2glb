@@ -11,6 +11,7 @@ import pytest
 from med2glb.glb.compress import (
     constrain_glb_size,
     optimize_textures_ktx2,
+    _classify_emissive_textures,
     _has_toktx,
     _image_to_ktx2,
     _reencode_image,
@@ -621,3 +622,159 @@ def _build_mixed_size_glb(path: Path) -> None:
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
     gltf.set_binary_blob(bytes(binary_data))
     gltf.save(str(path))
+
+
+def _build_emissive_glb(path: Path, num_frames: int = 3, size: int = 64) -> None:
+    """Build a GLB with base color + emissive textures (like CARTO animated)."""
+    from med2glb.glb.builder import _pad_to_4
+    from med2glb.glb.texture import pixel_data_to_png
+
+    gltf = pygltflib.GLTF2(
+        scene=0,
+        scenes=[pygltflib.Scene(nodes=[])],
+        nodes=[],
+        meshes=[],
+        accessors=[],
+        bufferViews=[],
+        buffers=[],
+        materials=[],
+        textures=[],
+        images=[],
+        samplers=[pygltflib.Sampler(
+            magFilter=pygltflib.LINEAR,
+            minFilter=pygltflib.LINEAR,
+        )],
+    )
+    binary_data = bytearray()
+
+    # Image 0: base color texture (colorful)
+    rng = np.random.RandomState(42)
+    base_pixels = rng.randint(0, 255, (size, size), dtype=np.uint8)
+    base_png = pixel_data_to_png(base_pixels.astype(np.float32))
+
+    base_offset = len(binary_data)
+    binary_data.extend(base_png)
+    while len(binary_data) % 4:
+        binary_data.extend(b"\x00")
+
+    base_bv = len(gltf.bufferViews)
+    gltf.bufferViews.append(pygltflib.BufferView(
+        buffer=0, byteOffset=base_offset, byteLength=len(base_png),
+    ))
+    gltf.images.append(pygltflib.Image(bufferView=base_bv, mimeType="image/png"))
+    base_tex_idx = len(gltf.textures)
+    gltf.textures.append(pygltflib.Texture(sampler=0, source=0))
+
+    # Images 1..N: emissive textures (mostly black with thin ring)
+    emissive_tex_indices = []
+    for fi in range(num_frames):
+        em_pixels = np.zeros((size, size), dtype=np.uint8)
+        # Thin ring of brightness
+        row = int(size * (fi + 1) / (num_frames + 1))
+        em_pixels[max(0, row - 2):row + 2, :] = 200
+        em_png = pixel_data_to_png(em_pixels.astype(np.float32))
+
+        em_offset = len(binary_data)
+        binary_data.extend(em_png)
+        while len(binary_data) % 4:
+            binary_data.extend(b"\x00")
+
+        em_bv = len(gltf.bufferViews)
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0, byteOffset=em_offset, byteLength=len(em_png),
+        ))
+        img_idx = len(gltf.images)
+        gltf.images.append(pygltflib.Image(bufferView=em_bv, mimeType="image/png"))
+        tex_idx = len(gltf.textures)
+        gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
+        emissive_tex_indices.append(tex_idx)
+
+    # Materials: each frame has base color + emissive
+    for fi in range(num_frames):
+        gltf.materials.append(pygltflib.Material(
+            name=f"frame_{fi}",
+            pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+                baseColorTexture=pygltflib.TextureInfo(index=base_tex_idx),
+                metallicFactor=0.0, roughnessFactor=1.0,
+            ),
+            emissiveTexture=pygltflib.TextureInfo(index=emissive_tex_indices[fi]),
+            emissiveFactor=[1.0, 1.0, 1.0],
+            doubleSided=True,
+        ))
+
+    gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
+    gltf.set_binary_blob(bytes(binary_data))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    gltf.save(str(path))
+
+
+class TestEmissiveTextureClassification:
+    """Tests for emissive texture detection and differentiated encoding."""
+
+    def test_classify_no_emissive(self, tmp_path):
+        """GLB without emissive textures should return empty set."""
+        path = tmp_path / "static.glb"
+        _build_textured_glb(path, num_textures=2, size=32)
+        gltf = pygltflib.GLTF2.load(str(path))
+        emissive_bvs = _classify_emissive_textures(gltf)
+        assert emissive_bvs == set()
+
+    def test_classify_with_emissive(self, tmp_path):
+        """GLB with emissive textures should identify emissive bufferViews."""
+        path = tmp_path / "emissive.glb"
+        _build_emissive_glb(path, num_frames=3, size=32)
+        gltf = pygltflib.GLTF2.load(str(path))
+        emissive_bvs = _classify_emissive_textures(gltf)
+        # Should find 3 emissive textures (one per frame)
+        assert len(emissive_bvs) == 3
+        # Base color texture should NOT be in emissive set
+        base_bv = gltf.images[0].bufferView
+        assert base_bv not in emissive_bvs
+
+    def test_image_to_ktx2_encoding_parameter(self, monkeypatch):
+        """_image_to_ktx2 should accept encoding parameter without error."""
+        import shutil
+        import med2glb.glb.compress as compress_mod
+        compress_mod._has_toktx.cache_clear()
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        # Both encoding modes should gracefully return None when toktx missing
+        assert _image_to_ktx2(b"\x89PNG fake", encoding="uastc") is None
+        assert _image_to_ktx2(b"\x89PNG fake", encoding="etc1s") is None
+        compress_mod._has_toktx.cache_clear()
+
+    @pytest.mark.skipif(
+        not __import__("shutil").which("toktx"),
+        reason="toktx not installed",
+    )
+    def test_etc1s_encoding_produces_valid_ktx2(self):
+        """ETC1S encoding should produce valid KTX2 data."""
+        from med2glb.glb.texture import pixel_data_to_png
+        pixel_data = np.zeros((64, 64), dtype=np.uint8)  # mostly black
+        png_bytes = pixel_data_to_png(pixel_data.astype(np.float32))
+
+        ktx2_bytes = _image_to_ktx2(png_bytes, encoding="etc1s")
+        assert ktx2_bytes is not None
+        assert ktx2_bytes[:7] == b"\xabKTX 20"
+
+    @pytest.mark.skipif(
+        not __import__("shutil").which("toktx"),
+        reason="toktx not installed",
+    )
+    def test_etc1s_and_uastc_produce_different_formats(self):
+        """ETC1S and UASTC should produce valid but different KTX2 encodings.
+
+        ETC1S transcodes to BC1 (4bpp) at runtime → half the GPU memory of
+        UASTC→BC7 (8bpp).  For 30 emissive ring textures this saves ~15 MB VRAM.
+        """
+        from med2glb.glb.texture import pixel_data_to_png
+        pixel_data = np.zeros((64, 64), dtype=np.uint8)
+        pixel_data[30:34, :] = 200
+        png_bytes = pixel_data_to_png(pixel_data.astype(np.float32))
+
+        uastc = _image_to_ktx2(png_bytes, encoding="uastc")
+        etc1s = _image_to_ktx2(png_bytes, encoding="etc1s")
+        assert uastc is not None and etc1s is not None
+        # Both valid KTX2 but different encodings
+        assert uastc[:7] == b"\xabKTX 20"
+        assert etc1s[:7] == b"\xabKTX 20"
+        assert uastc != etc1s
