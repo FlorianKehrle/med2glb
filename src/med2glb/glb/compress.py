@@ -1024,6 +1024,12 @@ def _load_and_identify_images(
             continue
         if img.bufferView in metadata_bvs:
             continue
+        # Skip images already in KTX2 format (nothing to re-compress)
+        if img.mimeType and "ktx" in img.mimeType.lower():
+            logger.debug(
+                f"Skipping already-KTX2 image (bufferView {img.bufferView})"
+            )
+            continue
         if skip_small:
             bv = gltf.bufferViews[img.bufferView]
             if bv.byteLength < _SMALL_IMAGE_THRESHOLD:

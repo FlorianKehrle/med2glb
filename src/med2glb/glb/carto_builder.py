@@ -153,8 +153,10 @@ def prepare_animated_cache(
     n_faces = len(mesh_data.faces)
     base_tex_size = compute_texture_size(n_faces)
     # Emissive ring textures are mostly black (thin gaussian band) —
-    # 1024 is plenty for the ring highlight even on large meshes.
-    emissive_tex_size = min(base_tex_size, 1024)
+    # 512 is plenty for the ring highlight even on large meshes and
+    # keeps VRAM usage manageable on HoloLens 2 (30 frames × 512×512
+    # ETC1S ≈ 3.75 MB VRAM vs 15 MB at 1024).
+    emissive_tex_size = min(base_tex_size, 512)
 
     _step_times: dict[str, float] = {}
 
