@@ -161,7 +161,7 @@
 
 - [ ] T071 Update `_convert_carto_meshes()` in src/med2glb/_pipeline_carto.py — make animated excitation GLB generation the default when valid LAT data is present (remove `--animate` gate for excitation). Update cache preparation call to use refactored `prepare_animated_cache()`. Ensure vector animation still works alongside the new excitation animation.
 
-- [ ] T072 Update wizard in src/med2glb/cli_wizard.py — adjust animation prompt since excitation animation is now default. The wizard may still ask about vectors (separate feature) but should not require explicit opt-in for excitation animation when LAT data is available.
+- [ ] T072 Update wizard in src/med2glb/cli_wizard.py — remove the "Output Mode" prompt (static/animated/both) since excitation animation is now always produced when valid LAT data exists. Always set `animate=True, static=True`. Keep `--no-animate` CLI flag as escape hatch for users who explicitly want to skip animation. Remove the subdivision prompt — auto-detect based on mesh face count (<5K→level 2, 5K-20K→level 1, >20K→level 0). Keep `--subdivide` CLI flag as override for power users. The vectors prompt remains as-is (separate opt-in based on data quality). Update batch wizard similarly. Quality tuning of auto-subdivision thresholds deferred to AR testing phase.
 
 - [ ] T073 Run full test suite and fix regressions in tests/ — run `pytest tests/unit/ -x -q` and `pytest tests/integration/ -x -q`. Fix any failures caused by the refactored cache structure, changed GLB node counts, or removed emissive texture assertions.
 
