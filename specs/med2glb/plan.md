@@ -1,12 +1,12 @@
 # Implementation Plan: med2glb — Medical Imaging to GLB Converter
 
-**Branch**: `main` | **Date**: 2026-02-09 (initial), 2026-03-11 (updated) | **Spec**: [spec.md](spec.md)
+**Branch**: `main` | **Date**: 2026-02-09 (initial), 2026-03-18 (updated) | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/med2glb/spec.md`
 **Status**: Implemented — this plan documents the delivered architecture.
 
 ## Summary
 
-Python CLI tool (`med2glb`) that converts medical imaging data — DICOM (cardiac CT, MRI, 3D echo) and CARTO 3 electro-anatomical mapping exports — to GLB 3D models optimized for AR viewing on HoloLens 2 and other AR/MR devices. Features an interactive wizard, pluggable DICOM conversion methods, CARTO clinical heatmaps with animated excitation rings and conduction vectors, gallery mode for DICOM slices, and GLB compression.
+Python CLI tool (`med2glb`) that converts medical imaging data — DICOM (cardiac CT, MRI, 3D echo) and CARTO 3 electro-anatomical mapping exports — to GLB 3D models optimized for AR viewing on HoloLens 2 and other AR/MR devices. Features an interactive wizard, pluggable DICOM conversion methods, CARTO clinical heatmaps with animated excitation wavefronts (glow + ring via vertex color morph targets) and conduction vectors, gallery mode for DICOM slices, and GLB compression.
 
 ## Technical Context
 
@@ -75,7 +75,7 @@ src/med2glb/
 │   └── lat_vectors.py       # LAT gradient, streamline tracing, dash animation
 ├── glb/
 │   ├── builder.py           # Core GLB construction with PBR materials
-│   ├── carto_builder.py     # CARTO GLB with textures, emissive animation
+│   ├── carto_builder.py     # CARTO GLB with textures (static) + vertex color morph targets (animated)
 │   ├── vertex_color_bake.py # xatlas UV unwrap + barycentric rasterization
 │   ├── animation.py         # Morph target animation builder
 │   ├── arrow_builder.py     # LAT streamline arrow/dash geometry
@@ -132,13 +132,13 @@ CLAUDE.md                    # AI development guidelines
 - **Library**: `pygltflib` (trimesh doesn't support animation)
 - **How**: Base mesh = first cardiac phase. Subsequent phases stored as morph targets (vertex displacements). Consistent topology via cKDTree nearest-surface-point correspondence.
 
-### AD-003: GLB Animation — Emissive Overlay for CARTO
-- **How**: Shared mesh geometry + per-frame emissive textures. Node scale [1,1,1]/[0,0,0] toggles frame visibility. 30 frames, 2s loop.
-- **Why**: Works universally on HoloLens 2 (glTFast/MRTK). Morph targets not suitable for texture-driven animation.
+### AD-003: GLB Animation — Vertex Color Morph Targets for CARTO
+- **How**: Single mesh with `COLOR_0` morph targets. Per-frame vertex colors computed from LAT timing (ring = Gaussian at activation frontier, glow = exponential decay behind frontier). Weight-based animation with GPU interpolation.
+- **Why**: Replaces previous emissive overlay (30 mesh copies, 30+ draw calls, thin ring only). Single draw call, matches real CARTO 3 visual behavior (glow + ring, ~25–30% surface coverage), glTFast supports `COLOR_0` morph targets.
 
-### AD-004: Texture Baking via xatlas (CARTO)
+### AD-004: Texture Baking via xatlas (CARTO Static Heatmaps)
 - **How**: xatlas UV unwrap → barycentric rasterization → baseColorTexture with gutter bleeding
-- **Why**: HoloLens 2 glTFast does NOT render `COLOR_0` vertex attributes. UV unwrap computed once, shared across all variants.
+- **Why**: HoloLens 2 glTFast does NOT render static `COLOR_0` vertex attributes. UV unwrap computed once, shared across static heatmap variants (LAT, bipolar, unipolar). The animated excitation variant does not require xatlas — it uses `COLOR_0` morph targets instead.
 
 ### AD-005: Interactive Wizard
 - **How**: `cli_wizard.py` detects data type, shows Rich tables, prompts for relevant options. Bypassed when any pipeline flag is provided or in non-interactive mode.

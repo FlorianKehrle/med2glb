@@ -72,8 +72,8 @@
 - **Rationale**: Optimal for single close-up AR models on mobile/HoloLens. BLEND alpha mode has broadest viewer support.
 
 ### R-010: CARTO Vertex Color Baking via xatlas
-- **Decision**: UV unwrap via xatlas + barycentric rasterization into baseColorTexture
-- **Rationale**: HoloLens 2 (glTFast/MRTK) does NOT render glTF `COLOR_0` vertex attributes. Baking colors into textures is the only reliable cross-platform approach. xatlas provides high-quality UV parameterization.
+- **Decision**: UV unwrap via xatlas + barycentric rasterization into baseColorTexture for static heatmap variants
+- **Rationale**: HoloLens 2 (glTFast/MRTK) does NOT render static glTF `COLOR_0` vertex attributes. Baking colors into textures is the only reliable approach for static heatmaps. xatlas provides high-quality UV parameterization. The animated excitation variant no longer requires xatlas since it uses `COLOR_0` morph targets.
 - **Implementation Details**:
   - xatlas called once per mesh; result shared across all coloring variants
   - Time estimation: `t = 6.50e-08 * n_faces^1.79` (fitted from real benchmarks)
@@ -83,19 +83,21 @@
   - Direct vertex colors (`COLOR_0`) — Not rendered on HoloLens 2.
   - Manual UV layout — xatlas is automatic and high quality.
 
-### R-011: CARTO Animated Excitation via Emissive Overlay
-- **Decision**: Per-frame emissive textures with Gaussian ring, frame visibility via scale animation
-- **Rationale**: The emissive overlay technique (base color texture + per-frame emissive textures) works universally on HoloLens 2 via glTFast/MRTK. Using node scale [1,1,1]/[0,0,0] for frame switching is simpler and more compatible than weight-based morph targets for texture-driven animation.
+### R-011: CARTO Animated Excitation via Vertex Color Morph Targets
+- **Decision**: Single mesh with `COLOR_0` morph targets animating a glow+ring excitation wavefront, replacing the previous emissive overlay technique
+- **Rationale**: The previous approach (30 mesh copies with per-frame emissive textures, scale-toggle visibility) required 30+ draw calls and ~3.5MB of emissive textures. `COLOR_0` morph targets enable a single mesh with GPU-side vertex color interpolation (1 draw call). glTFast on HoloLens 2 supports `COLOR_0` morph targets. The visual model now matches real CARTO 3 behavior: bright leading-edge ring + broad diffuse trailing glow (~25–30% surface coverage).
 - **Implementation Details**:
-  - Ring width (σ): 0.025 (narrow Gaussian band)
-  - Highlight color: [0.55, 0.55, 0.55] additive white
-  - Ring position: `exp(-((lat_norm - t)² / (2σ²)))` per frame
-  - Default: 30 frames, 2s duration → 15fps loop
-  - Full mesh geometry shared across all frames; only emissive texture differs
+  - Wavefront = Gaussian ring (narrow σ) + exponential decay glow (broad trailing region)
+  - Ring tracks LAT activation frontier; glow represents recently-activated tissue fading over time
+  - Combined coverage: ~25–30% of mesh surface per frame (matching real CARTO 3)
+  - Per-frame vertex colors stored as `COLOR_0` morph targets (VEC4 RGBA)
+  - Single mesh, single draw call, weight-based animation (GPU interpolation)
+  - No xatlas UV unwrap needed for animation (only for static heatmaps)
+  - Loop duration: ~4–5 seconds (matching real CARTO 3 excitation cycle)
 - **Alternatives considered**:
-  - Morph targets for color animation — Not supported for texture coordinates.
+  - Emissive overlay (previous approach) — 30+ draw calls, thin ring only, doesn't match real CARTO 3 visual behavior (missing glow). Replaced.
   - Video texture — Not supported in glTF.
-  - Per-frame separate meshes — Wastes memory, solved by shared geometry + emissive.
+  - Per-frame separate meshes — Wastes memory, too many draw calls for AR.
 
 ### R-012: LAT Streamline Vectors via Gradient Field
 - **Decision**: Analytic per-face gradient (Gram matrix solve) → vertex averaging → streamline tracing → animated dash geometry

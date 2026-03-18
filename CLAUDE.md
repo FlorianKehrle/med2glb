@@ -24,7 +24,7 @@ src/med2glb/
 ├── io/                 # DICOM reading, CARTO reader/mapper, file export
 ├── methods/            # Pluggable conversion methods (registry pattern)
 ├── mesh/               # Mesh processing (Taubin smoothing, decimation)
-├── glb/                # GLB construction + morph target animation + CARTO emissive overlay animation
+├── glb/                # GLB construction + morph target animation + CARTO vertex color morph target animation
 └── core/               # Data structures and types
 
 tests/
@@ -61,7 +61,7 @@ pytest --cov=med2glb
 ## Recent Changes
 - 004-wizard-first-ux: Added Python 3.10+ + Typer/Click (CLI framework), Rich (terminal UI), pydicom (DICOM metadata)
 
-- **carto-support**: CARTO 3 EP mapping support — .mesh/.car parser, texture-baked heatmaps (LAT/bipolar/unipolar) via xatlas UV unwrap, animated excitation ring via emissive overlay (full-quality mesh shared across static/animated/vector variants), animated LAT streamline vectors with vertex-gradient interpolation + momentum coasting, Loop subdivision with IDW interpolation, auto-detection
+- **carto-support**: CARTO 3 EP mapping support — .mesh/.car parser, texture-baked heatmaps (LAT/bipolar/unipolar) via xatlas UV unwrap, animated excitation wavefront (glow + ring) via COLOR_0 vertex color morph targets (single mesh, single draw call), animated LAT conduction vectors, Loop subdivision with IDW interpolation, auto-detection
 - **1-dicom-glb-converter**: Initial feature — DICOM to GLB conversion with pluggable methods, morph target animation, cardiac segmentation
 
 <!-- MANUAL ADDITIONS START -->
