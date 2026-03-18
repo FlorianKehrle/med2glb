@@ -745,6 +745,7 @@ def build_carto_animated_glb(
     if arrow_frame_dashes is not None:
         _report("Building arrow geometry...")
         from med2glb.glb.arrow_builder import build_animated_arrow_nodes
+        from med2glb.glb.animation import _add_scale_toggle_channels
         arrow_node_indices = build_animated_arrow_nodes(
             arrow_frame_dashes,
             mesh_data.vertices, mesh_data.normals,
@@ -754,6 +755,10 @@ def build_carto_animated_glb(
             centroid_offset=cent_offset,
         )
         child_node_indices.extend(arrow_node_indices)
+        # Add scale-toggle animation channels (synced to morph target timeline)
+        _add_scale_toggle_channels(
+            gltf, gltf.animations[0], arrow_node_indices, frame_times, binary_data,
+        )
 
     if legend_info:
         from med2glb.glb.legend_builder import add_legend_nodes

@@ -438,3 +438,78 @@ def _add_morph_animation(
                 samplers=samplers,
             )
         )
+
+
+def _add_scale_toggle_channels(
+    gltf: pygltflib.GLTF2,
+    animation: pygltflib.Animation,
+    node_indices: list[int],
+    frame_times: list[float],
+    binary_data: bytearray,
+) -> None:
+    """Add STEP scale-toggle channels to an existing animation.
+
+    Node i is visible (scale [1,1,1]) from frame_times[i] until
+    frame_times[i+1]; all other nodes are hidden (scale [0,0,0]).
+    Uses STEP interpolation so transitions are instant.
+
+    The time accessor is shared across all nodes to keep file size down.
+    """
+    n = len(node_indices)
+    if n == 0:
+        return
+
+    times = np.array(frame_times[:n], dtype=np.float32)
+    time_data = times.tobytes()
+    time_offset = len(binary_data)
+    binary_data.extend(time_data)
+    _pad_to_4(binary_data)
+
+    t_bv = len(gltf.bufferViews)
+    gltf.bufferViews.append(pygltflib.BufferView(
+        buffer=0, byteOffset=time_offset, byteLength=len(time_data),
+    ))
+    t_acc = len(gltf.accessors)
+    gltf.accessors.append(pygltflib.Accessor(
+        bufferView=t_bv,
+        componentType=pygltflib.FLOAT,
+        count=len(times),
+        type=pygltflib.SCALAR,
+        max=[float(times.max())],
+        min=[float(times.min())],
+    ))
+
+    for i, node_idx in enumerate(node_indices):
+        scales = np.zeros((n, 3), dtype=np.float32)
+        scales[i] = [1.0, 1.0, 1.0]
+
+        s_data = scales.tobytes()
+        s_offset = len(binary_data)
+        binary_data.extend(s_data)
+        _pad_to_4(binary_data)
+
+        s_bv = len(gltf.bufferViews)
+        gltf.bufferViews.append(pygltflib.BufferView(
+            buffer=0, byteOffset=s_offset, byteLength=len(s_data),
+        ))
+        s_acc = len(gltf.accessors)
+        gltf.accessors.append(pygltflib.Accessor(
+            bufferView=s_bv,
+            componentType=pygltflib.FLOAT,
+            count=n,
+            type=pygltflib.VEC3,
+        ))
+
+        sampler_idx = len(animation.samplers)
+        animation.samplers.append(pygltflib.AnimationSampler(
+            input=t_acc,
+            output=s_acc,
+            interpolation="STEP",
+        ))
+        animation.channels.append(pygltflib.AnimationChannel(
+            sampler=sampler_idx,
+            target=pygltflib.AnimationChannelTarget(
+                node=node_idx,
+                path="scale",
+            ),
+        ))
