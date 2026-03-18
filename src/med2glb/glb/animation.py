@@ -416,7 +416,7 @@ def _add_morph_animation(
             pygltflib.AnimationSampler(
                 input=time_acc_idx,
                 output=weight_acc_idx,
-                interpolation=pygltflib.LINEAR,
+                interpolation=pygltflib.ANIM_LINEAR,
             )
         )
 

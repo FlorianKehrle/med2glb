@@ -63,6 +63,9 @@ def estimate_time_details(
     vectors, total.  Values are wall-clock seconds (float).
 
     Heuristic derived from observed timings on typical hardware.
+    Note: 'bake' now reflects a single base-color texture only (animated GLBs
+    use COLOR_0 morph targets — no per-frame emissive textures).
+    Coefficients marked TODO should be recalibrated from actual run logs.
     """
     post_sub = n_triangles * (4 ** subdivide) if subdivide > 0 else n_triangles
 
@@ -70,10 +73,11 @@ def estimate_time_details(
     t_mapping = n_points / 1_000 * 0.5
     # xatlas: power-law model from carto_builder benchmarks (superlinear)
     t_xatlas = 6.50e-08 * (post_sub ** 1.79) if has_lat else 0.0
-    # Rasterization: ~3.5s per 100k faces
+    # Rasterization: ~3.5s per 100k faces (TODO: recalibrate)
     t_rasterize = post_sub / 100_000 * 3.5 if has_lat else 0.0
-    # Texture baking: ~0.3s per 100k post-sub triangles × n_frames
-    t_bake = post_sub / 100_000 * 0.3 * n_frames if has_lat else 0.0
+    # Bake: single base-color texture only (no per-frame emissive baking)
+    # Previously: 0.3s × n_frames — now just 1 texture (TODO: recalibrate)
+    t_bake = post_sub / 100_000 * 0.3 if has_lat else 0.0
     t_vectors = 30.0 if has_lat and n_points >= 30 else 0.0
 
     return {
