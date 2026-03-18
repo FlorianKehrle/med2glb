@@ -2,7 +2,7 @@
 
 **Feature Branch**: `main`
 **Created**: 2026-02-09
-**Updated**: 2026-03-11
+**Updated**: 2026-03-18
 **Status**: Implemented
 **Input**: User description: "Python CLI tool for converting medical imaging data — DICOM (cardiac CT, MRI, 3D echocardiography) and CARTO 3 electro-anatomical mapping exports — to GLB 3D models optimized for augmented reality viewing, with pluggable conversion methods, animated output, clinical heatmaps, and an interactive wizard."
 
@@ -12,9 +12,9 @@ The following findings from a comprehensive survey of existing tools and the sta
 
 1. **No existing end-to-end CLI tool exists** for medical imaging to animated GLB, especially for 3D echo or CARTO EP mapping. Existing tools (3D Slicer, DicomToMesh, InVesalius) produce static STL/OBJ via GUI. SlicerHeart handles 3D echo DICOM reading but exports to STL for 3D printing, not animated GLB for AR.
 
-2. **Animation in GLB requires morph targets** built via `pygltflib`. The commonly-used `trimesh` library does NOT support GLB animations. Each cardiac phase becomes a morph target, and the glTF animation system interpolates between them. `trimesh` remains useful for mesh processing (smoothing, decimation) before final export.
+2. **Animation in GLB requires morph targets** built via `pygltflib`. The commonly-used `trimesh` library does NOT support GLB animations. Morph targets serve two purposes: each cardiac phase becomes a positional morph target (DICOM echo), and per-vertex color changes become `COLOR_0` morph targets (CARTO excitation animation). `trimesh` remains useful for mesh processing (smoothing, decimation) before final export.
 
-3. **HoloLens 2 (glTFast/MRTK) does not render glTF `COLOR_0` vertex attributes**, requiring vertex colors to be baked into textures via xatlas UV unwrap + rasterization as a workaround. This is critical for CARTO heatmap visualization.
+3. **HoloLens 2 (glTFast/MRTK) does not render static glTF `COLOR_0` vertex attributes**, requiring vertex colors to be baked into textures via xatlas UV unwrap + rasterization for static heatmaps. However, **glTFast does support `COLOR_0` morph targets**, enabling per-vertex color animation via a single mesh instead of duplicating the mesh per frame.
 
 4. **CARTO 3 EP mapping exports** use proprietary `.mesh` (INI-style geometry) and `_car.txt` (measurement points) file formats. Multiple format versions exist (v4 ~2015, v5/v7.1, v6/v7.2+). No existing tool converts these to AR-ready GLB with animated clinical heatmaps.
 
@@ -30,15 +30,15 @@ The following findings from a comprehensive survey of existing tools and the sta
 
 10. **CARTO color mapping** requires sparse-to-dense interpolation: k-NN inverse-distance weighting (IDW) maps ~100-500 measurement points to dense per-vertex fields. Loop subdivision (~16× faces at level 2) produces smooth color gradients.
 
-11. **Animated excitation visualization** uses emissive overlay technique — frame-by-frame emissive textures with a sweeping ring that tracks LAT activation timing. This works universally on HoloLens 2 (glTFast/MRTK).
+11. **Animated excitation visualization** uses per-vertex color morph targets (`COLOR_0`) on a single mesh — a sweeping wavefront combining a bright leading-edge ring and broad diffuse trailing glow that tracks LAT activation timing, matching real CARTO 3 excitation behavior. The wavefront covers ~25–30% of the surface at any given frame and follows the LAT gradient, branching at conduction junctions. This uses a single draw call on HoloLens 2 (glTFast/MRTK).
 
-12. **LAT conduction vectors** require per-face gradient computation via analytic Gram-matrix solve, streamline tracing via half-edge traversal + barycentric intersection, and Gaussian smoothing to prevent jitter at mesh boundaries.
+12. **LAT conduction vectors** should only be generated when the data supports them — sufficient measurement density, LAT range, and gradient coverage (already gated by quality checks in FR-019). Vectors should visually match CARTO 3 reference behavior: white conduction arrows that indicate propagation direction along the LAT gradient. Vector rendering style and density should be informed by real CARTO 3 video analysis.
 
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 — Convert CARTO 3 EP Mapping to Clinical AR Heatmaps (Priority: P0)
 
-An electrophysiologist has a CARTO 3 export directory containing `.mesh` geometry and `_car.txt` measurement files from a cardiac ablation procedure. They want to convert this into GLB files with clinical voltage/LAT heatmaps viewable in AR on HoloLens, with animated excitation rings showing activation wavefronts and optional streamline arrows showing conduction direction.
+An electrophysiologist has a CARTO 3 export directory containing `.mesh` geometry and `_car.txt` measurement files from a cardiac ablation procedure. They want to convert this into GLB files with clinical voltage/LAT heatmaps viewable in AR on HoloLens, with animated excitation wavefronts showing activation patterns and optional streamline arrows showing conduction direction.
 
 **Why this priority**: CARTO EP mapping with animated heatmaps is the primary clinical use case, targeting HoloLens AR workflows for procedural planning and review.
 
@@ -46,9 +46,9 @@ An electrophysiologist has a CARTO 3 export directory containing `.mesh` geometr
 
 **Acceptance Scenarios**:
 
-1. **Given** a CARTO 3 export directory with `.mesh` and `_car.txt` files, **When** the user runs med2glb and follows the wizard, **Then** GLB files are produced for each selected coloring scheme (LAT, bipolar, unipolar) with correct clinical colormaps baked as textures.
-2. **Given** a CARTO export, **When** animation is enabled, **Then** an animated GLB is produced with a sweeping excitation ring overlay that tracks LAT activation timing across 30 frames.
-3. **Given** a CARTO export with sufficient LAT data (≥30 points, ≥20ms range, ≥15% gradient coverage), **When** vectors are enabled, **Then** animated streamline arrows show conduction direction with dashes advancing in sync with the excitation ring.
+1. **Given** a CARTO 3 export directory with `.mesh` and `_car.txt` files, **When** the user runs med2glb and follows the wizard, **Then** GLB files are produced for each selected coloring scheme (LAT, bipolar, unipolar) with correct clinical colormaps baked as textures, plus an animated LAT excitation GLB by default.
+2. **Given** a CARTO export with valid LAT data, **When** processed, **Then** an animated GLB is produced with a sweeping excitation wavefront (bright leading-edge ring + broad trailing glow) that tracks LAT activation timing, using a single mesh with per-vertex color animation.
+3. **Given** a CARTO export with sufficient LAT data (≥30 points, ≥20ms range, ≥15% gradient coverage), **When** vectors are enabled, **Then** animated conduction arrows matching CARTO 3 visual style show propagation direction along the LAT gradient.
 4. **Given** a CARTO export, **When** subdivision level 2 is selected, **Then** the mesh is Loop-subdivided (~16× faces) with k-NN IDW interpolation producing smooth color gradients instead of blocky nearest-neighbor.
 5. **Given** CARTO exports from different versions (v4/2015, v7.1, v7.2+), **When** processed, **Then** all versions are correctly parsed and converted.
 6. **Given** a parent directory containing multiple CARTO exports, **When** batch mode is used, **Then** all exports are processed with shared settings and output goes to per-export `glb/` subfolders.
@@ -191,6 +191,8 @@ A new user installs the tool via pip and runs their first conversion, guided by 
   - Falls back to texture downscaling with a warning about installing KTX-Software.
 - What happens when a CARTO mesh has too few points for vectors?
   - The wizard auto-assesses quality (≥30 points, ≥20ms LAT range, ≥15% gradient coverage) and skips or warns.
+- What happens when only a small fraction of vertices have LAT data (e.g., <10% coverage)?
+  - The excitation wavefront animation covers only the mapped region; unmapped vertices remain at their static base color and do not participate in the wavefront.
 
 ## Requirements *(mandatory)*
 
@@ -214,15 +216,15 @@ A new user installs the tool via pip and runs their first conversion, guided by 
 - **FR-013**: System MUST support three coloring schemes: LAT (activation time), bipolar voltage (scar mapping), and unipolar voltage, with clinical colormaps matching CARTO 3 conventions.
 - **FR-014**: System MUST generate all available colorings automatically in a single run, with `--coloring` flag to restrict to a single scheme.
 - **FR-015**: System MUST perform Loop subdivision (levels 0-3, default 2) with k-NN IDW interpolation (k=6) for smooth color gradients.
-- **FR-016**: System MUST bake vertex colors into textures via xatlas UV unwrap + barycentric rasterization with gutter bleeding, since HoloLens 2 glTFast/MRTK does not render `COLOR_0`.
-- **FR-017**: System MUST produce animated GLB with sweeping excitation ring via emissive overlay textures (30 frames), with the full mesh shared across frames.
-- **FR-018**: System MUST support animated LAT streamline vectors (conduction arrows) with vertex-gradient interpolation, momentum coasting, and Gaussian smoothing.
+- **FR-016**: System MUST bake vertex colors into textures via xatlas UV unwrap + barycentric rasterization with gutter bleeding for static heatmap variants, since HoloLens 2 glTFast/MRTK does not render static `COLOR_0`.
+- **FR-017**: System MUST produce an animated LAT excitation GLB by default using per-vertex color morph targets (`COLOR_0`) on a single mesh, showing a sweeping excitation wavefront that combines a bright leading-edge ring with a broad diffuse trailing glow, tracking LAT activation timing and matching real CARTO 3 visual behavior (~25–30% surface coverage at any frame).
+- **FR-018**: System MUST support animated LAT conduction arrows that visually match CARTO 3 style, showing propagation direction along the LAT gradient, only when data quality is sufficient.
 - **FR-019**: System MUST automatically assess vector quality (minimum 30 points, ≥20ms LAT range, ≥15% gradient coverage) and skip vectors for unsuitable meshes.
 - **FR-020**: System MUST embed a color legend cylinder and study info panel in each CARTO GLB for AR readability.
 - **FR-021**: System MUST support batch processing of multiple CARTO exports from a parent directory via `--batch` flag.
-- **FR-022**: System MUST compute xatlas UV unwrap once per mesh and share it across all variants (static, animated, vector) to minimize processing time.
+- **FR-022**: System MUST compute xatlas UV unwrap once per mesh and share it across all static heatmap variants (LAT, bipolar, unipolar) to minimize processing time. The animated excitation variant does not require xatlas.
 
-#### DICOM Conversion
+#### DICOM Conversion *(to be reviewed)*
 
 - **FR-030**: System MUST support at minimum five conversion methods switchable via `--method` CLI flag: `marching-cubes`, `classical`, `totalseg`, `chamber-detect`, and `compare`.
 - **FR-031**: System MUST default to GLB output format.
@@ -238,21 +240,21 @@ A new user installs the tool via pip and runs their first conversion, guided by 
 - **FR-041**: System MUST use Taubin smoothing (not Laplacian) as default to preserve volume.
 - **FR-042**: System MUST support reading vendor-specific 3D echo DICOM formats (Philips and GE).
 
-#### Gallery Mode
+#### Gallery Mode *(to be reviewed)*
 
 - **FR-050**: System MUST support `--gallery` mode producing individual GLBs per slice, a lightbox grid GLB, and (if spatial metadata exists) a spatial fan GLB.
 - **FR-051**: Gallery lightbox MUST support configurable column count (default 6) with 5% gap between cells.
 - **FR-052**: Gallery spatial fan MUST use `ImagePositionPatient` and `ImageOrientationPatient` to place quads at real-world positions.
 - **FR-053**: Gallery MUST support frame-switching animation for temporal (cine) data.
 
-#### GLB Compression
+#### GLB Compression *(to be reviewed)*
 
 - **FR-060**: System MUST support `--compress` mode with four strategies: `ktx2` (default), `draco`, `downscale`, `jpeg`.
 - **FR-061**: System MUST support configurable target size via `--max-size` (default 25MB).
 - **FR-062**: KTX2 strategy MUST use external `toktx` tool for Basis Universal compression, with graceful fallback if not installed.
 - **FR-063**: Draco strategy MUST skip compression for GLBs containing animations.
 
-#### Pluggable Architecture
+#### Pluggable Architecture *(to be reviewed)*
 
 - **FR-070**: The method architecture MUST allow adding new conversion methods without modifying existing code via `@register_method` decorator and `ConversionMethod` ABC.
 
@@ -279,7 +281,7 @@ A new user installs the tool via pip and runs their first conversion, guided by 
 
 - **SC-001**: Users can convert a CARTO export to AR-ready GLBs with clinical heatmaps within 2 CLI commands (install + `med2glb ./export/`).
 - **SC-002**: CARTO heatmaps render correctly on HoloLens 2 via baked textures with correct clinical colormaps.
-- **SC-003**: Animated excitation ring GLBs play back as a smooth 30-frame loop with the ring tracking LAT activation timing.
+- **SC-003**: Animated excitation wavefront GLBs play back as a smooth seamless loop showing both the leading-edge ring and trailing glow tracking LAT activation timing, rendered via a single mesh on HoloLens 2.
 - **SC-004**: All three CARTO coloring schemes (LAT, bipolar, unipolar) are generated automatically in a single run.
 - **SC-005**: Users can convert a 3D echo dataset to an animated GLB and view it in AR within 3 CLI commands.
 - **SC-006**: Animated GLB output plays back the cardiac cycle as a smooth morph-target loop without frame-to-frame mesh jumping.
