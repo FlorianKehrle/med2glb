@@ -188,3 +188,74 @@ class TestColorMorphAnimation:
         assert prim.attributes.COLOR_0 is not None
         assert len(prim.targets) == n_frames
         assert len(loaded.animations) == 1
+
+
+class TestUv1Data:
+    """Test TEXCOORD_1 (lat_norm) support in _add_animated_mesh_to_gltf."""
+
+    def test_uv1_data_written_to_primitive(self, simple_mesh_data):
+        """TEXCOORD_1 accessor is created and referenced when uv1_data is provided."""
+        gltf = pygltflib.GLTF2()
+        gltf.scenes = [pygltflib.Scene(nodes=[])]
+        gltf.scene = 0
+        binary = bytearray()
+
+        n_verts = 4
+        lat_norm = np.array([0.0, 0.25, 0.75, 1.0], dtype=np.float32)
+        uv1 = np.column_stack([lat_norm, np.zeros(n_verts, dtype=np.float32)])
+
+        node_idx, _ = _add_animated_mesh_to_gltf(
+            gltf, simple_mesh_data,
+            morph_targets=[],
+            binary_data=binary,
+            index=0,
+            uv1_data=uv1,
+        )
+
+        prim = gltf.meshes[0].primitives[0]
+        assert prim.attributes.TEXCOORD_1 is not None
+
+    def test_uv1_data_absent_when_not_provided(self, simple_mesh_data):
+        """TEXCOORD_1 is absent when uv1_data is not passed (backward compat)."""
+        gltf = pygltflib.GLTF2()
+        gltf.scenes = [pygltflib.Scene(nodes=[])]
+        gltf.scene = 0
+        binary = bytearray()
+
+        _add_animated_mesh_to_gltf(
+            gltf, simple_mesh_data,
+            morph_targets=[],
+            binary_data=binary,
+            index=0,
+        )
+
+        prim = gltf.meshes[0].primitives[0]
+        assert prim.attributes.TEXCOORD_1 is None
+
+    def test_uv1_roundtrip(self, simple_mesh_data, tmp_path):
+        """TEXCOORD_1 survives save/reload cycle."""
+        gltf = pygltflib.GLTF2()
+        gltf.scenes = [pygltflib.Scene(nodes=[])]
+        gltf.scene = 0
+        binary = bytearray()
+
+        n_verts = 4
+        lat_norm = np.array([0.1, 0.4, 0.7, 0.9], dtype=np.float32)
+        uv1 = np.column_stack([lat_norm, np.zeros(n_verts, dtype=np.float32)])
+
+        node_idx, _ = _add_animated_mesh_to_gltf(
+            gltf, simple_mesh_data,
+            morph_targets=[],
+            binary_data=binary,
+            index=0,
+            uv1_data=uv1,
+        )
+        gltf.scenes[0].nodes.append(node_idx)
+        gltf.buffers = [pygltflib.Buffer(byteLength=len(binary))]
+        gltf.set_binary_blob(bytes(binary))
+        out = tmp_path / "uv1_roundtrip.glb"
+        gltf.save(str(out))
+
+        loaded = pygltflib.GLTF2.load(str(out))
+        prim = loaded.meshes[0].primitives[0]
+        assert prim.attributes.TEXCOORD_1 is not None

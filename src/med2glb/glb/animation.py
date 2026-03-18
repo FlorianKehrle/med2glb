@@ -65,6 +65,7 @@ def _add_animated_mesh_to_gltf(
     index: int,
     color_morph_targets: list[np.ndarray] | None = None,
     base_vertex_colors: np.ndarray | None = None,
+    uv1_data: np.ndarray | None = None,
 ) -> int:
     """Add a mesh with morph targets to the glTF document.
 
@@ -72,12 +73,13 @@ def _add_animated_mesh_to_gltf(
     ----------
     color_morph_targets : list of ndarray (n_verts, 4), optional
         Per-frame vertex colors as COLOR_0 morph targets (VEC4 float32).
-        When provided, each entry becomes a COLOR_0 accessor in the
-        corresponding morph target.  Can be used alone (color-only
-        animation) or alongside positional morph_targets.
     base_vertex_colors : ndarray (n_verts, 4), optional
         Base COLOR_0 attribute for the mesh (VEC4 float32, range [0,1]).
         Required when color_morph_targets is provided.
+    uv1_data : ndarray (n_verts, 2), optional
+        TEXCOORD_1 data (float32).  Used by ColorMorphApplicator in Unity
+        to store per-vertex lat_norm values (x component) so the component
+        can recompute wavefront colors without reading morph accessor data.
     """
     mat = mesh_data.material
 
@@ -187,6 +189,34 @@ def _add_animated_mesh_to_gltf(
             )
         )
 
+    # Add TEXCOORD_1 if provided (e.g. lat_norm for ColorMorphApplicator)
+    uv1_acc_idx = None
+    if uv1_data is not None:
+        uv1 = uv1_data.astype(np.float32)
+        uv1_bytes = uv1.tobytes()
+        uv1_offset = len(binary_data)
+        binary_data.extend(uv1_bytes)
+        _pad_to_4(binary_data)
+
+        uv1_bv_idx = len(gltf.bufferViews)
+        gltf.bufferViews.append(
+            pygltflib.BufferView(
+                buffer=0,
+                byteOffset=uv1_offset,
+                byteLength=len(uv1_bytes),
+                target=pygltflib.ARRAY_BUFFER,
+            )
+        )
+        uv1_acc_idx = len(gltf.accessors)
+        gltf.accessors.append(
+            pygltflib.Accessor(
+                bufferView=uv1_bv_idx,
+                componentType=pygltflib.FLOAT,
+                count=len(uv1),
+                type=pygltflib.VEC2,
+            )
+        )
+
     # Add face indices
     faces = mesh_data.faces.astype(np.uint32)
     idx_data = faces.tobytes()
@@ -280,6 +310,8 @@ def _add_animated_mesh_to_gltf(
         attributes.NORMAL = normal_acc_idx
     if color_acc_idx is not None:
         attributes.COLOR_0 = color_acc_idx
+    if uv1_acc_idx is not None:
+        attributes.TEXCOORD_1 = uv1_acc_idx
 
     # Build morph target list for primitive
     n_targets = max(len(morph_target_accessors), len(color_mt_accessors))

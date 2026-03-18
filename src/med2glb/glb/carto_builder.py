@@ -684,6 +684,16 @@ def build_carto_animated_glb(
         for f in range(n_frames)
     ]
 
+    # Compute lat_norm for TEXCOORD_1 so ColorMorphApplicator in Unity can
+    # recompute wavefront colors without needing morph accessor data.
+    valid_lat = ~np.isnan(lat_values)
+    lat_min = float(np.nanmin(lat_values)) if np.any(valid_lat) else 0.0
+    lat_max = float(np.nanmax(lat_values)) if np.any(valid_lat) else 1.0
+    lat_range = lat_max - lat_min if (lat_max - lat_min) > 1e-6 else 1.0
+    lat_norm_arr = np.where(valid_lat, (lat_values - lat_min) / lat_range, 0.0).astype(np.float32)
+    # Pack as float2: x=lat_norm, y=0
+    lat_uv1 = np.column_stack([lat_norm_arr, np.zeros(n_verts, dtype=np.float32)])
+
     # Create centered mesh data for the single animated mesh
     centered_verts, cent_offset = _center_vertices(mesh_data.vertices.astype(np.float32))
     anim_mesh = MeshData(
@@ -732,6 +742,7 @@ def build_carto_animated_glb(
         gltf, anim_mesh, pos_mts, binary_data, 0,
         color_morph_targets=color_deltas,
         base_vertex_colors=base_colors,
+        uv1_data=lat_uv1,
     )
 
     # Morph weight animation: cycle through frames seamlessly
