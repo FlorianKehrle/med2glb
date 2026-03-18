@@ -1,10 +1,12 @@
-"""CARTO animated GLB: excitation highlight ring using emissive overlay.
+"""CARTO animated GLB: excitation wavefront via COLOR_0 vertex color morph targets.
 
-Uses the same full-quality mesh as the static GLB.  The static colormap
-is baked into a shared baseColorTexture, and the sweeping highlight ring
-is rendered via per-frame emissiveTextures (mostly black PNGs, compressed to KTX2).
-Animation switches the visible frame via scale [1,1,1] / [0,0,0] —
-universally supported in glTF viewers including HoloLens 2 (MRTK/glTFast).
+Single-mesh animation using glTF morph targets.  The static LAT heatmap
+is stored as base COLOR_0; per-frame wavefront colors (glow + ring model)
+are stored as COLOR_0 morph target deltas.  A morph weight animation cycles
+through frames for a seamless loop matching real CARTO 3 behavior (~4.5s).
+
+The same cache (AnimatedBakeCache) pre-computes xatlas UV unwrap once for the
+static heatmap GLBs, and computes wavefront frame colors for the animated GLB.
 """
 
 from __future__ import annotations
@@ -150,7 +152,15 @@ def _estimate_xatlas_time(n_faces: int) -> str:
 
 @dataclass
 class AnimatedBakeCache:
-    """Pre-computed intermediates shared between animated CARTO variants."""
+    """Pre-computed intermediates shared between animated CARTO variants.
+
+    xatlas UV fields (unwelded_verts, unwelded_normals, unwelded_faces,
+    shared_uvs, vmapping, base_texture) are used by the static GLB builders.
+
+    frame_colors stores per-frame per-vertex RGBA for the wavefront animation
+    (shape: n_frames × n_verts × 4, float32).  Replaces the old emissive
+    texture approach (30 PNG images).
+    """
 
     mesh_data: MeshData
     lat_values: np.ndarray
@@ -160,7 +170,7 @@ class AnimatedBakeCache:
     shared_uvs: np.ndarray
     centroid: list[float]
     base_texture: bytes
-    emissive_textures: list[bytes]
+    frame_colors: np.ndarray          # (n_frames, n_verts, 4) float32
     n_frames: int
     vmapping: np.ndarray | None = None
     step_times: dict[str, float] | None = None
@@ -216,25 +226,12 @@ def prepare_animated_cache(
     else:
         base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
 
-    # Generate emissive ring colors for each frame.
-    # Primarily white additive glow with subtle base-color tint — the CARTO3
-    # ring is mostly white but retains hue warmth (red stays red, blue stays
-    # blue) rather than being a flat uniform wash.
-    t_values = np.linspace(0, 1, n_frames).reshape(-1, 1)  # (F, 1)
-    sigma_sq_2 = 2 * _RING_WIDTH ** 2
-    ring_all = np.exp(-((lat_norm[np.newaxis, :] - t_values) ** 2) / sigma_sq_2)  # (F, N)
-    ring_all[:, ~valid_lat] = 0.0
-    # Per-vertex highlight: white-dominant with subtle base-color warmth
-    base_rgb = base_colors[:, :3]  # (N, 3)
-    highlight_rgb = np.full_like(base_rgb, _RING_WHITE) + base_rgb * _RING_COLOR  # (N, 3)
-    # Emissive = ring_intensity * highlight_color, as RGBA with A=1
-    emissive_all = ring_all[:, :, np.newaxis] * highlight_rgb[np.newaxis, :, :]  # (F, N, 3)
-    emissive_rgba = np.zeros((n_frames, n_verts, 4), dtype=np.float32)
-    emissive_rgba[:, :, :3] = emissive_all
-    emissive_rgba[:, :, 3] = 1.0
-    del ring_all, emissive_all, highlight_rgb
+    # Compute per-frame wavefront colors (glow + ring model, ~25-30% surface coverage)
+    _status("Computing wavefront colors...")
+    frame_colors = compute_wavefront_colors(lat_norm, base_colors, n_frames)
 
-    # UV unwrap ONCE with xatlas
+    # UV unwrap ONCE with xatlas — still needed for base color texture
+    # used by the static heatmap GLB builders.
     from med2glb.glb.vertex_color_bake import (
         xatlas_unwrap_with_timer,
         precompute_rasterization_map,
@@ -243,11 +240,6 @@ def prepare_animated_cache(
 
     n_faces = len(mesh_data.faces)
     base_tex_size = compute_texture_size(n_faces)
-    # Emissive ring textures are mostly black (thin gaussian band) —
-    # 512 is plenty for the ring highlight even on large meshes and
-    # keeps VRAM usage manageable on HoloLens 2 (30 frames × 512×512
-    # ETC1S ≈ 3.75 MB VRAM vs 15 MB at 1024).
-    emissive_tex_size = min(base_tex_size, 512)
 
     _step_times: dict[str, float] = {}
 
@@ -284,34 +276,14 @@ def prepare_animated_cache(
     _step_times["Rasterize"] = time.monotonic() - t0
     _status(f"Rasterization done ({_fmt_duration(_step_times['Rasterize'])}). Baking textures...")
 
-    # Bake ONE base color texture (same quality as static GLB)
+    # Bake ONE base color texture (for static GLB reuse)
     t0 = time.monotonic()
     base_colors_remapped = base_colors[vmapping]
     base_texture = apply_rasterization_map(
         base_raster_map, base_colors_remapped,
     )
-
-    # Bake per-frame emissive ring textures (mostly black, compressed by KTX2)
-    if emissive_tex_size == base_tex_size:
-        emissive_raster_map = base_raster_map
-    else:
-        del base_raster_map  # free memory before building smaller map
-        emissive_raster_map = precompute_rasterization_map(
-            new_faces, shared_uvs, emissive_tex_size,
-        )
-
-    emissive_textures: list[bytes] = []
-    for fi in range(n_frames):
-        _frame(f"Baking textures ({fi + 1}/{n_frames})...", fi, n_frames)
-        ring_colors = emissive_rgba[fi, vmapping]
-        img_bytes = apply_rasterization_map(
-            emissive_raster_map, ring_colors,
-        )
-        emissive_textures.append(img_bytes)
     _step_times["Textures"] = time.monotonic() - t0
-    del emissive_raster_map
-
-    del emissive_rgba
+    del base_raster_map
 
     return AnimatedBakeCache(
         mesh_data=mesh_data,
@@ -322,7 +294,7 @@ def prepare_animated_cache(
         shared_uvs=shared_uvs,
         centroid=centroid,
         base_texture=base_texture,
-        emissive_textures=emissive_textures,
+        frame_colors=frame_colors,
         n_frames=n_frames,
         vmapping=vmapping,
         step_times=_step_times,
@@ -616,7 +588,7 @@ def build_carto_animated_glb(
     lat_values: np.ndarray,
     output_path: Path,
     n_frames: int = 30,
-    loop_duration_s: float = 2.0,
+    loop_duration_s: float = 4.5,
     target_faces: int = 20000,
     max_size_mb: float = 50.0,
     vectors: bool = False,
@@ -624,15 +596,19 @@ def build_carto_animated_glb(
     legend_info: dict | None = None,
     cache: AnimatedBakeCache | None = None,
 ) -> bool:
-    """Build animated GLB with CARTO-style highlight ring over static colormap.
+    """Build animated GLB with CARTO excitation wavefront using morph targets.
 
-    Uses the full mesh (no decimation).  The static vertex colors are baked
-    into a shared baseColorTexture, and the highlight ring is rendered via
-    per-frame emissiveTextures.
+    Single mesh + COLOR_0 vertex color morph targets (one per frame).
+    Base COLOR_0 = static LAT heatmap colors; each morph target stores the
+    per-frame wavefront delta so the runtime interpolates smoothly.
+
+    Loop duration default is 4.5s to match real CARTO 3 cycle timing.
 
     Returns:
         True if the GLB was written, False if skipped.
     """
+    from med2glb.glb.animation import _add_animated_mesh_to_gltf, _add_morph_animation
+
     def _report(desc: str, current: int = 0, total: int = 0) -> None:
         if progress:
             progress(desc, current, total)
@@ -641,13 +617,8 @@ def build_carto_animated_glb(
         mesh_data = cache.mesh_data
         lat_values = cache.lat_values
         n_frames = cache.n_frames
-        unwelded_verts = cache.unwelded_verts
-        unwelded_normals = cache.unwelded_normals
-        unwelded_faces = cache.unwelded_faces
-        shared_uvs = cache.shared_uvs
+        frame_colors = cache.frame_colors
         centroid = cache.centroid
-        base_texture = cache.base_texture
-        emissive_textures = cache.emissive_textures
     else:
         # Compute everything from scratch (non-cached path)
         tmp_cache = prepare_animated_cache(
@@ -663,13 +634,8 @@ def build_carto_animated_glb(
         mesh_data = tmp_cache.mesh_data
         lat_values = tmp_cache.lat_values
         n_frames = tmp_cache.n_frames
-        unwelded_verts = tmp_cache.unwelded_verts
-        unwelded_normals = tmp_cache.unwelded_normals
-        unwelded_faces = tmp_cache.unwelded_faces
-        shared_uvs = tmp_cache.shared_uvs
+        frame_colors = tmp_cache.frame_colors
         centroid = tmp_cache.centroid
-        base_texture = tmp_cache.base_texture
-        emissive_textures = tmp_cache.emissive_textures
 
     # Compute animated arrow dashes if vectors enabled
     arrow_frame_dashes = None
@@ -703,7 +669,32 @@ def build_carto_animated_glb(
                 arrow_frame_dashes, face_grads, face_centers,
             )
 
-    # Build glTF
+    # Build morph target color deltas from base colors.
+    # frame_colors[f] = absolute RGBA per vertex for frame f.
+    # Morph target delta = frame_colors[f] - base_colors so the glTF
+    # runtime computes: result = base + weight * delta = frame_colors[f].
+    n_verts = len(mesh_data.vertices)
+    if mesh_data.vertex_colors is not None:
+        base_colors = mesh_data.vertex_colors.astype(np.float32)
+    else:
+        base_colors = np.full((n_verts, 4), [0.7, 0.7, 0.7, 1.0], dtype=np.float32)
+
+    color_deltas = [
+        (frame_colors[f] - base_colors).astype(np.float32)
+        for f in range(n_frames)
+    ]
+
+    # Create centered mesh data for the single animated mesh
+    centered_verts, cent_offset = _center_vertices(mesh_data.vertices.astype(np.float32))
+    anim_mesh = MeshData(
+        structure_name=mesh_data.structure_name or "carto_animated",
+        vertices=centered_verts,
+        faces=mesh_data.faces,
+        normals=mesh_data.normals.astype(np.float32) if mesh_data.normals is not None else None,
+        material=mesh_data.material,
+    )
+
+    # glTF document
     gltf = pygltflib.GLTF2(
         scene=0,
         scenes=[pygltflib.Scene(nodes=[])],
@@ -714,133 +705,43 @@ def build_carto_animated_glb(
         buffers=[],
         materials=[],
         animations=[],
-        images=[],
-        textures=[],
-        samplers=[],
     )
     if mesh_data.material.unlit:
         gltf.extensionsUsed = ["KHR_materials_unlit"]
     binary_data = bytearray()
 
-    # Shared sampler
-    gltf.samplers.append(pygltflib.Sampler(
-        magFilter=pygltflib.LINEAR,
-        minFilter=pygltflib.LINEAR,
-        wrapS=pygltflib.CLAMP_TO_EDGE,
-        wrapT=pygltflib.CLAMP_TO_EDGE,
-    ))
+    # Add material — unlit, vertex-color driven (no texture needed for animated GLB)
+    mat_kwargs: dict = dict(
+        name="carto_wavefront",
+        pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+            baseColorFactor=[1.0, 1.0, 1.0, 1.0],
+            metallicFactor=0.0,
+            roughnessFactor=0.45,
+        ),
+        doubleSided=True,
+    )
+    if mesh_data.material.unlit:
+        mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
+    gltf.materials.append(pygltflib.Material(**mat_kwargs))
 
-    # Embed base color texture (shared across all frames)
-    base_offset = len(binary_data)
-    binary_data.extend(base_texture)
-    _pad_to_4(binary_data)
+    # No positional displacement morph targets — color-only animation
+    pos_mts = [np.zeros((n_verts, 3), dtype=np.float32)] * n_frames
 
-    base_bv_idx = len(gltf.bufferViews)
-    gltf.bufferViews.append(pygltflib.BufferView(
-        buffer=0, byteOffset=base_offset, byteLength=len(base_texture),
-    ))
-    base_img_idx = len(gltf.images)
-    gltf.images.append(pygltflib.Image(
-        bufferView=base_bv_idx, mimeType="image/png",
-    ))
-    base_tex_idx = len(gltf.textures)
-    gltf.textures.append(pygltflib.Texture(sampler=0, source=base_img_idx))
-
-    # Embed per-frame emissive textures
-    emissive_tex_indices: list[int] = []
-    for fi in range(n_frames):
-        img_offset = len(binary_data)
-        binary_data.extend(emissive_textures[fi])
-        _pad_to_4(binary_data)
-
-        img_bv_idx = len(gltf.bufferViews)
-        gltf.bufferViews.append(pygltflib.BufferView(
-            buffer=0, byteOffset=img_offset, byteLength=len(emissive_textures[fi]),
-        ))
-        img_idx = len(gltf.images)
-        gltf.images.append(pygltflib.Image(
-            bufferView=img_bv_idx, mimeType="image/png",
-        ))
-        tex_idx = len(gltf.textures)
-        gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))
-        emissive_tex_indices.append(tex_idx)
-
-    del emissive_textures  # free memory
-
-    # Shared geometry: positions, normals, UVs, indices (written once)
-    pos_acc = write_accessor(
-        gltf, binary_data, unwelded_verts, pygltflib.ARRAY_BUFFER,
-        pygltflib.FLOAT, pygltflib.VEC3, with_minmax=True,
+    _report("Assembling morph target GLB...", 0, n_frames)
+    mesh_node_idx, _ = _add_animated_mesh_to_gltf(
+        gltf, anim_mesh, pos_mts, binary_data, 0,
+        color_morph_targets=color_deltas,
+        base_vertex_colors=base_colors,
     )
 
-    norm_acc = None
-    if unwelded_normals is not None:
-        norm_acc = write_accessor(
-            gltf, binary_data, unwelded_normals, pygltflib.ARRAY_BUFFER,
-            pygltflib.FLOAT, pygltflib.VEC3,
-        )
+    # Morph weight animation: cycle through frames seamlessly
+    dt = loop_duration_s / n_frames
+    frame_times = [i * dt for i in range(n_frames)]
+    _add_morph_animation(gltf, frame_times, [pos_mts], binary_data, 1)
 
-    uv_acc = write_accessor(
-        gltf, binary_data, shared_uvs, pygltflib.ARRAY_BUFFER,
-        pygltflib.FLOAT, pygltflib.VEC2,
-    )
+    child_node_indices = [mesh_node_idx]
 
-    idx_acc = write_accessor(
-        gltf, binary_data, unwelded_faces.ravel(), pygltflib.ELEMENT_ARRAY_BUFFER,
-        pygltflib.UNSIGNED_INT, pygltflib.SCALAR, with_minmax=True,
-    )
-
-    # Per-frame: material (shared base + per-frame emissive) + mesh + node
-    _report("Assembling GLB...", n_frames, n_frames)
-    for fi in range(n_frames):
-        mat_idx = len(gltf.materials)
-        mat_kwargs: dict = dict(
-            name=f"wavefront_{fi}",
-            pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
-                baseColorTexture=pygltflib.TextureInfo(index=base_tex_idx),
-                baseColorFactor=[1.0, 1.0, 1.0, 1.0],
-                metallicFactor=0.0,
-                roughnessFactor=0.45,
-            ),
-            emissiveTexture=pygltflib.TextureInfo(index=emissive_tex_indices[fi]),
-            emissiveFactor=[1.0, 1.0, 1.0],
-            doubleSided=True,
-        )
-        if mesh_data.material.unlit:
-            mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
-        gltf.materials.append(pygltflib.Material(**mat_kwargs))
-
-        # Primitive with shared geometry
-        attrs = pygltflib.Attributes(POSITION=pos_acc)
-        if norm_acc is not None:
-            attrs.NORMAL = norm_acc
-        attrs.TEXCOORD_0 = uv_acc
-
-        mesh_idx = len(gltf.meshes)
-        gltf.meshes.append(pygltflib.Mesh(
-            name=f"wavefront_{fi}",
-            primitives=[pygltflib.Primitive(
-                attributes=attrs,
-                indices=idx_acc,
-                material=mat_idx,
-            )],
-        ))
-
-        # Node: first frame visible, rest hidden
-        # Tiny z-offset per frame prevents z-fighting on HoloLens when
-        # zero-scaled meshes aren't fully culled by the renderer.
-        scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]
-        z_offset = fi * 0.0001  # 0.1mm per frame — invisible but separates geometry
-        gltf.nodes.append(pygltflib.Node(
-            name=f"wavefront_{fi}", mesh=mesh_idx, scale=scale,
-            translation=[0.0, 0.0, z_offset],
-        ))
-
-    # Collect all child node indices for the root node
-    child_node_indices = list(range(n_frames))
-
-    # Add arrow nodes if vectors enabled
-    arrow_node_indices: list[int] = []
+    # Arrow nodes (vectors) if enabled
     if arrow_frame_dashes is not None:
         _report("Building arrow geometry...")
         from med2glb.glb.arrow_builder import build_animated_arrow_nodes
@@ -850,17 +751,17 @@ def build_carto_animated_glb(
             gltf, binary_data, n_frames,
             speed_factors=arrow_speed_factors,
             unlit=mesh_data.material.unlit,
-            centroid_offset=centroid,
+            centroid_offset=cent_offset,
         )
         child_node_indices.extend(arrow_node_indices)
 
     if legend_info:
         from med2glb.glb.legend_builder import add_legend_nodes
-        centered_verts = (
-            mesh_data.vertices - np.array(centroid, dtype=np.float32)
+        centered_for_legend = (
+            mesh_data.vertices - np.array(cent_offset, dtype=np.float32)
         ).astype(np.float32)
         legend_nodes = add_legend_nodes(
-            gltf, binary_data, centered_verts,
+            gltf, binary_data, centered_for_legend,
             coloring=legend_info["coloring"],
             clamp_range=tuple(legend_info["clamp_range"]),
             centroid=[0.0, 0.0, 0.0],
@@ -868,65 +769,7 @@ def build_carto_animated_glb(
         )
         child_node_indices.extend(legend_nodes)
 
-    # Animation: switch visible frame via scale keyframes
-    dt = loop_duration_s / n_frames
-    keyframe_times = np.array([i * dt for i in range(n_frames)], dtype=np.float32)
-    time_acc = write_accessor(
-        gltf, binary_data, keyframe_times, None,
-        pygltflib.FLOAT, pygltflib.SCALAR, with_minmax=True,
-    )
-
-    channels = []
-    samplers = []
-
-    for fi in range(n_frames):
-        scales = np.zeros((n_frames, 3), dtype=np.float32)
-        scales[fi] = [1.0, 1.0, 1.0]
-
-        scale_acc = write_accessor(
-            gltf, binary_data, scales, None,
-            pygltflib.FLOAT, pygltflib.VEC3,
-        )
-
-        sampler_idx = len(samplers)
-        samplers.append(pygltflib.AnimationSampler(
-            input=time_acc,
-            output=scale_acc,
-            interpolation=pygltflib.ANIM_STEP,
-        ))
-        channels.append(pygltflib.AnimationChannel(
-            sampler=sampler_idx,
-            target=pygltflib.AnimationChannelTarget(node=fi, path="scale"),
-        ))
-
-    # Arrow frame visibility channels (synced with wavefront)
-    for fi, node_idx in enumerate(arrow_node_indices):
-        scales = np.zeros((n_frames, 3), dtype=np.float32)
-        scales[fi] = [1.0, 1.0, 1.0]
-
-        scale_acc = write_accessor(
-            gltf, binary_data, scales, None,
-            pygltflib.FLOAT, pygltflib.VEC3,
-        )
-
-        sampler_idx = len(samplers)
-        samplers.append(pygltflib.AnimationSampler(
-            input=time_acc,
-            output=scale_acc,
-            interpolation=pygltflib.ANIM_STEP,
-        ))
-        channels.append(pygltflib.AnimationChannel(
-            sampler=sampler_idx,
-            target=pygltflib.AnimationChannelTarget(node=node_idx, path="scale"),
-        ))
-
-    gltf.animations.append(pygltflib.Animation(
-        name="excitation_ring",
-        channels=channels,
-        samplers=samplers,
-    ))
-
-    # Root node: mm -> m conversion + 10x AR display scale.
+    # Root node: mm → m + 10x AR display scale
     root_idx = len(gltf.nodes)
     gltf.nodes.append(pygltflib.Node(
         name="root",
@@ -944,8 +787,8 @@ def build_carto_animated_glb(
     gltf.save(str(output_path))
 
     logger.debug(
-        f"CARTO animated GLB: {n_frames} frames, "
-        f"{len(mesh_data.vertices)} verts, "
+        f"CARTO animated GLB: {n_frames} frames (morph targets), "
+        f"{n_verts} verts, "
         f"{output_path.stat().st_size / 1024:.0f} KB"
     )
     return True

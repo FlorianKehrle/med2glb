@@ -185,7 +185,9 @@ class TestCartoEndToEnd:
             assert output.exists()
             gltf = pygltflib.GLTF2.load(str(output))
             assert len(gltf.animations) == 1
-            assert len(gltf.meshes) == 5
+            # Single mesh + COLOR_0 morph targets (one per frame)
+            assert len(gltf.meshes) == 1
+            assert len(gltf.meshes[0].primitives[0].targets) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +242,9 @@ class TestRealCartoV71:
         assert output.exists()
         gltf = pygltflib.GLTF2.load(str(output))
         assert len(gltf.animations) == 1
-        assert len(gltf.meshes) == 5
+        # Single mesh with COLOR_0 morph targets
+        assert len(gltf.meshes) == 1
+        assert len(gltf.meshes[0].primitives[0].targets) == 5
 
     def test_vector_quality_accepted(self, v71_study):
         """v7.1 single-map data accepted — LAT range (297ms) and gradient coverage are sufficient."""

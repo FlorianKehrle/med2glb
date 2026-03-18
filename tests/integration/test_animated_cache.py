@@ -91,7 +91,7 @@ class TestAnimatedBakeCache:
         assert cache is not None
         assert cache.n_frames == n_frames
         assert cache.base_texture is not None
-        assert len(cache.emissive_textures) == n_frames
+        assert cache.frame_colors.shape == (n_frames, len(mesh_data.vertices), 4)
 
         out = tmp_path / "cached.glb"
         result = build_carto_animated_glb(
@@ -104,9 +104,11 @@ class TestAnimatedBakeCache:
         assert out.exists()
         gltf = pygltflib.GLTF2.load(str(out))
         assert len(gltf.animations) == 1
-        assert len(gltf.meshes) == n_frames
-        # 1 base texture + n_frames emissive textures
-        assert len(gltf.textures) == 1 + n_frames
+        # Single mesh with COLOR_0 morph targets (not 5 separate meshes)
+        assert len(gltf.meshes) == 1
+        assert len(gltf.meshes[0].primitives[0].targets) == n_frames
+        # No emissive textures — vertex color morph targets
+        assert len(gltf.textures) == 0
 
     def test_cached_matches_uncached(self, large_carto_data, tmp_path):
         """Cached and uncached paths produce identical file sizes."""

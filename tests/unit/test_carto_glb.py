@@ -64,7 +64,7 @@ class TestGlbVertexColors:
 
 class TestCartoAnimatedGlb:
     def test_build_animated_glb(self, synthetic_carto_mesh, synthetic_carto_points, tmp_path):
-        """Test animated GLB creation from CARTO data."""
+        """Test animated GLB creation — single mesh + COLOR_0 morph targets."""
         from med2glb.glb.carto_builder import build_carto_animated_glb
         from med2glb.io.carto_mapper import (
             carto_mesh_to_mesh_data,
@@ -80,7 +80,6 @@ class TestCartoAnimatedGlb:
             synthetic_carto_mesh, synthetic_carto_points, field="lat"
         )
         lat_values = interpolate_sparse_values(synthetic_carto_mesh, lat_values)
-        # Resample to mesh_data vertices (may differ from raw mesh vertex count)
         tree = KDTree(synthetic_carto_mesh.vertices)
         _, idx = tree.query(mesh_data.vertices)
         active_lat = lat_values[idx]
@@ -94,34 +93,30 @@ class TestCartoAnimatedGlb:
         assert output.exists()
         gltf = pygltflib.GLTF2.load(str(output))
 
-        # Should have 5 frames (meshes) + 1 root node (mm→m scale)
-        assert len(gltf.meshes) == 5
-        assert len(gltf.nodes) == 6
+        # Single mesh (not 30 copies) + 1 root node
+        assert len(gltf.meshes) == 1
+        assert len(gltf.nodes) == 2  # 1 mesh node + 1 root
 
-        # First frame node visible, rest hidden
-        assert gltf.nodes[0].scale == [1.0, 1.0, 1.0]
-        assert gltf.nodes[1].scale == [0.0, 0.0, 0.0]
-
-        # Root node wraps all frames with mm→m + 10x AR scale
-        root = gltf.nodes[5]
+        # Root node: mm→m + 10x AR scale
+        root = gltf.nodes[-1]
         assert root.scale == [0.01, 0.01, 0.01]
-        assert root.children == [0, 1, 2, 3, 4]
-        assert gltf.scenes[0].nodes == [5]
+        assert gltf.scenes[0].nodes == [len(gltf.nodes) - 1]
 
-        # Should have animation
+        # Single mesh has COLOR_0 base attribute and 5 morph targets
+        prim = gltf.meshes[0].primitives[0]
+        assert prim.attributes.COLOR_0 is not None
+        assert len(prim.targets) == 5
+        for target in prim.targets:
+            # pygltflib returns morph targets as plain dicts when loaded
+            color_accessor = target.get("COLOR_0") if isinstance(target, dict) else target.COLOR_0
+            assert color_accessor is not None
+
+        # No textures (vertex color morph targets, no emissive textures)
+        assert len(gltf.images) == 0
+        assert len(gltf.textures) == 0
+
+        # Has morph weight animation
         assert len(gltf.animations) == 1
-        assert gltf.animations[0].name == "excitation_ring"
-
-        # Each mesh should have TEXCOORD_0 (colors baked into textures)
-        for mesh in gltf.meshes:
-            prim = mesh.primitives[0]
-            assert prim.attributes.TEXCOORD_0 is not None
-            assert prim.attributes.COLOR_0 is None
-
-        # Output should NOT have unlit
-        assert "KHR_materials_unlit" not in (gltf.extensionsUsed or [])
-        for mat in gltf.materials:
-            assert "KHR_materials_unlit" not in (mat.extensions or {})
 
     def test_single_frame_no_division_error(self, synthetic_carto_mesh, synthetic_carto_points, tmp_path):
         """n_frames=1 must not raise ZeroDivisionError."""
