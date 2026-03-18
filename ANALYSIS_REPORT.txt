@@ -1,0 +1,277 @@
+=== VELDT AR UNITY HOLOLENS - GLB/GLTF LOADING & RENDERING ANALYSIS ===
+
+## 1. GLBTFAST CONFIGURATION & DEPENDENCIES
+
+**Package Version:** glTFast 6.16.1 (com.unity.cloud.gltfast)
+**Related Compression Packages:**
+  - Draco: 5.4.3 (com.unity.cloud.draco)
+  - KTX2: 3.6.3 (com.unity.cloud.ktx)
+  - meshopt: 0.2.0-exp.1 (com.unity.meshopt.decompress)
+
+**File Locations:**
+- manifest.json: C:\Users\flo\git\veldt\VeldtAR.Unity\Packages\manifest.json (line 26)
+- packages-lock.json: C:\Users\flo\git\veldt\VeldtAR.Unity\Packages\packages-lock.json (lines 112-123)
+
+**Material Generator:** BuiltInMaterialGenerator (default glTFast material generator)
+  - Location: C:\Users\flo\git\veldt\VeldtAR.Unity\Assets\Scripts\Model\Loader.cs (line 58)
+
+---
+
+## 2. RENDER PIPELINE CONFIGURATION
+
+**Graphics Pipeline:** Built-in Render Pipeline (NOT HDRP or URP)
+**File:** C:\Users\flo\git\veldt\VeldtAR.Unity\ProjectSettings\GraphicsSettings.asset
+
+Key settings:
+- m_DefaultRenderingPath: 1 (Forward rendering)
+- m_DefaultMobileRenderingPath: 1 (Forward rendering for mobile)
+- m_CustomRenderPipeline: {fileID: 0} (No custom pipeline - built-in)
+- No URP/HDRP configuration found
+
+**Implications for HoloLens:** Forward rendering path is standard for mobile/VR. Built-in shader support is required.
+
+---
+
+## 3. GLB LOADING PIPELINE (Loader.cs: C:\Users\flo\git\veldt\VeldtAR.Unity\Assets\Scripts\Model\Loader.cs)
+
+**7-Phase Loading Process:**
+
+**Phase 1: Download** (lines 50-126)
+- Downloads GLB via UnityWebRequest with certificate bypass
+- Handles Draco, meshopt, KTX2 compression automatically
+
+**Phase 2: Parse with glTFast** (lines 57-70)
+- GltfImport with BuiltInMaterialGenerator
+- Creates glTFast-specific materials (glTF/PbrMetallicRoughness, glTF/Unlit, etc.)
+
+**Phase 3: Instantiate Scene** (lines 73-81)
+- InstantiateMainSceneAsync creates GameObject hierarchy with renderers
+
+**Phase 4: Mesh Fixes** (lines 86, 169-187)
+- SkinnedMeshRenderer.updateWhenOffscreen = true
+- Meshes marked as dynamic: mesh.MarkDynamic()
+
+**Phase 5: Material Conversion** (lines 88-92, 320-510)
+- **CRITICAL:** Converts ALL glTFast materials to Unity Standard shader
+- Reason: glTFast uses shader_feature_local keywords that get stripped in HoloLens builds
+- Exception: Metadata objects (legend/info) are SKIPPED (preserves glTFast shaders for vertex color support)
+
+**Phase 6: Animation** (lines 95, 193-211)
+- Auto-play Legacy Animation or Animator components
+
+**Phase 7: ModelData Integration** (lines 98, 218-289)
+- Assigns to ModelData ScriptableObject for manipulation
+
+---
+
+## 4. MATERIAL CONVERSION: GLTFAST → STANDARD (ConvertGltfMaterialsToStandard, lines 320-510)
+
+**When:** Runtime, immediately after model instantiation
+**What Gets Converted:** All glTFast/Unlit → Standard shader
+**Exception:** Metadata objects (legend/info) retain glTFast shaders
+
+**Property Mapping:**
+
+1. **Base Color** (lines 360-373)
+   - glTF property: baseColorFactor → Standard: _Color
+   - glTF property: baseColorTexture → Standard: _MainTex
+   - Tiling/offset preserved
+
+2. **Metallic & Roughness** (lines 375-387)
+   - glTF: metallicFactor → Standard: _Metallic
+   - glTF: roughnessFactor → Standard: _Glossiness (inverted: 1 - roughness)
+   - **NOTE:** Texture channel layout differs; only scalar values transferred
+
+3. **Normal Maps** (lines 389-400)
+   - glTF: normalTexture → Standard: _BumpMap
+   - Enabled if glTF material has _NORMALMAP keyword enabled
+
+4. **Occlusion** (lines 402-412)
+   - glTF: occlusionTexture → Standard: _OcclusionMap
+   - Requires _OCCLUSION keyword in glTF material
+
+5. **Emission** (lines 414-448)
+   - glTF: emissiveFactor → Standard: _EmissionColor
+   - glTF: emissiveTexture → Standard: _EmissionMap
+   - For Unlit materials: simulates unlit by using full emission
+
+6. **Transparency/Alpha** (lines 450-488)
+   - glTF _ALPHABLEND_ON → Standard Mode 3 (Transparent/Premultiply)
+   - glTF _ALPHAPREMULTIPLY_ON → Standard Mode 3
+   - glTF _ALPHATEST_ON → Standard Mode 1 (Cutout)
+   - Detects implicit transparency from base color alpha < 1.0
+
+7. **Double-Sided** (lines 490-496)
+   - glTF _Cull property (0 = Off) → Standard _Cull property
+
+8. **Shared Material Caching** (lines 329-353)
+   - Reuses converted materials across renderers to avoid duplication
+
+**Example Conversion Code:**
+`csharp
+Material stdMat = new Material(standardShader);
+stdMat.name = mat.name;
+if (mat.HasProperty("baseColorFactor"))
+    stdMat.SetColor("_Color", mat.GetColor("baseColorFactor"));
+if (mat.HasProperty("baseColorTexture"))
+{
+    var tex = mat.GetTexture("baseColorTexture");
+    if (tex != null)
+    {
+        stdMat.SetTexture("_MainTex", tex);
+        stdMat.SetTextureScale("_MainTex", mat.GetTextureScale("baseColorTexture"));
+        stdMat.SetTextureOffset("_MainTex", mat.GetTextureOffset("baseColorTexture"));
+    }
+}
+`
+
+---
+
+## 5. VERTEX COLOR HANDLING
+
+**Location:** C:\Users\flo\git\veldt\VeldtAR.Unity\Assets\Resources\ScriptableObjects\ModelData.cs
+
+**Detection** (SetCuttingPlaneSubmeshMaterial method):
+`csharp
+bool hasVertexColors = false;
+Mesh mesh = null;
+if (renderer is SkinnedMeshRenderer smr)
+    mesh = smr.sharedMesh;
+else if (renderer is MeshRenderer)
+{
+    var mf = renderer.GetComponent<MeshFilter>();
+    if (mf != null) mesh = mf.sharedMesh;
+}
+if (mesh != null)
+    hasVertexColors = mesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Color);
+`
+
+**Usage:** When cutting plane is active
+`csharp
+if (hasVertexColors)
+    mat.EnableKeyword("_VERTEX_COLORS_ON");
+`
+
+**Limitation:** Vertex colors are ONLY used in CuttingPlane shader (_VERTEX_COLORS_ON keyword).
+The Standard shader does NOT have vertex color support — vertex colors are ignored when Standard shader is applied.
+
+---
+
+## 6. SHADER INFRASTRUCTURE
+
+**Shader Warmup:** C:\Users\flo\git\veldt\VeldtAR.Unity\Assets\Scripts\AppLifecycle\ShaderWarmup.cs
+
+**Purpose:** Ensure glTFast shader variants are compiled on HoloLens (they're not referenced by scene materials)
+
+**Warmed Shaders:**
+1. glTF/PbrMetallicRoughness (most common)
+   - Opaque + textures
+   - Transparent (_ALPHABLEND_ON)
+   - Double-sided
+   - Metallic + normal maps
+   - **Emission** (CARTO models)
+   - Emission + occlusion
+   - Texture transform
+   - Full-featured (all flags)
+   - Alpha blend + emission (lines 292-299)
+
+2. glTF/PbrSpecularGlossiness (some medical exporters)
+
+3. glTF/Unlit (label/annotation geometry)
+
+4. Standard shader variants (with transparency/alpha premultiply)
+
+5. SkinnedMeshRenderer variants (animations)
+
+**Custom Shader:** CuttingPlane.shader
+**Location:** C:\Users\flo\git\veldt\VeldtAR.Unity\Assets\Resources\Shaders\CuttingPlane.shader
+
+Features:
+- Supports vertex colors via _VERTEX_COLORS_ON keyword (lines 11, 80, 98-100, 106-108, 124-126)
+- Double-pass rendering: depth-only + shading
+- HoloLens optimization: #pragma multi_compile_instancing, instancing_options renderinglayer
+- Surface shader based on Standard lighting model
+
+---
+
+## 7. CRITICAL ISSUES FOR WHITE RENDERING ON HOLOLENS
+
+**Root Causes:**
+
+### Issue A: Vertex Colors Not Supported in Standard Shader
+- glTFast default uses vertex colors in some materials
+- Material conversion (Phase 5) replaces all glTFast shaders with Standard
+- Standard shader does NOT support vertex colors (COLOR_0 semantic)
+- **Result:** CARTO animated GLB with vertex colors (COLOR_0) become white
+
+**Evidence:**
+- Loader.cs line 345: Skips metadata objects from conversion (preserves glTFast)
+- Loader.cs lines 332-337: Explicitly checks for metadata to AVOID converting them
+- This selective conversion suggests vertex color awareness
+
+### Issue B: Texture Not Applied (Static GLB with UV-Baked Textures)
+**Possible causes:**
+1. baseColorTexture property not transferred if texture is null
+2. Metallic/Roughness texture channels not handled (only scalars transferred, line 375)
+3. Texture coordinate mismatch in conversion
+4. glTFast material generator not binding textures correctly
+
+**Evidence:**
+- Line 364-372: Only transfers baseColorTexture, not metallicRoughnessTexture
+- Line 375: Comment explicitly states "channel layout differs" for metallic/roughness
+
+### Issue C: HoloLens Shader Stripping
+- GLTFast uses shader_feature_local keywords
+- Not referenced in scene at build time → stripped from builds
+- Standard shader variants are pre-warmed (ShaderWarmup.cs lines 55-56, 212-220)
+- But custom vertex color variants may not be warmed
+
+---
+
+## 8. RECOMMENDATIONS FOR DEBUGGING
+
+### For Animated GLB with Vertex Colors:
+1. **Disable Standard conversion for specific models:**
+   - Modify Loader.cs ConvertGltfMaterialsToStandard() to skip models with vertex colors
+   - Keep glTFast/PbrMetallicRoughness shader which supports vertex colors
+
+2. **Alternative: Create Standard Vertex Color Variant**
+   - Copy Standard.shader
+   - Add vertex color support (COLOR semantic in appdata, multiply in fragment)
+   - Replace conversion to use this variant instead
+
+### For Static GLB with UV-Baked Textures:
+1. **Check GLB texture data:**
+   - Inspect baseColorTexture property in glTFast import
+   - Verify texture is loaded (mat.GetTexture("baseColorTexture") != null)
+
+2. **Enable metallic/roughness texture handling:**
+   - Modify line 375-387 to handle metallicRoughnessTexture if present
+   - Check texture channel layout compatibility
+
+3. **Verify conversion happens:**
+   - Add Debug.Log before/after ConvertGltfMaterialsToStandard()
+   - Confirm baseColorTexture is transferred to _MainTex
+
+### For Both:
+1. Implement custom material generator inheriting from BuiltInMaterialGenerator
+2. Override CreateMaterialSettings to customize material properties pre-conversion
+3. Add ConditionallyPreserveGltfastShader() check for vertex color meshes
+4. Test with SimpleMetalRough.glb example from glTFast samples
+
+---
+
+## 9. FILE REFERENCE SUMMARY
+
+| File | Purpose | Key Lines |
+|------|---------|-----------|
+| Loader.cs | GLB loading pipeline | 57-92 (material conversion call) |
+| Loader.cs | Material conversion | 320-510 |
+| Loader.cs | HoloLens mesh fixes | 169-187 |
+| ModelData.cs | Vertex color detection | SetCuttingPlaneSubmeshMaterial() |
+| ModelData.cs | Material management | 720-780 (SetStandardRendering) |
+| ShaderWarmup.cs | Shader compilation | 204-220 (WarmupGltfShaderVariants) |
+| CuttingPlane.shader | Vertex color support | Lines 11, 80, 98-100, 124-126 |
+| GraphicsSettings.asset | Render pipeline | m_CustomRenderPipeline: {fileID: 0} |
+| manifest.json | Package versions | Line 26 (glTFast 6.16.1) |
+

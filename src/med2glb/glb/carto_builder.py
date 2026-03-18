@@ -706,23 +706,23 @@ def build_carto_animated_glb(
         materials=[],
         animations=[],
     )
-    if mesh_data.material.unlit:
-        gltf.extensionsUsed = ["KHR_materials_unlit"]
+    # Animated GLB always uses KHR_materials_unlit so glTFast picks glTF/Unlit
+    # (which reads vertex colors via mesh.SetColors) rather than PbrMetallicRoughness
+    # (which ignores them in Unity's built-in pipeline).
+    gltf.extensionsUsed = ["KHR_materials_unlit"]
     binary_data = bytearray()
 
-    # Add material — unlit, vertex-color driven (no texture needed for animated GLB)
-    mat_kwargs: dict = dict(
+    # Material — always unlit, vertex-color driven (no texture for animated GLB)
+    gltf.materials.append(pygltflib.Material(
         name="carto_wavefront",
         pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
             baseColorFactor=[1.0, 1.0, 1.0, 1.0],
             metallicFactor=0.0,
-            roughnessFactor=0.45,
+            roughnessFactor=0.0,
         ),
         doubleSided=True,
-    )
-    if mesh_data.material.unlit:
-        mat_kwargs["extensions"] = {"KHR_materials_unlit": {}}
-    gltf.materials.append(pygltflib.Material(**mat_kwargs))
+        extensions={"KHR_materials_unlit": {}},
+    ))
 
     # No positional displacement morph targets — color-only animation
     pos_mts = [np.zeros((n_verts, 3), dtype=np.float32)] * n_frames
