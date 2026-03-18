@@ -25,13 +25,25 @@ from med2glb.glb.vertex_color_bake import compute_texture_size
 
 logger = logging.getLogger("med2glb")
 
-# Highlight ring parameters (tuned to match CARTO3 excitation ring).
-# σ=0.04 gives ~3-5% mesh coverage per frame, matching the real CARTO ring width.
-# The ring is primarily white with a subtle base-color tint so that it glows
-# warm over red regions and cool over blue — matching CARTO reference behavior.
-_RING_WIDTH = 0.04  # sigma of Gaussian (CARTO ring covers ~3-5% of mesh)
-_RING_WHITE = 0.50  # additive white component (dominant)
-_RING_COLOR = 0.10  # additive base-color tint (subtle hue warmth)
+# Excitation wavefront parameters (tuned to match real CARTO3 behavior).
+#
+# The wavefront has two components:
+#   1. Leading-edge ring: narrow bright band at the activation frontier
+#   2. Trailing glow: broad diffuse region behind the ring (recently activated tissue)
+#
+# Combined coverage: ~25-30% of mesh surface per frame (matching real CARTO3).
+# The ring is primarily white with subtle base-color tint.
+_RING_SIGMA = 0.03       # σ of Gaussian ring (narrow leading edge)
+_GLOW_DECAY = 8.0        # exponential decay rate for trailing glow
+_GLOW_EXTENT = 0.25      # how far behind the ring the glow extends (in LAT-norm units)
+_RING_INTENSITY = 0.70   # peak brightness of the ring (additive white)
+_GLOW_INTENSITY = 0.25   # peak brightness of the glow (dimmer than ring)
+_BASE_TINT = 0.10        # subtle base-color tint on the highlight
+
+# Backward-compat aliases used by prepare_animated_cache() (removed in T065-T068)
+_RING_WIDTH = _RING_SIGMA
+_RING_WHITE = 1.0 - _BASE_TINT
+_RING_COLOR = _BASE_TINT
 
 # xatlas time estimation — empirical power-law model: t = k * n_faces^exp
 # Fitted from 5 real CARTO meshes (v7.1 + v7.2, subdiv 0-2, 18K-506K faces).
@@ -41,6 +53,85 @@ _XATLAS_EXP = 1.79
 
 
 _fmt_duration = fmt_duration  # backward-compat alias
+
+
+def compute_wavefront_colors(
+    lat_norm: np.ndarray,
+    base_colors: np.ndarray,
+    n_frames: int,
+) -> np.ndarray:
+    """Compute per-frame per-vertex excitation wavefront colors.
+
+    The wavefront combines a bright leading-edge ring (narrow Gaussian)
+    with a broad diffuse trailing glow (exponential decay), matching
+    real CARTO 3 excitation behavior (~25-30% surface coverage per frame).
+
+    Parameters
+    ----------
+    lat_norm : ndarray, shape (N,)
+        Normalized LAT values in [0, 1].  NaN for unmapped vertices.
+    base_colors : ndarray, shape (N, 4)
+        Static heatmap RGBA colors (float32, range [0, 1]).
+    n_frames : int
+        Number of animation frames.
+
+    Returns
+    -------
+    ndarray, shape (n_frames, N, 4)
+        Per-frame RGBA colors (float32, range [0, 1]).  Unmapped
+        vertices get the base color unchanged across all frames.
+    """
+    n_verts = len(lat_norm)
+    valid = ~np.isnan(lat_norm)
+
+    # Time steps wrap around: last frame transitions smoothly back to first.
+    # We use n_frames+1 points to avoid duplicating the last=first boundary,
+    # then take the first n_frames values.
+    t_values = np.linspace(0, 1, n_frames, endpoint=False).reshape(-1, 1)  # (F, 1)
+    lat_v = lat_norm[np.newaxis, :]  # (1, N)
+
+    # --- Ring: narrow Gaussian at activation frontier ---
+    sigma_sq_2 = 2.0 * _RING_SIGMA ** 2
+    # Wrap-aware distance: accounts for seamless loop
+    delta = lat_v - t_values  # (F, N)
+    # Wrap to [-0.5, 0.5] for seamless looping
+    delta = delta - np.round(delta)
+    ring = np.exp(-(delta ** 2) / sigma_sq_2)  # (F, N)
+
+    # --- Glow: broad exponential decay behind the ring ---
+    # "Behind" = tissue that activated before current time (delta > 0 means
+    # LAT < current_time after wrapping, i.e. already activated).
+    # Use the wrapped delta: positive delta means vertex activated before t.
+    glow_raw = np.where(
+        delta > 0,
+        np.exp(-_GLOW_DECAY * delta / _GLOW_EXTENT),
+        0.0,
+    )
+    # Taper the glow so it fades to zero beyond _GLOW_EXTENT
+    glow = np.where(delta <= _GLOW_EXTENT, glow_raw, 0.0)
+
+    # --- Combine ring + glow ---
+    intensity = _RING_INTENSITY * ring + _GLOW_INTENSITY * glow  # (F, N)
+    intensity[:, ~valid] = 0.0
+    intensity = np.clip(intensity, 0.0, 1.0)
+
+    # Highlight color: white-dominant with subtle base-color tint
+    base_rgb = base_colors[:, :3]  # (N, 3)
+    highlight_rgb = np.full_like(base_rgb, 1.0) * (1.0 - _BASE_TINT) + base_rgb * _BASE_TINT
+
+    # Per-frame colors: blend base color with highlight based on intensity
+    # result = base_color * (1 - intensity) + highlight * intensity
+    base_expanded = base_colors[np.newaxis, :, :]  # (1, N, 4)
+    highlight_expanded = highlight_rgb[np.newaxis, :, :]  # (1, N, 3)
+    intensity_3 = intensity[:, :, np.newaxis]  # (F, N, 1)
+
+    frame_colors = np.empty((n_frames, n_verts, 4), dtype=np.float32)
+    frame_colors[:, :, :3] = (
+        base_expanded[:, :, :3] * (1.0 - intensity_3) + highlight_expanded * intensity_3
+    )
+    frame_colors[:, :, 3] = base_expanded[:, :, 3]  # preserve alpha
+
+    return frame_colors
 
 
 def _estimate_xatlas_time(n_faces: int) -> str:

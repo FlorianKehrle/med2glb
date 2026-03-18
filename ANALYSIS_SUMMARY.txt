@@ -1,0 +1,79 @@
+# ANALYSIS COMPLETE ✓
+
+## Summary for User
+
+I have completed a comprehensive analysis of the med2glb CARTO software. 
+Here's what was discovered:
+
+### KEY FINDINGS:
+
+1. **RAW VOLTAGE DATA IS AVAILABLE** ✓
+   - Located at: carto_mapper.py:513-559 (before colormap conversion)
+   - Forms: LAT (milliseconds), bipolar voltage (mV), unipolar voltage (mV)
+   - Type: numpy arrays [N] float64
+   - Source: Either mesh file [VerticesColorsSection] OR sparse car-file points
+
+2. **ALPHA CHANNEL IS CURRENTLY UNUSED** ✓
+   - Always set to 1.0 (fully opaque)
+   - Texture baking discards alpha (outputs RGB-only PNG)
+   - No rendering impact since alphaMode=OPAQUE globally
+
+3. **VOLTAGE → COLOR CONVERSION** ✓
+   - Happens in: carto_colormaps.py:94-157 (_apply_colormap function)
+   - Process: Normalize raw values to [0,1], interpolate through color stops
+   - Color gradients: LAT (red→yellow→green→cyan→blue→purple)
+   - Clamp ranges stored: (min,max) for each coloring type
+
+4. **IMPLEMENTATION PATH CLEAR** ✓
+   - Modify: carto_colormaps.py to encode normalized raw values in alpha
+   - Update: vertex_color_bake.py to preserve alpha in PNG output
+   - Store metadata: GLB extras with clamp_range for shader decoding
+
+### ARCHITECTURE OVERVIEW:
+
+med2glb is a Python 3.10+ pipeline:
+- Input: CARTO 3 .mesh + _car.txt files (and DICOM)
+- Processing: Parse geometry, map sparse voltage measurements to mesh vertices
+- Coloring: Apply LAT/bipolar/unipolar colormaps
+- Export: GLB (glTF 2.0) with texture-baked vertex colors
+- Target: HoloLens 2 AR visualization
+
+### SUPPORTED FORMATS:
+
+Confirmed:
+- CARTO 3 (v4.0, v5.0, v7.1, v6.0, v7.2+)
+- DICOM (echocardiography, volumes, temporal sequences)
+
+Mentioned but not actively implemented:
+- NIfTI, inHEART, STL
+
+### FILES SAVED:
+
+1. C:\Users\flo\git\med2glb\CARTO_ANALYSIS.md
+   - Complete 11KB technical reference
+   - All line numbers, code snippets, architecture details
+   - Implementation roadmap for voltage encoding
+
+### NEXT STEPS:
+
+To implement voltage encoding in alpha channel:
+
+1. Edit carto_colormaps.py:94-157
+   - Add 'encode_raw_to_alpha' parameter to colormap functions
+   - Normalize raw values same way as RGB: (v-lo)/(hi-lo)
+   - Set colors[valid,3] = normalized_value instead of 1.0
+
+2. Edit vertex_color_bake.py:436-440
+   - Change PNG mode from "RGB" to "RGBA" when encoding enabled
+   - Include alpha channel in rasterized texture
+
+3. Update builder.py:180-190
+   - Detect encoding mode to set alphaMode=BLEND instead of OPAQUE
+
+4. Store metadata in GLB extras
+   - clamp_range, coloring type, units for shader decoding
+
+---
+
+Complete analysis with all file paths, line numbers, code snippets,
+and implementation details saved to: CARTO_ANALYSIS.md

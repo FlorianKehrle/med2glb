@@ -63,8 +63,22 @@ def _add_animated_mesh_to_gltf(
     morph_targets: list[np.ndarray],
     binary_data: bytearray,
     index: int,
+    color_morph_targets: list[np.ndarray] | None = None,
+    base_vertex_colors: np.ndarray | None = None,
 ) -> int:
-    """Add a mesh with morph targets to the glTF document."""
+    """Add a mesh with morph targets to the glTF document.
+
+    Parameters
+    ----------
+    color_morph_targets : list of ndarray (n_verts, 4), optional
+        Per-frame vertex colors as COLOR_0 morph targets (VEC4 float32).
+        When provided, each entry becomes a COLOR_0 accessor in the
+        corresponding morph target.  Can be used alone (color-only
+        animation) or alongside positional morph_targets.
+    base_vertex_colors : ndarray (n_verts, 4), optional
+        Base COLOR_0 attribute for the mesh (VEC4 float32, range [0,1]).
+        Required when color_morph_targets is provided.
+    """
     mat = mesh_data.material
 
     # Create material
@@ -145,6 +159,34 @@ def _add_animated_mesh_to_gltf(
             )
         )
 
+    # Add base COLOR_0 if vertex colors provided
+    color_acc_idx = None
+    if base_vertex_colors is not None:
+        colors = base_vertex_colors.astype(np.float32)
+        color_data = colors.tobytes()
+        color_offset = len(binary_data)
+        binary_data.extend(color_data)
+        _pad_to_4(binary_data)
+
+        color_bv_idx = len(gltf.bufferViews)
+        gltf.bufferViews.append(
+            pygltflib.BufferView(
+                buffer=0,
+                byteOffset=color_offset,
+                byteLength=len(color_data),
+                target=pygltflib.ARRAY_BUFFER,
+            )
+        )
+        color_acc_idx = len(gltf.accessors)
+        gltf.accessors.append(
+            pygltflib.Accessor(
+                bufferView=color_bv_idx,
+                componentType=pygltflib.FLOAT,
+                count=len(colors),
+                type=pygltflib.VEC4,
+            )
+        )
+
     # Add face indices
     faces = mesh_data.faces.astype(np.uint32)
     idx_data = faces.tobytes()
@@ -173,7 +215,7 @@ def _add_animated_mesh_to_gltf(
         )
     )
 
-    # Add morph targets
+    # Add positional morph targets
     morph_target_accessors = []
     for mt_idx, displacement in enumerate(morph_targets):
         disp = displacement.astype(np.float32)
@@ -203,15 +245,52 @@ def _add_animated_mesh_to_gltf(
         )
         morph_target_accessors.append(disp_acc_idx)
 
+    # Add COLOR_0 morph targets
+    color_mt_accessors: list[int] = []
+    if color_morph_targets:
+        for cmt in color_morph_targets:
+            c = cmt.astype(np.float32)
+            c_data = c.tobytes()
+            c_offset = len(binary_data)
+            binary_data.extend(c_data)
+            _pad_to_4(binary_data)
+
+            c_bv_idx = len(gltf.bufferViews)
+            gltf.bufferViews.append(
+                pygltflib.BufferView(
+                    buffer=0,
+                    byteOffset=c_offset,
+                    byteLength=len(c_data),
+                )
+            )
+            c_acc_idx = len(gltf.accessors)
+            gltf.accessors.append(
+                pygltflib.Accessor(
+                    bufferView=c_bv_idx,
+                    componentType=pygltflib.FLOAT,
+                    count=len(c),
+                    type=pygltflib.VEC4,
+                )
+            )
+            color_mt_accessors.append(c_acc_idx)
+
     # Create primitive
     attributes = pygltflib.Attributes(POSITION=pos_acc_idx)
     if normal_acc_idx is not None:
         attributes.NORMAL = normal_acc_idx
+    if color_acc_idx is not None:
+        attributes.COLOR_0 = color_acc_idx
 
     # Build morph target list for primitive
+    n_targets = max(len(morph_target_accessors), len(color_mt_accessors))
     targets = []
-    for acc_idx in morph_target_accessors:
-        targets.append(pygltflib.Attributes(POSITION=acc_idx))
+    for i in range(n_targets):
+        target_attrs = pygltflib.Attributes()
+        if i < len(morph_target_accessors):
+            target_attrs.POSITION = morph_target_accessors[i]
+        if i < len(color_mt_accessors):
+            target_attrs.COLOR_0 = color_mt_accessors[i]
+        targets.append(target_attrs)
 
     primitive = pygltflib.Primitive(
         attributes=attributes,
@@ -222,7 +301,7 @@ def _add_animated_mesh_to_gltf(
 
     # Create mesh with morph target weights (all zero initially)
     mesh_idx = len(gltf.meshes)
-    weights = [0.0] * len(morph_targets) if morph_targets else None
+    weights = [0.0] * n_targets if n_targets > 0 else None
     gltf.meshes.append(
         pygltflib.Mesh(
             name=mesh_data.structure_name,
