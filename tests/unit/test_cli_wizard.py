@@ -11,6 +11,7 @@ from rich.console import Console
 
 from med2glb.cli_wizard import (
     _assess_vector_quality,
+    _auto_subdivide,
     _check_ai_available,
     estimate_time,
     estimate_time_details,
@@ -183,6 +184,22 @@ class TestEstimateTimeDetails:
         d2 = estimate_time_details(10_000, 100, has_lat=True, subdivide=2)
         assert d2["xatlas"] > d0["xatlas"]
         assert d0["subdivide"] == 0.0
+
+
+class TestAutoSubdivide:
+    def test_small_mesh(self):
+        assert _auto_subdivide(100) == 2
+        assert _auto_subdivide(4_999) == 2
+
+    def test_medium_mesh(self):
+        assert _auto_subdivide(5_000) == 1
+        assert _auto_subdivide(10_000) == 1
+        assert _auto_subdivide(19_999) == 1
+
+    def test_large_mesh(self):
+        assert _auto_subdivide(20_000) == 0
+        assert _auto_subdivide(100_000) == 0
+        assert _auto_subdivide(500_000) == 0
 
 
 class TestRunCartoWizard:

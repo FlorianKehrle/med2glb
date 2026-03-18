@@ -133,9 +133,7 @@ $ med2glb ./Export_Study/
 └───┴────────────────┴──────────┴───────────┴────────┴─────────────────┘
 
 Mesh selection [all]: 1
-Output mode (static / animated / both) [both]:
 LAT vectors (yes / no / only) [yes]:
-Subdivision level (0-3) [2]:
 
 Done: ReBS_V_SR_11
   Output:
@@ -162,20 +160,22 @@ The wizard displays a summary table with geometry stats, point coverage, and est
 | **Density** | Point-to-vertex ratio — higher means denser mapping coverage |
 | **Volts** | Available voltage data: **B** = bipolar, **U** = unipolar |
 | **Dimensions** | Bounding box of active vertices (W × H × D in mm) |
-| **Est Time** | Rough processing time estimate (subdivide=2, both static+animated) |
+| **Est Time** | Rough processing time estimate (auto-detected subdivide level, both static+animated) |
 
 #### Mesh Subdivision
 
 Loop subdivision increases mesh resolution before mapping measurement points, producing smooth color gradients via k-NN IDW interpolation instead of blocky nearest-neighbor.
 
-| Level | Faces | Mapping | Use Case |
-|---|---|---|---|
-| `0` | Original | Nearest-neighbor + linear | Fast preview |
-| `1` | ~4x | k-NN IDW (k=6) | Moderate quality |
-| `2` (default) | ~16x | k-NN IDW (k=6) | Good balance |
-| `3` | ~64x | k-NN IDW (k=6) | Maximum smoothness |
+The subdivision level is **auto-detected** from face count:
 
-Non-manifold meshes that cannot be subdivided fall back to the original geometry.
+| Level | Auto for | Faces | Mapping | Use Case |
+|---|---|---|---|---|
+| `0` | >20k faces | Original | Nearest-neighbor + linear | Already dense |
+| `1` | 5k–20k faces | ~4x | k-NN IDW (k=6) | Moderate meshes |
+| `2` | <5k faces | ~16x | k-NN IDW (k=6) | Small/sparse meshes |
+| `3` | override only | ~64x | k-NN IDW (k=6) | Maximum smoothness |
+
+Override with `--subdivide N` on the CLI. Non-manifold meshes fall back to the original geometry.
 
 #### LAT Conduction Vectors
 
@@ -192,15 +192,15 @@ The wizard automatically assesses vector quality (minimum 30 points, ≥20 ms LA
 #### Processing Pipeline
 
 1. **Parse** — `.mesh` and `_car.txt` files; strip inactive vertices (GroupID `-1000000`) and fill/cap geometry
-2. **Subdivide** — Loop subdivision (~4× faces per level) with k-NN IDW interpolation
+2. **Subdivide** — Loop subdivision (auto-detected level) with k-NN IDW interpolation
 3. **Color map** — per-vertex values mapped through clinical colormaps to RGBA (repeated per coloring)
-4. **xatlas UV unwrap** (~60-90s) — computed once, shared across all variants
+4. **xatlas UV unwrap** (~60-90s) — computed once for static heatmap GLBs
 5. **Rasterize** — vertex colors baked into texture with 10-iteration gutter bleeding
 6. **Encode** — lossless PNG textures
-7. **Build GLB** — geometry, textures, PBR materials, animation keyframes
-8. **Compress** (optional) — auto-selects best strategy: meshopt quantization + compression (`-cc`) + KTX2 textures for animated models, Draco + KTX2 for static
+7. **Build GLB** — static: texture + PBR material; animated: single mesh + COLOR_0 morph targets (no textures)
+8. **Compress** (optional) — auto-selects best strategy: meshopt quantization + compression (`-cc`) for animated, Draco + KTX2 for static
 
-Texture resolution scales with face count: 512px (≤5k), 1024px (≤20k), 2048px (≤80k), 4096px (>80k). For animated output, the full mesh is shared across all 30 frames — only the emissive texture changes per frame.
+Texture resolution scales with face count: 512px (≤5k), 1024px (≤20k), 2048px (≤80k), 4096px (>80k). The animated GLB uses a single mesh with **COLOR_0 vertex color morph targets** (one per frame) — no emissive textures needed. The excitation wavefront (glow + ring model, ~25-30% surface coverage) matches real CARTO 3 visual behavior and loops seamlessly every ~4.5s.
 
 > **Tip:** Install [`gltfpack`](https://github.com/zeux/meshoptimizer/releases) and [`toktx`](https://github.com/KhronosGroup/KTX-Software/releases) for optimal compression. Animated GLBs (morph targets) benefit most from gltfpack's meshopt compression — KTX2 alone only compresses textures (~15% of total size).
 
@@ -390,14 +390,14 @@ med2glb model.glb --compress --strategy ktx2          # Force KTX2 textures only
 | `downscale` | Progressive texture resolution reduction | No tools available | — |
 | `jpeg` | JPEG re-encoding with decreasing quality | Quick size reduction | — |
 
-**Auto strategy** selects: animated GLB → gltfpack (`-cc` meshopt) + KTX2, static GLB → Draco + KTX2, graceful fallback if tools aren't installed.
+**Auto strategy** selects: animated GLB → gltfpack (`-cc` meshopt), static GLB → Draco + KTX2, graceful fallback if tools aren't installed.
 
 **glTF extensions used:**
 - `KHR_mesh_quantization` + `EXT_meshopt_compression` — vertex quantization and buffer compression via gltfpack
-- `KHR_texture_basisu` — GPU-compressed textures (UASTC for base color, ETC1S for emissive ring frames)
+- `KHR_texture_basisu` — GPU-compressed textures (UASTC for base color) for static heatmap GLBs
 - `KHR_draco_mesh_compression` — static mesh compression
 
-> **HoloLens/glTFast note:** Requires Unity packages: `com.unity.cloud.gltfast`, `com.unity.cloud.ktx`, `com.unity.cloud.draco`, `com.unity.meshopt.decompress`.  Animated CARTO GLBs with 30 frames typically compress from ~50 MB to ~10-15 MB with meshopt + KTX2.  Emissive ring textures use ETC1S encoding which transcodes to BC1 (4bpp) — half the GPU memory of UASTC→BC7.
+> **HoloLens/glTFast note:** Requires Unity packages: `com.unity.cloud.gltfast`, `com.unity.cloud.ktx`, `com.unity.cloud.draco`, `com.unity.meshopt.decompress`.  Animated CARTO GLBs use COLOR_0 morph targets (no textures) — gltfpack meshopt compression is the main size reducer for those. Static heatmap GLBs with KTX2 textures compress well with both Draco + KTX2.
 
 ---
 

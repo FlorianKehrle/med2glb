@@ -553,8 +553,8 @@ def main(
                         input_path=subdir,
                         output=sub_output,
                         coloring=coloring,
-                        subdivide=subdivide,
-                        animate=animate,
+                        subdivide=subdivide if _was_option_provided(ctx, "subdivide") else None,
+                        animate=not no_animate,
                         vectors="yes" if vectors else "no",
                         target_faces=faces,
                     )
@@ -576,8 +576,8 @@ def main(
                             input_path=subdir,
                             output=sub_output,
                             coloring=coloring,
-                            subdivide=subdivide,
-                            animate=animate,
+                            subdivide=subdivide if _was_option_provided(ctx, "subdivide") else None,
+                            animate=not no_animate,
                             vectors="yes" if vectors else "no",
                             target_faces=faces,
                         )
@@ -586,8 +586,8 @@ def main(
                     input_path=input_path,
                     output=output,
                     coloring=coloring,
-                    subdivide=subdivide,
-                    animate=animate,
+                    subdivide=subdivide if _was_option_provided(ctx, "subdivide") else None,
+                    animate=not no_animate,
                     vectors="yes" if vectors else "no",
                     target_faces=faces,
                 )

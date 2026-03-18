@@ -121,6 +121,21 @@ def estimate_time(
     return "~{}h {}m".format(h, m) if m else "~{}h".format(h)
 
 
+def _auto_subdivide(n_faces: int) -> int:
+    """Auto-detect Loop subdivision level from face count.
+
+    Thresholds:
+        < 5 000 faces  → level 2 (4× more triangles)
+        5 000–20 000   → level 1 (smoother, moderate cost)
+        > 20 000       → level 0 (already dense enough)
+    """
+    if n_faces < 5_000:
+        return 2
+    if n_faces < 20_000:
+        return 1
+    return 0
+
+
 @dataclass
 class DetectedInput:
     """Result of analyzing the input path."""
@@ -517,22 +532,15 @@ def run_carto_wizard(
     colorings = preset_colorings if preset_colorings is not None else ["lat", "bipolar", "unipolar"]
 
     # --- Output mode ---
+    # Always produce both static + animated; respect preset_animate if provided.
     if preset_animate is not None and preset_static is not None:
         animate = preset_animate
         static = preset_static
-    elif interactive:
-        mode = Prompt.ask(
-            "Output",
-            choices=["static", "animated", "both"],
-            default="both",
-            console=console,
-        )
-        static = mode in ("static", "both")
-        animate = mode in ("animated", "both")
     else:
         static = True
         animate = True
-        logger.info("Using default output mode: both (static + animated)")
+        if not interactive:
+            logger.info("Output mode: static + animated (default)")
 
     # --- LAT vectors ---
     # Vectors are only produced for LAT coloring; assess quality to decide
@@ -576,18 +584,15 @@ def run_carto_wizard(
         vectors = "no"
 
     # --- Subdivision ---
+    # Auto-detect from face count; use preset if provided by CLI flag.
     if preset_subdivide is not None:
         subdivide = preset_subdivide
-    elif interactive:
-        sub_choice = Prompt.ask(
-            "Subdivision level (0-3, higher = smoother colors)",
-            default="2",
-            console=console,
-        )
-        subdivide = max(0, min(3, int(sub_choice)))
     else:
-        subdivide = 2
-        logger.info("Using default subdivision: 2")
+        sel = selected_indices if selected_indices is not None else list(range(len(study.meshes)))
+        max_faces = max((len(study.meshes[i].faces) for i in sel), default=0)
+        subdivide = _auto_subdivide(max_faces)
+        if not interactive:
+            logger.info(f"Auto-detected subdivision: {subdivide} ({max_faces:,} faces)")
 
     # --- Name ---
     # Auto-generate: <study_or_dir>_sub<N>
@@ -706,18 +711,10 @@ def run_batch_carto_wizard(
     colorings = preset_colorings if preset_colorings is not None else ["lat", "bipolar", "unipolar"]
 
     # --- Output mode (shared) ---
+    # Always produce both static + animated; respect preset if provided.
     if preset_animate is not None and preset_static is not None:
         animate = preset_animate
         static = preset_static
-    elif interactive:
-        mode = Prompt.ask(
-            "Output",
-            choices=["static", "animated", "both"],
-            default="both",
-            console=console,
-        )
-        static = mode in ("static", "both")
-        animate = mode in ("animated", "both")
     else:
         static = True
         animate = True
@@ -738,18 +735,13 @@ def run_batch_carto_wizard(
     else:
         vectors = "no"
 
-    # --- Subdivision (shared) ---
+    # --- Subdivision (shared) — auto-detect from max face count across studies ---
     if preset_subdivide is not None:
         subdivide = preset_subdivide
-    elif interactive:
-        sub_choice = Prompt.ask(
-            "Subdivision level (0-3, higher = smoother colors)",
-            default="2",
-            console=console,
-        )
-        subdivide = max(0, min(3, int(sub_choice)))
     else:
-        subdivide = 2
+        all_faces = [len(m.faces) for _, s in studies for m in s.meshes]
+        max_faces = max(all_faces, default=0)
+        subdivide = _auto_subdivide(max_faces)
 
     # --- Build per-study configs ---
     configs: list[CartoConfig] = []

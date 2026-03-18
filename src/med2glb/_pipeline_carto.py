@@ -824,13 +824,14 @@ def run_carto_pipeline(
     input_path: Path,
     output: Path,
     coloring: str,
-    subdivide: int,
+    subdivide: int | None,
     animate: bool,
     vectors: str,
     target_faces: int,
 ) -> None:
     """Execute the CARTO conversion pipeline."""
     from med2glb.core.types import CartoConfig
+    from med2glb.cli_wizard import _auto_subdivide
 
     start_time = time.time()
     study = _load_carto_study(input_path)
@@ -898,6 +899,11 @@ def run_carto_pipeline(
     # otherwise produce all available colorings.
     colorings = [coloring] if coloring != "all" else ["lat", "bipolar", "unipolar"]
 
+    # Auto-detect subdivision level if not explicitly provided
+    if subdivide is None:
+        max_faces = max((len(m.faces) for m in study.meshes), default=0)
+        subdivide = _auto_subdivide(max_faces)
+
     config = CartoConfig(
         input_path=input_path,
         output_dir=output.parent,
@@ -905,7 +911,7 @@ def run_carto_pipeline(
         colorings=colorings,
         subdivide=subdivide,
         animate=animate,
-        static=not animate,
+        static=True,           # always produce static GLBs
         vectors=effective_vectors,
         vector_mesh_indices=vec_suitable_list,
         target_faces=target_faces,
