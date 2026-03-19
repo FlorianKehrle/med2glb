@@ -102,9 +102,10 @@ class TestCartoAnimatedGlb:
         assert root.scale == [0.01, 0.01, 0.01]
         assert gltf.scenes[0].nodes == [len(gltf.nodes) - 1]
 
-        # Single mesh has COLOR_0 base attribute, TEXCOORD_1 (lat_norm), and 5 morph targets
+        # Single mesh has COLOR_0 base attribute, TEXCOORD_0 (dummy zeros) + TEXCOORD_1 (lat_norm), and 5 morph targets
         prim = gltf.meshes[0].primitives[0]
         assert prim.attributes.COLOR_0 is not None
+        assert prim.attributes.TEXCOORD_0 is not None, "dummy TEXCOORD_0 required — glTFast skips all UV sets if TEXCOORD_0 absent"
         assert prim.attributes.TEXCOORD_1 is not None, "TEXCOORD_1 (lat_norm) must be present for ColorMorphApplicator"
         assert len(prim.targets) == 5
         for target in prim.targets:

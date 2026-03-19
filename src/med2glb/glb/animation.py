@@ -189,9 +189,41 @@ def _add_animated_mesh_to_gltf(
             )
         )
 
-    # Add TEXCOORD_1 if provided (e.g. lat_norm for ColorMorphApplicator)
+    # Add TEXCOORD_0 (dummy zeros) + TEXCOORD_1 (lat_norm) when uv1_data is provided.
+    # glTFast's GetTexCoordsCount() short-circuits at TEXCOORD_0: if TEXCOORD_0 is absent,
+    # it returns 0 and no UV sets are loaded — including TEXCOORD_1.  A zero-filled
+    # TEXCOORD_0 satisfies this requirement without adding meaningful data (the animated
+    # GLB has no texture, so UV0 is unused by the shader).
+    uv0_acc_idx = None
     uv1_acc_idx = None
     if uv1_data is not None:
+        # Dummy TEXCOORD_0 (all zeros)
+        uv0 = np.zeros((len(uv1_data), 2), dtype=np.float32)
+        uv0_bytes = uv0.tobytes()
+        uv0_offset = len(binary_data)
+        binary_data.extend(uv0_bytes)
+        _pad_to_4(binary_data)
+
+        uv0_bv_idx = len(gltf.bufferViews)
+        gltf.bufferViews.append(
+            pygltflib.BufferView(
+                buffer=0,
+                byteOffset=uv0_offset,
+                byteLength=len(uv0_bytes),
+                target=pygltflib.ARRAY_BUFFER,
+            )
+        )
+        uv0_acc_idx = len(gltf.accessors)
+        gltf.accessors.append(
+            pygltflib.Accessor(
+                bufferView=uv0_bv_idx,
+                componentType=pygltflib.FLOAT,
+                count=len(uv0),
+                type=pygltflib.VEC2,
+            )
+        )
+
+        # TEXCOORD_1 — lat_norm values for ColorMorphApplicator
         uv1 = uv1_data.astype(np.float32)
         uv1_bytes = uv1.tobytes()
         uv1_offset = len(binary_data)
@@ -310,6 +342,8 @@ def _add_animated_mesh_to_gltf(
         attributes.NORMAL = normal_acc_idx
     if color_acc_idx is not None:
         attributes.COLOR_0 = color_acc_idx
+    if uv0_acc_idx is not None:
+        attributes.TEXCOORD_0 = uv0_acc_idx
     if uv1_acc_idx is not None:
         attributes.TEXCOORD_1 = uv1_acc_idx
 

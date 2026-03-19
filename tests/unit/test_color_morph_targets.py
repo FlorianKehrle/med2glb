@@ -213,10 +213,11 @@ class TestUv1Data:
         )
 
         prim = gltf.meshes[0].primitives[0]
+        assert prim.attributes.TEXCOORD_0 is not None, "dummy TEXCOORD_0 required for glTFast UV loading"
         assert prim.attributes.TEXCOORD_1 is not None
 
     def test_uv1_data_absent_when_not_provided(self, simple_mesh_data):
-        """TEXCOORD_1 is absent when uv1_data is not passed (backward compat)."""
+        """TEXCOORD_0 and TEXCOORD_1 are absent when uv1_data is not passed (backward compat)."""
         gltf = pygltflib.GLTF2()
         gltf.scenes = [pygltflib.Scene(nodes=[])]
         gltf.scene = 0
@@ -230,6 +231,7 @@ class TestUv1Data:
         )
 
         prim = gltf.meshes[0].primitives[0]
+        assert prim.attributes.TEXCOORD_0 is None
         assert prim.attributes.TEXCOORD_1 is None
 
     def test_uv1_roundtrip(self, simple_mesh_data, tmp_path):
@@ -258,4 +260,5 @@ class TestUv1Data:
 
         loaded = pygltflib.GLTF2.load(str(out))
         prim = loaded.meshes[0].primitives[0]
+        assert prim.attributes.TEXCOORD_0 is not None
         assert prim.attributes.TEXCOORD_1 is not None
