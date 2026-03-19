@@ -684,6 +684,16 @@ def build_carto_animated_glb(
         for f in range(n_frames)
     ]
 
+    # Compute lat_norm for TEXCOORD_1 so ColorMorphApplicator in Unity can
+    # recompute wavefront colors without needing morph accessor data.
+    valid_lat = ~np.isnan(lat_values)
+    lat_min = float(np.nanmin(lat_values)) if np.any(valid_lat) else 0.0
+    lat_max = float(np.nanmax(lat_values)) if np.any(valid_lat) else 1.0
+    lat_range = lat_max - lat_min if (lat_max - lat_min) > 1e-6 else 1.0
+    lat_norm_arr = np.where(valid_lat, (lat_values - lat_min) / lat_range, 0.0).astype(np.float32)
+    # Pack as float2: x=lat_norm, y=0
+    lat_uv1 = np.column_stack([lat_norm_arr, np.zeros(n_verts, dtype=np.float32)])
+
     # Create centered mesh data for the single animated mesh
     centered_verts, cent_offset = _center_vertices(mesh_data.vertices.astype(np.float32))
     anim_mesh = MeshData(
@@ -712,18 +722,6 @@ def build_carto_animated_glb(
     gltf.extensionsUsed = ["KHR_materials_unlit"]
     binary_data = bytearray()
 
-    # Material — always unlit, vertex-color driven (no texture for animated GLB)
-    gltf.materials.append(pygltflib.Material(
-        name="carto_wavefront",
-        pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
-            baseColorFactor=[1.0, 1.0, 1.0, 1.0],
-            metallicFactor=0.0,
-            roughnessFactor=0.0,
-        ),
-        doubleSided=True,
-        extensions={"KHR_materials_unlit": {}},
-    ))
-
     # No positional displacement morph targets — color-only animation
     pos_mts = [np.zeros((n_verts, 3), dtype=np.float32)] * n_frames
 
@@ -732,7 +730,21 @@ def build_carto_animated_glb(
         gltf, anim_mesh, pos_mts, binary_data, 0,
         color_morph_targets=color_deltas,
         base_vertex_colors=base_colors,
+        uv1_data=lat_uv1,
     )
+
+    # Patch the material created by _add_animated_mesh_to_gltf() to be unlit.
+    # _add_animated_mesh_to_gltf() always creates a PbrMetallicRoughness material;
+    # we override it here so glTFast assigns glTF/Unlit (reads vertex colors) instead
+    # of glTF/PbrMetallicRoughness (ignores vertex colors in Unity's built-in pipeline).
+    anim_mat = gltf.materials[gltf.meshes[-1].primitives[0].material]
+    anim_mat.name = "carto_wavefront"
+    anim_mat.pbrMetallicRoughness = pygltflib.PbrMetallicRoughness(
+        baseColorFactor=[1.0, 1.0, 1.0, 1.0],
+        metallicFactor=0.0,
+        roughnessFactor=0.0,
+    )
+    anim_mat.extensions = {"KHR_materials_unlit": {}}
 
     # Morph weight animation: cycle through frames seamlessly
     dt = loop_duration_s / n_frames
