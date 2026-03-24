@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -937,7 +938,7 @@ def run_dicom_wizard(
     if preset_name is not None:
         name = preset_name
     else:
-        # Auto-generate: <modality>_<method>_s<smooth>_<faces>k[_anim]
+        # Auto-generate: <modality>_<method>_s<smooth>_<faces>k[_<detail>][_anim]
         # No input dir name — output already lives inside the source folder.
         mod = selected_info.modality.lower() if selected_info.modality else "dcm"
         faces_k = f"{target_faces // 1000}k"
@@ -946,6 +947,22 @@ def run_dicom_wizard(
         else:
             method_short = method.replace("marching-cubes", "mc")
             name = f"{mod}_{method_short}_s{smoothing}_{faces_k}"
+
+        # Append a series-specific disambiguator so multiple series from the
+        # same folder never overwrite each other.
+        # Priority 1: sanitized series description (if meaningful).
+        # Priority 2: frame count (for cine / 4D data).
+        desc = (selected_info.description or "").strip()
+        n_frames = getattr(selected_info, "number_of_frames", 0) or 0
+        is_temporal = selected_info.data_type in ("2D cine", "3D+T volume")
+
+        if desc and desc.lower() not in ("(no desc)",):
+            safe_desc = re.sub(r"[^a-zA-Z0-9]+", "_", desc).strip("_").lower()[:20]
+            if safe_desc:
+                name += f"_{safe_desc}"
+        elif n_frames > 1 and is_temporal:
+            name += f"_{n_frames}f"
+
         if animate:
             name += "_anim"
 
