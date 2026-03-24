@@ -143,7 +143,6 @@ def make_png_material(
                 metallicFactor=0.0,
                 roughnessFactor=1.0,
             ),
-            doubleSided=True,
         )
     )
     return mat_idx

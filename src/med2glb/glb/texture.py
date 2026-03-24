@@ -123,7 +123,6 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
                 metallicFactor=0.0,
                 roughnessFactor=1.0,
             ),
-            doubleSided=True,
         )
     )
 
@@ -351,15 +350,16 @@ def build_animated_textured_plane_glb(
         ))
         gltf.images.append(pygltflib.Image(bufferView=img_bv, mimeType="image/png"))
         gltf.textures.append(pygltflib.Texture(sampler=0, source=i))
-        gltf.materials.append(pygltflib.Material(
-            name=f"frame_{i}",
-            pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
-                baseColorTexture=pygltflib.TextureInfo(index=i),
-                metallicFactor=0.0,
-                roughnessFactor=1.0,
-            ),
-            doubleSided=True,
-        ))
+        gltf.materials.append(
+            pygltflib.Material(
+                name=f"frame_{i}",
+                pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+                    baseColorTexture=pygltflib.TextureInfo(index=i),
+                    metallicFactor=0.0,
+                    roughnessFactor=1.0,
+                ),
+            )
+        )
 
     # --- Shared geometry (written once, referenced by all meshes) ---
     def _write_accessor(data_array, target, comp_type, acc_type, with_minmax=False):
