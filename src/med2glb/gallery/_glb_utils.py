@@ -66,25 +66,42 @@ def add_quad_geometry(
     binary_data: bytearray,
     vertices: np.ndarray,
 ) -> QuadGeometry:
-    """Write shared quad buffers (positions, normals, texcoords, indices)."""
-    texcoords = np.array(
+    """Write shared quad buffers with explicit front and back faces.
+
+    Builds 8 vertices (4 front + 4 back, same positions) so both sides of the
+    panel show a correctly-oriented (non-mirrored) image regardless of whether
+    the viewer honours the glTF doubleSided flag.
+
+    Front face normals: +Z, standard UVs.
+    Back face normals:  -Z, u-flipped UVs (image reads correctly from behind).
+    """
+    # Front face: standard UVs, normals +Z
+    front_uvs = np.array(
         [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]], dtype=np.float32,
     )
-    normals = np.array(
-        [[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]], dtype=np.float32,
+    front_normals = np.full((4, 3), [0.0, 0.0, 1.0], dtype=np.float32)
+    # Back face: u-flipped UVs so image is non-mirrored from behind, normals -Z
+    back_uvs = np.array(
+        [[1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 0.0]], dtype=np.float32,
     )
-    indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint16)
+    back_normals = np.full((4, 3), [0.0, 0.0, -1.0], dtype=np.float32)
+
+    all_vertices = np.vstack([vertices, vertices])          # 8 × 3
+    all_uvs = np.vstack([front_uvs, back_uvs])              # 8 × 2
+    all_normals = np.vstack([front_normals, back_normals])  # 8 × 3
+    # Front: CCW from +Z.  Back: reversed winding (CCW from -Z), indices offset +4.
+    indices = np.array([0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6], dtype=np.uint16)
 
     pos_acc = write_accessor(
-        gltf, binary_data, vertices,
+        gltf, binary_data, all_vertices,
         pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC3, True,
     )
     norm_acc = write_accessor(
-        gltf, binary_data, normals,
+        gltf, binary_data, all_normals,
         pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC3,
     )
     tc_acc = write_accessor(
-        gltf, binary_data, texcoords,
+        gltf, binary_data, all_uvs,
         pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC2,
     )
     idx_acc = write_accessor(

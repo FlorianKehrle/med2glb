@@ -47,7 +47,7 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
     # Create quad vertices (two triangles forming a rectangle)
     half_w = width / 2
     half_h = height / 2
-    vertices = np.array(
+    front_verts = np.array(
         [
             [-half_w, -half_h, 0.0],
             [half_w, -half_h, 0.0],
@@ -56,28 +56,28 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
         ],
         dtype=np.float32,
     )
+    # 8 vertices: 4 front + 4 back (same positions, different UVs/normals)
+    vertices = np.vstack([front_verts, front_verts])
 
-    # UV coordinates
+    # Front: standard UVs; Back: u-flipped so image reads correctly from behind
     texcoords = np.array(
         [
-            [0.0, 1.0],
-            [1.0, 1.0],
-            [1.0, 0.0],
-            [0.0, 0.0],
+            [0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0],  # front
+            [1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 0.0],  # back
         ],
         dtype=np.float32,
     )
 
-    # Two triangles
-    indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint16)
+    # Front: CCW from +Z; Back: reversed winding (CCW from -Z), offset +4
+    indices = np.array([0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6], dtype=np.uint16)
 
-    # Normals (all pointing +Z)
+    # Front normals +Z, back normals -Z
     normals = np.array(
         [
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0], [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0], [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0], [0.0, 0.0, -1.0],
+            [0.0, 0.0, -1.0], [0.0, 0.0, -1.0],
         ],
         dtype=np.float32,
     )
@@ -148,7 +148,7 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
         pygltflib.Accessor(
             bufferView=pos_bv_idx,
             componentType=pygltflib.FLOAT,
-            count=4,
+            count=8,
             type=pygltflib.VEC3,
             max=vertices.max(axis=0).tolist(),
             min=vertices.min(axis=0).tolist(),
@@ -175,7 +175,7 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
         pygltflib.Accessor(
             bufferView=norm_bv_idx,
             componentType=pygltflib.FLOAT,
-            count=4,
+            count=8,
             type=pygltflib.VEC3,
         )
     )
@@ -200,7 +200,7 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
         pygltflib.Accessor(
             bufferView=tc_bv_idx,
             componentType=pygltflib.FLOAT,
-            count=4,
+            count=8,
             type=pygltflib.VEC2,
         )
     )
@@ -225,9 +225,9 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
         pygltflib.Accessor(
             bufferView=idx_bv_idx,
             componentType=pygltflib.UNSIGNED_SHORT,
-            count=6,
+            count=12,
             type=pygltflib.SCALAR,
-            max=[3],
+            max=[7],
             min=[0],
         )
     )
@@ -284,22 +284,29 @@ def build_animated_textured_plane_glb(
     width = cols * col_spacing / 1000.0   # mm -> metres
     height = rows * row_spacing / 1000.0
 
-    # Shared quad geometry
+    # Shared quad geometry: 8 vertices (4 front + 4 back) for double-sided display
     half_w, half_h = width / 2, height / 2
-    vertices = np.array([
+    front_verts = np.array([
         [-half_w, -half_h, 0.0],
         [ half_w, -half_h, 0.0],
         [ half_w,  half_h, 0.0],
         [-half_w,  half_h, 0.0],
     ], dtype=np.float32)
+    vertices = np.vstack([front_verts, front_verts])  # 8 × 3
+    # Front: standard UVs; Back: u-flipped so image reads correctly from behind
     texcoords = np.array([
-        [0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0],
+        [0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0],  # front
+        [1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 0.0],  # back
     ], dtype=np.float32)
+    # Front normals +Z, back normals -Z
     normals = np.array([
-        [0.0, 0.0, 1.0], [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0], [0.0, 0.0, 1.0],
+        [0.0, 0.0,  1.0], [0.0, 0.0,  1.0],
+        [0.0, 0.0,  1.0], [0.0, 0.0,  1.0],
+        [0.0, 0.0, -1.0], [0.0, 0.0, -1.0],
+        [0.0, 0.0, -1.0], [0.0, 0.0, -1.0],
     ], dtype=np.float32)
-    indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint16)
+    # Front: CCW from +Z; Back: reversed winding (CCW from -Z), indices offset +4
+    indices = np.array([0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6], dtype=np.uint16)
 
     # --- Build glTF ---
     gltf = pygltflib.GLTF2(

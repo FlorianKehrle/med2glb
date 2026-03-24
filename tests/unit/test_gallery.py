@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -9,11 +10,75 @@ import pygltflib
 import pytest
 
 from med2glb.core.types import GallerySlice
+from med2glb.gallery._glb_utils import (
+    add_quad_geometry,
+    create_base_gltf,
+    quad_vertices_for_slice,
+)
 from med2glb.gallery.individual import build_individual_glbs
 from med2glb.gallery.lightbox import build_lightbox_glb
 from med2glb.gallery.loader import load_all_slices
 from med2glb.gallery.spatial import build_spatial_glb
 
+
+# ─── Double-sided geometry tests ───────────────────────────────
+
+class TestAddQuadGeometryDoubleSided:
+    """Verify that add_quad_geometry() produces explicit front+back faces."""
+
+    def _build(self):
+        gltf, binary_data = create_base_gltf()
+        verts = np.array(
+            [[-0.1, -0.1, 0.0], [0.1, -0.1, 0.0], [0.1, 0.1, 0.0], [-0.1, 0.1, 0.0]],
+            dtype=np.float32,
+        )
+        geom = add_quad_geometry(gltf, binary_data, verts)
+        return gltf, binary_data, geom
+
+    def test_vertex_count_is_eight(self):
+        gltf, _, geom = self._build()
+        assert gltf.accessors[geom.pos_acc].count == 8
+
+    def test_index_count_is_twelve(self):
+        gltf, _, geom = self._build()
+        assert gltf.accessors[geom.idx_acc].count == 12
+
+    def test_index_max_is_seven(self):
+        gltf, _, geom = self._build()
+        assert gltf.accessors[geom.idx_acc].max == [7]
+
+    def test_back_normals_point_negative_z(self):
+        gltf, binary_data, geom = self._build()
+        acc = gltf.accessors[geom.norm_acc]
+        bv = gltf.bufferViews[acc.bufferView]
+        raw = bytes(binary_data)[bv.byteOffset: bv.byteOffset + bv.byteLength]
+        norms = np.frombuffer(raw, dtype=np.float32).reshape(-1, 3)
+        # Back-face normals (vertices 4-7) should be (0, 0, -1)
+        np.testing.assert_array_equal(norms[4:], [[0, 0, -1]] * 4)
+
+    def test_back_uvs_are_u_flipped(self):
+        gltf, binary_data, geom = self._build()
+        acc = gltf.accessors[geom.tc_acc]
+        bv = gltf.bufferViews[acc.bufferView]
+        raw = bytes(binary_data)[bv.byteOffset: bv.byteOffset + bv.byteLength]
+        uvs = np.frombuffer(raw, dtype=np.float32).reshape(-1, 2)
+        front_u = uvs[:4, 0]
+        back_u = uvs[4:, 0]
+        # Back u = 1 - front u (flipped), v unchanged
+        np.testing.assert_allclose(back_u, 1.0 - front_u)
+        np.testing.assert_allclose(uvs[:4, 1], uvs[4:, 1])
+
+    def test_back_winding_reversed(self):
+        gltf, binary_data, geom = self._build()
+        acc = gltf.accessors[geom.idx_acc]
+        bv = gltf.bufferViews[acc.bufferView]
+        raw = bytes(binary_data)[bv.byteOffset: bv.byteOffset + bv.byteLength]
+        idx = np.frombuffer(raw, dtype=np.uint16)
+        front_idx = idx[:6]
+        back_idx = idx[6:]
+        # Front uses vertices 0-3; back uses vertices 4-7
+        assert all(i < 4 for i in front_idx)
+        assert all(i >= 4 for i in back_idx)
 
 # ─── Loader Tests ──────────────────────────────────────────────
 
