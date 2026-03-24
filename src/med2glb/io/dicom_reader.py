@@ -335,7 +335,10 @@ def _scan_dicom_files(
 
     When *metadata_only* is True, pixel data is not loaded (much faster
     and lower memory for series listing, classification, and auto-naming).
+    DICOMDIR files (Media Storage Directory Storage) are skipped — they are
+    index files with no pixel data and no SeriesInstanceUID.
     """
+    _DICOMDIR_SOP_CLASS = "1.2.840.10008.1.3.10"
     datasets = []
     for path in directory.rglob("*"):
         if path.is_file():
@@ -343,6 +346,12 @@ def _scan_dicom_files(
                 ds = pydicom.dcmread(
                     str(path), stop_before_pixels=metadata_only
                 )
+                # Skip DICOMDIR index files — they contain no pixel data
+                meta_sop = str(
+                    getattr(getattr(ds, "file_meta", None), "MediaStorageSOPClassUID", "")
+                )
+                if meta_sop == _DICOMDIR_SOP_CLASS:
+                    continue
                 ds.filename = str(path)
                 datasets.append(ds)
             except (InvalidDicomError, Exception):
