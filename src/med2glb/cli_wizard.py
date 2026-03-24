@@ -863,12 +863,20 @@ def run_dicom_wizard(
                 selected_info = s
                 break
     elif interactive and len(series_list) > 1:
-        choice = Prompt.ask(
-            f"Select series (1-{len(series_list)})",
-            default="1",
-            console=console,
-        )
-        idx = max(0, min(len(series_list) - 1, int(choice.strip()) - 1))
+        n = len(series_list)
+        while True:
+            choice = Prompt.ask(
+                f"Select series (1-{n})",
+                default="1",
+                console=console,
+            )
+            try:
+                idx = int(choice.strip()) - 1
+                if 0 <= idx < n:
+                    break
+                console.print(f"[red]Please enter a number between 1 and {n}.[/red]")
+            except ValueError:
+                console.print(f"[red]Please enter a number between 1 and {n}.[/red]")
         selected_info = series_list[idx]
         series_uid = selected_info.series_uid
     else:
