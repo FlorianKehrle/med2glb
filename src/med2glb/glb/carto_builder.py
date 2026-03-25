@@ -716,10 +716,6 @@ def build_carto_animated_glb(
         materials=[],
         animations=[],
     )
-    # Animated GLB always uses KHR_materials_unlit so glTFast picks glTF/Unlit
-    # (which reads vertex colors via mesh.SetColors) rather than PbrMetallicRoughness
-    # (which ignores them in Unity's built-in pipeline).
-    gltf.extensionsUsed = ["KHR_materials_unlit"]
     binary_data = bytearray()
 
     # No positional displacement morph targets — color-only animation
@@ -733,18 +729,18 @@ def build_carto_animated_glb(
         uv1_data=lat_uv1,
     )
 
-    # Patch the material created by _add_animated_mesh_to_gltf() to be unlit.
-    # _add_animated_mesh_to_gltf() always creates a PbrMetallicRoughness material;
-    # we override it here so glTFast assigns glTF/Unlit (reads vertex colors) instead
-    # of glTF/PbrMetallicRoughness (ignores vertex colors in Unity's built-in pipeline).
+    # Set material name and PBR properties. "carto_wavefront" is the marker
+    # used by Loader.cs (IsCartoAnimatedMesh) to detect and attach
+    # ColorMorphApplicator on HoloLens. Using PBR (roughness=1.0) instead of
+    # KHR_materials_unlit means external PC/web viewers render with correct
+    # scene lighting rather than at full unlit brightness.
     anim_mat = gltf.materials[gltf.meshes[-1].primitives[0].material]
     anim_mat.name = "carto_wavefront"
     anim_mat.pbrMetallicRoughness = pygltflib.PbrMetallicRoughness(
         baseColorFactor=[1.0, 1.0, 1.0, 1.0],
         metallicFactor=0.0,
-        roughnessFactor=0.0,
+        roughnessFactor=1.0,
     )
-    anim_mat.extensions = {"KHR_materials_unlit": {}}
 
     # Morph weight animation: cycle through frames seamlessly
     dt = loop_duration_s / n_frames

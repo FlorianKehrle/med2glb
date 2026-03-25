@@ -108,13 +108,16 @@ class TestCartoAnimatedGlb:
         assert prim.attributes.TEXCOORD_0 is not None, "dummy TEXCOORD_0 required — glTFast skips all UV sets if TEXCOORD_0 absent"
         assert prim.attributes.TEXCOORD_1 is not None, "TEXCOORD_1 (lat_norm) must be present for ColorMorphApplicator"
 
-        # Material must be KHR_materials_unlit so glTFast assigns glTF/Unlit shader
+        # Material must be PBR "carto_wavefront" — no KHR_materials_unlit so PC/web viewers
+        # render correctly. Loader.cs detects by material name, not shader.
         mat = gltf.materials[prim.material]
         assert mat.name == "carto_wavefront"
-        assert mat.extensions is not None and "KHR_materials_unlit" in mat.extensions, \
-            "Material must have KHR_materials_unlit extension so glTFast picks glTF/Unlit shader"
-        assert "KHR_materials_unlit" in (gltf.extensionsUsed or []), \
-            "extensionsUsed must declare KHR_materials_unlit"
+        assert mat.extensions is None or "KHR_materials_unlit" not in (mat.extensions or {}), \
+            "Animated CARTO GLB must NOT use KHR_materials_unlit — use PBR for correct PC rendering"
+        assert "KHR_materials_unlit" not in (gltf.extensionsUsed or []), \
+            "extensionsUsed must not declare KHR_materials_unlit"
+        assert mat.pbrMetallicRoughness is not None
+        assert mat.pbrMetallicRoughness.roughnessFactor == 1.0, "roughness=1.0 for matte PBR"
         assert len(prim.targets) == 5
         for target in prim.targets:
             # pygltflib returns morph targets as plain dicts when loaded
