@@ -439,7 +439,7 @@ def _convert_carto_meshes(
         n_points = len(points) if points else 0
         has_lat = "lat" in available_colorings
         from med2glb.cli_wizard import estimate_time, estimate_time_details
-        estimated_time = estimate_time(n_triangles, n_points, has_lat)
+        estimated_time = estimate_time(n_triangles, n_points, has_lat, config.subdivide)
         step_est = estimate_time_details(
             n_triangles, n_points, has_lat, config.subdivide,
         )

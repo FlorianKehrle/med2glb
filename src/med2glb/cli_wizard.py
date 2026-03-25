@@ -108,12 +108,10 @@ def estimate_time(
     n_triangles: int,
     n_points: int,
     has_lat: bool,
+    subdivide: int = 2,
 ) -> str:
-    """Rough total processing time estimate (formatted string).
-
-    Assumes default settings (subdivide=2, 30 animation frames).
-    """
-    total = estimate_time_details(n_triangles, n_points, has_lat)["total"]
+    """Rough total processing time estimate (formatted string)."""
+    total = estimate_time_details(n_triangles, n_points, has_lat, subdivide)["total"]
 
     if total < 60:
         return "~{:.0f} s".format(max(total, 1))
@@ -497,8 +495,9 @@ def run_carto_wizard(
         # Bounding box dimensions
         bbox = _mesh_bbox_mm(mesh)
 
-        # Time estimate
-        est_time = estimate_time(n_triangles, len(pts), has_lat)
+        # Time estimate — use preset subdivide if known, otherwise auto-detect
+        _sub = preset_subdivide if preset_subdivide is not None else _auto_subdivide(n_triangles)
+        est_time = estimate_time(n_triangles, len(pts), has_lat, _sub)
 
         table.add_row(
             str(i),
