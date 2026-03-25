@@ -63,23 +63,22 @@ def estimate_time_details(
     Returns a dict with keys: subdivide, mapping, xatlas, rasterize, bake,
     vectors, total.  Values are wall-clock seconds (float).
 
-    Heuristic derived from observed timings on typical hardware.
-    Note: 'bake' now reflects a single base-color texture only (animated GLBs
-    use COLOR_0 morph targets — no per-frame emissive textures).
-    Coefficients marked TODO should be recalibrated from actual run logs.
+    Coefficients calibrated from 24 real runs (median ratios).
+    Note: 'bake' reflects a single base-color texture (animated GLBs use
+    COLOR_0 morph targets — no per-frame emissive textures).
     """
     post_sub = n_triangles * (4 ** subdivide) if subdivide > 0 else n_triangles
 
-    t_subdivide = post_sub / 100_000 * 1.0 if subdivide > 0 else 0.0
-    t_mapping = n_points / 1_000 * 0.5
-    # xatlas: power-law model from carto_builder benchmarks (superlinear)
-    t_xatlas = 6.50e-08 * (post_sub ** 1.79) if has_lat else 0.0
-    # Rasterization: ~3.5s per 100k faces (TODO: recalibrate)
-    t_rasterize = post_sub / 100_000 * 3.5 if has_lat else 0.0
-    # Bake: single base-color texture only (no per-frame emissive baking)
-    # Previously: 0.3s × n_frames — now just 1 texture (TODO: recalibrate)
-    t_bake = post_sub / 100_000 * 0.3 if has_lat else 0.0
-    t_vectors = 30.0 if has_lat and n_points >= 30 else 0.0
+    t_subdivide = post_sub / 100_000 * 1.1 if subdivide > 0 else 0.0
+    t_mapping = n_points / 1_000 * 0.4
+    # xatlas: power-law model (superlinear), calibrated from observed timings
+    t_xatlas = 5.8e-08 * (post_sub ** 1.79) if has_lat else 0.0
+    # Rasterization: calibrated from logs (~2.5s per 100k faces)
+    t_rasterize = post_sub / 100_000 * 2.5 if has_lat else 0.0
+    # Texture bake: single base-color texture (~22s per 100k faces, high variance)
+    t_bake = post_sub / 100_000 * 22.0 if has_lat else 0.0
+    # Vectors: scales with mesh size (fixed 30s was too high for small meshes)
+    t_vectors = max(post_sub / 100_000 * 20.0, 5.0) if has_lat and n_points >= 30 else 0.0
 
     return {
         "subdivide": t_subdivide,
