@@ -174,6 +174,21 @@ class CartoMesh:
 
 
 @dataclass
+class LesionPoint:
+    """Single ablation lesion from an RF application file (RF_*-Map_N.txt).
+
+    The position is cross-referenced from the corresponding CartoPoint
+    (matching by point_id == RF file index N).
+    """
+
+    point_id: int
+    position: np.ndarray        # float64 [3] — X, Y, Z in mm (CARTO space)
+    max_power_w: float          # peak RF power (watts)
+    duration_s: float           # total ablation duration (seconds)
+    max_temperature_c: float    # peak distal temperature (°C)
+
+
+@dataclass
 class CartoStudy:
     """A complete CARTO export directory with meshes and mapping points."""
 
@@ -181,6 +196,8 @@ class CartoStudy:
     points: dict[str, list[CartoPoint]]  # keyed by mesh/map name
     version: str  # e.g. "4.0", "5.0", "6.0"
     study_name: str = ""
+    lesions: dict[str, list[LesionPoint]] = field(default_factory=dict)
+    """Ablation lesion points keyed by map/mesh name. Empty dict if no RF data."""
 
 
 @dataclass

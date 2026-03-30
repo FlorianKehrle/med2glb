@@ -282,6 +282,7 @@ def _write_carto_log(
 def _load_carto_study(input_path: Path) -> "CartoStudy":
     """Load a CARTO study with a Rich progress bar."""
     from med2glb.io.carto_reader import load_carto_study, _find_export_dir
+    from med2glb.io.lesion_reader import load_lesion_points
 
     _export_dir = _find_export_dir(input_path)
     _n_mesh_files = len(list(_export_dir.glob("*.mesh")))
@@ -300,11 +301,21 @@ def _load_carto_study(input_path: Path) -> "CartoStudy":
             progress.update(task, description=desc, completed=current, total=total)
 
         study = load_carto_study(input_path, progress=_load_progress)
+
+        # Load ablation lesion points for each mesh that has RF data
+        for mesh_name, car_pts in study.points.items():
+            lesions = load_lesion_points(_export_dir, mesh_name, car_pts)
+            if lesions:
+                study.lesions[mesh_name] = lesions
+
+        n_lesions = sum(len(v) for v in study.lesions.values())
+        lesion_suffix = f", {n_lesions} ablation lesion(s)" if n_lesions else ""
         progress.update(
             task,
             description=f"Loaded {_carto_version_label(study.version)}: "
             f"{len(study.meshes)} mesh(es), "
-            f"{sum(len(p) for p in study.points.values())} points",
+            f"{sum(len(p) for p in study.points.values())} points"
+            f"{lesion_suffix}",
             completed=_n_mesh_files,
         )
         progress.remove_task(task)
@@ -349,6 +360,7 @@ def _convert_carto_meshes(
         mesh_start_time = time.time()
         mesh = study.meshes[mesh_idx]
         points = study.points.get(mesh.structure_name)
+        lesion_points = study.lesions.get(mesh.structure_name) or None
         mesh_has_vec = has_vectors and (vec_meshes is None or mesh_idx in vec_meshes)
 
         # Determine which colorings have valid data for this mesh
@@ -408,7 +420,8 @@ def _convert_carto_meshes(
                 ),
             )
             out_path = carto_output_dir / f"{mesh.structure_name}.glb"
-            build_glb([plain_mesh], out_path, source_units="mm")
+            build_glb([plain_mesh], out_path, source_units="mm",
+                      lesion_points=lesion_points)
             file_kb = out_path.stat().st_size // 1024
             console.print(f"  → {out_path.name}  ({file_kb:,} KB, default color)")
             continue
@@ -727,6 +740,7 @@ def _convert_carto_meshes(
                             progress=_anim_progress,
                             legend_info=legend_info,
                             cache=anim_cache,
+                            lesion_points=lesion_points,
                         )
                         if not written:
                             _variant_written = False
@@ -738,6 +752,7 @@ def _convert_carto_meshes(
                             from med2glb.glb.carto_builder import build_carto_static_glb
                             build_carto_static_glb(
                                 anim_cache, out_path, legend_info=legend_info,
+                                lesion_points=lesion_points,
                             )
                         elif not is_lat and anim_cache is not None and anim_cache.vmapping is not None:
                             # Bipolar/unipolar — reuse cached xatlas geometry,
@@ -746,11 +761,13 @@ def _convert_carto_meshes(
                             build_carto_recolored_static_glb(
                                 anim_cache, mesh_data, out_path,
                                 legend_info=legend_info,
+                                lesion_points=lesion_points,
                             )
                         else:
                             build_glb(
                                 [mesh_data], out_path,
                                 source_units="mm", legend_info=legend_info,
+                                lesion_points=lesion_points,
                             )
                         progress.update(task, completed=_total_steps)
 
