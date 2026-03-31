@@ -24,6 +24,11 @@ logger = logging.getLogger("med2glb")
 #   3 mm × 0.01 = 0.03 m = 3 cm displayed in AR
 _SPHERE_RADIUS_MM: float = 3.0
 
+# Outward offset applied to each sphere centre along the centroid→point direction.
+# Ablation sites lie on the endocardial surface; without an offset the opaque
+# heart mesh occludes the sphere centres and causes flickering on HoloLens.
+_SURFACE_OFFSET_MM: float = 2.0
+
 # Unlit orange-red (RGBA linear) — highly visible in AR against dark tissue
 _ABLATION_COLOR: tuple[float, float, float, float] = (0.95, 0.30, 0.05, 1.0)
 
@@ -199,11 +204,20 @@ def add_ablation_nodes(
 
     for i, ablation_point in enumerate(ablation_points):
         x, y, z = ablation_point.position
+        # Offset the sphere outward from the centroid so it protrudes clearly
+        # above the endocardial surface and doesn't flicker on HoloLens.
+        dx, dy, dz = x - cx, y - cy, z - cz
+        length = (dx * dx + dy * dy + dz * dz) ** 0.5
+        if length > 0:
+            dx, dy, dz = dx / length, dy / length, dz / length
+        tx = x - cx + dx * _SURFACE_OFFSET_MM
+        ty = y - cy + dy * _SURFACE_OFFSET_MM
+        tz = z - cz + dz * _SURFACE_OFFSET_MM
         node_idx = len(gltf.nodes)
         gltf.nodes.append(pygltflib.Node(
             name=f"ablation_{i:03d}",
             mesh=sphere_mesh_idx,
-            translation=[float(x - cx), float(y - cy), float(z - cz)],
+            translation=[float(tx), float(ty), float(tz)],
         ))
         node_indices.append(node_idx)
 
