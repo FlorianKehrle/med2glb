@@ -1,11 +1,11 @@
-"""Ablation lesion sphere nodes for CARTO GLB exports.
+"""Ablation sphere nodes for CARTO GLB exports.
 
-Embeds one sphere per lesion as a named glTF node (``lesion_000``,
-``lesion_001``, …) directly into the scene alongside the mesh, legend, and
+Embeds one sphere per ablation point as a named glTF node (``ablation_000``,
+``ablation_001``, …) directly into the scene alongside the mesh, legend, and
 arrow nodes.  Spheres use an unlit orange-red material so they are always
 clearly visible regardless of AR lighting conditions.  The radius is chosen
-so lesions appear at a clinically appropriate size (~3 cm) under the 10× AR
-display scale applied by the root node (0.01 scale × 3 mm = 3 cm).
+so ablation points appear at a clinically appropriate size (~3 cm) under the
+10× AR display scale applied by the root node (0.01 scale × 3 mm = 3 cm).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import logging
 import numpy as np
 import pygltflib
 
-from med2glb.core.types import LesionPoint
+from med2glb.core.types import AblationPoint
 from med2glb.glb.builder import _pad_to_4, write_accessor
 
 logger = logging.getLogger("med2glb")
@@ -25,7 +25,7 @@ logger = logging.getLogger("med2glb")
 _SPHERE_RADIUS_MM: float = 3.0
 
 # Unlit orange-red (RGBA linear) — highly visible in AR against dark tissue
-_LESION_COLOR: tuple[float, float, float, float] = (0.95, 0.30, 0.05, 1.0)
+_ABLATION_COLOR: tuple[float, float, float, float] = (0.95, 0.30, 0.05, 1.0)
 
 # UV-sphere tessellation — 10 lat rings × 18 lon segments is lightweight (~360 verts)
 _RINGS: int = 10
@@ -106,7 +106,7 @@ def _build_uv_sphere(
     return vertices, normals, faces
 
 
-def _ensure_lesion_material(
+def _ensure_ablation_material(
     gltf: pygltflib.GLTF2,
 ) -> int:
     """Return the index of the shared ablation_lesion material, creating it if absent."""
@@ -115,7 +115,7 @@ def _ensure_lesion_material(
             return i
 
     mat_idx = len(gltf.materials)
-    r, g, b, a = _LESION_COLOR
+    r, g, b, a = _ABLATION_COLOR
     gltf.materials.append(pygltflib.Material(
         name=_MATERIAL_NAME,
         pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
@@ -135,35 +135,35 @@ def _ensure_lesion_material(
     return mat_idx
 
 
-def add_lesion_nodes(
+def add_ablation_nodes(
     gltf: pygltflib.GLTF2,
     binary_data: bytearray,
-    lesion_points: list[LesionPoint],
+    ablation_points: list[AblationPoint],
     centroid: list[float],
 ) -> list[int]:
-    """Add one sphere node per ablation lesion to a glTF document.
+    """Add one sphere node per ablation point to a glTF document.
 
-    Each node is named ``lesion_000``, ``lesion_001``, … so VeldtAR can toggle
-    visibility with a single ``"show/hide lesions"`` voice command that matches
-    by node name prefix.
+    Each node is named ``ablation_000``, ``ablation_001``, … so VeldtAR can
+    toggle visibility with a single ``"show/hide ablations"`` voice command that
+    matches by node name prefix.
 
     All spheres share one material and one sphere mesh primitive (instanced via
     separate nodes with individual translations) to minimise binary blob size.
 
     Args:
-        gltf:          The glTF document being built.
-        binary_data:   Binary buffer being assembled.
-        lesion_points: Lesion positions and energy stats from the RF reader.
-        centroid:      The mesh centroid subtracted from vertices so that
-                       lesion positions align with the centred mesh geometry.
+        gltf:            The glTF document being built.
+        binary_data:     Binary buffer being assembled.
+        ablation_points: Ablation positions and energy stats from the RF reader.
+        centroid:        The mesh centroid subtracted from vertices so that
+                         ablation positions align with the centred mesh geometry.
 
     Returns:
         List of node indices for the added sphere nodes.
     """
-    if not lesion_points:
+    if not ablation_points:
         return []
 
-    mat_idx = _ensure_lesion_material(gltf)
+    mat_idx = _ensure_ablation_material(gltf)
 
     # Build shared sphere geometry (written once into the binary buffer)
     verts, norms, faces = _build_uv_sphere(_SPHERE_RADIUS_MM, _RINGS, _SEGMENTS)
@@ -183,7 +183,7 @@ def add_lesion_nodes(
 
     sphere_mesh_idx = len(gltf.meshes)
     gltf.meshes.append(pygltflib.Mesh(
-        name="lesion_sphere",
+        name="ablation_sphere",
         primitives=[pygltflib.Primitive(
             attributes=pygltflib.Attributes(
                 POSITION=pos_acc,
@@ -197,15 +197,15 @@ def add_lesion_nodes(
     cx, cy, cz = centroid[0], centroid[1], centroid[2]
     node_indices: list[int] = []
 
-    for i, lesion in enumerate(lesion_points):
-        x, y, z = lesion.position
+    for i, ablation_point in enumerate(ablation_points):
+        x, y, z = ablation_point.position
         node_idx = len(gltf.nodes)
         gltf.nodes.append(pygltflib.Node(
-            name=f"lesion_{i:03d}",
+            name=f"ablation_{i:03d}",
             mesh=sphere_mesh_idx,
             translation=[float(x - cx), float(y - cy), float(z - cz)],
         ))
         node_indices.append(node_idx)
 
-    logger.debug("Added %d lesion sphere nodes", len(node_indices))
+    logger.debug("Added %d ablation sphere nodes", len(node_indices))
     return node_indices

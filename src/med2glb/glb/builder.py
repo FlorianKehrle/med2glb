@@ -27,7 +27,7 @@ def build_glb(
     extra_meshes: list[MeshData] | None = None,
     source_units: str = "m",
     legend_info: dict | None = None,
-    lesion_points: list | None = None,
+    ablation_points: list | None = None,
 ) -> None:
     """Build a GLB file from one or more meshes with PBR materials.
 
@@ -39,8 +39,8 @@ def build_glb(
             with scale 0.001 so the GLB is in glTF-standard metres.
         legend_info: Optional dict with ``coloring``, ``clamp_range``, and
             ``metadata`` keys to add color legend + info panel nodes.
-        lesion_points: Optional list of :class:`~med2glb.core.types.LesionPoint`
-            objects to embed as orange-red sphere nodes named ``lesion_000…N``.
+        ablation_points: Optional list of :class:`~med2glb.core.types.AblationPoint`
+            objects to embed as orange-red sphere nodes named ``ablation_000…N``.
     """
     gltf = pygltflib.GLTF2(
         scene=0,
@@ -87,12 +87,12 @@ def build_glb(
         )
         child_nodes.extend(legend_nodes)
 
-    if lesion_points and centroid is not None:
-        from med2glb.glb.lesion_builder import add_lesion_nodes
-        lesion_nodes = add_lesion_nodes(
-            gltf, all_binary_data, lesion_points, centroid,
+    if ablation_points and centroid is not None:
+        from med2glb.glb.ablation_builder import add_ablation_nodes
+        ablation_nodes = add_ablation_nodes(
+            gltf, all_binary_data, ablation_points, centroid,
         )
-        child_nodes.extend(lesion_nodes)
+        child_nodes.extend(ablation_nodes)
 
     # Wrap in a root node that converts mm → m when needed.
     # 10x real-world scale so cardiac structures (~12cm) render at ~120cm

@@ -174,8 +174,8 @@ class CartoMesh:
 
 
 @dataclass
-class LesionPoint:
-    """Single ablation lesion from an RF application file (RF_*-Map_N.txt).
+class AblationPoint:
+    """Single ablation point from an RF application file (RF_*-Map_N.txt).
 
     The position is cross-referenced from the corresponding CartoPoint
     (matching by point_id == RF file index N).
@@ -196,8 +196,8 @@ class CartoStudy:
     points: dict[str, list[CartoPoint]]  # keyed by mesh/map name
     version: str  # e.g. "4.0", "5.0", "6.0"
     study_name: str = ""
-    lesions: dict[str, list[LesionPoint]] = field(default_factory=dict)
-    """Ablation lesion points keyed by map/mesh name. Empty dict if no RF data."""
+    ablation_points: dict[str, list[AblationPoint]] = field(default_factory=dict)
+    """Ablation points keyed by map/mesh name. Empty dict if no RF data."""
 
 
 @dataclass

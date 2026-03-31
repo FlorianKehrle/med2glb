@@ -1,4 +1,4 @@
-"""RF ablation lesion reader for CARTO 3 export directories.
+"""RF ablation reader for CARTO 3 export directories.
 
 Parses RF application files (``RF_{map_name}_{N}.txt``) and cross-references
 each ablation event's position from the matching CartoPoint in the _car.txt
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from med2glb.core.types import CartoPoint, LesionPoint
+from med2glb.core.types import AblationPoint, CartoPoint
 
 logger = logging.getLogger("med2glb")
 
@@ -95,12 +95,12 @@ def parse_rf_file(path: Path) -> dict[str, float]:
     }
 
 
-def load_lesion_points(
+def load_ablation_points(
     export_dir: Path,
     map_name: str,
     car_points: list[CartoPoint],
-) -> list[LesionPoint]:
-    """Load ablation lesion points for a single map.
+) -> list[AblationPoint]:
+    """Load ablation points for a single map.
 
     Discovers all ``RF_{map_name}_{N}.txt`` files in *export_dir*, reads the RF
     energy statistics from each, and cross-references the ablation position from
@@ -112,7 +112,7 @@ def load_lesion_points(
         car_points: Parsed CartoPoint list for this map (from ``parse_car_file``).
 
     Returns:
-        List of :class:`LesionPoint` objects in ascending point_id order.
+        List of :class:`AblationPoint` objects in ascending point_id order.
         Empty list when no RF files exist or none can be matched.
     """
     rf_files = find_rf_files(export_dir, map_name)
@@ -124,7 +124,7 @@ def load_lesion_points(
         pt.point_id: pt.position for pt in car_points
     }
 
-    lesions: list[LesionPoint] = []
+    ablation_points: list[AblationPoint] = []
     for point_id, rf_path in rf_files:
         position = position_by_id.get(point_id)
         if position is None:
@@ -139,7 +139,7 @@ def load_lesion_points(
             logger.debug("RF file %s: no usable data — skipping", rf_path.name)
             continue
 
-        lesions.append(LesionPoint(
+        ablation_points.append(AblationPoint(
             point_id=point_id,
             position=position.copy(),
             max_power_w=stats["max_power_w"],
@@ -148,7 +148,7 @@ def load_lesion_points(
         ))
 
     logger.debug(
-        "Loaded %d/%d lesion points for map '%s'",
-        len(lesions), len(rf_files), map_name,
+        "Loaded %d/%d ablation points for map '%s'",
+        len(ablation_points), len(rf_files), map_name,
     )
-    return lesions
+    return ablation_points
