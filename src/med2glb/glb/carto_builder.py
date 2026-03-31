@@ -305,6 +305,7 @@ def build_carto_static_glb(
     cache: AnimatedBakeCache,
     output_path: Path,
     legend_info: dict | None = None,
+    ablation_points: list | None = None,
 ) -> None:
     """Build a static GLB reusing geometry and base texture from the animated cache.
 
@@ -412,6 +413,13 @@ def build_carto_static_glb(
         )
         child_nodes.extend(legend_nodes)
 
+    if ablation_points:
+        from med2glb.glb.ablation_builder import add_ablation_nodes
+        ablation_nodes = add_ablation_nodes(
+            gltf, binary_data, ablation_points, list(cache.centroid),
+        )
+        child_nodes.extend(ablation_nodes)
+
     # Root node: mm -> m + 10x AR scale
     root_idx = len(gltf.nodes)
     gltf.nodes.append(pygltflib.Node(
@@ -437,6 +445,7 @@ def build_carto_recolored_static_glb(
     mesh_data: MeshData,
     output_path: Path,
     legend_info: dict | None = None,
+    ablation_points: list | None = None,
 ) -> None:
     """Build a static GLB reusing xatlas geometry from the cache with new vertex colors.
 
@@ -564,6 +573,13 @@ def build_carto_recolored_static_glb(
         )
         child_nodes.extend(legend_nodes)
 
+    if ablation_points:
+        from med2glb.glb.ablation_builder import add_ablation_nodes
+        ablation_nodes = add_ablation_nodes(
+            gltf, binary_data, ablation_points, list(cache.centroid),
+        )
+        child_nodes.extend(ablation_nodes)
+
     root_idx = len(gltf.nodes)
     gltf.nodes.append(pygltflib.Node(
         name="root", children=child_nodes, scale=[0.01, 0.01, 0.01],
@@ -595,6 +611,7 @@ def build_carto_animated_glb(
     progress: Callable[[str, int, int], None] | None = None,
     legend_info: dict | None = None,
     cache: AnimatedBakeCache | None = None,
+    ablation_points: list | None = None,
 ) -> bool:
     """Build animated GLB with CARTO excitation wavefront using morph targets.
 
@@ -781,6 +798,13 @@ def build_carto_animated_glb(
             metadata=legend_info.get("metadata"),
         )
         child_node_indices.extend(legend_nodes)
+
+    if ablation_points:
+        from med2glb.glb.ablation_builder import add_ablation_nodes
+        ablation_nodes = add_ablation_nodes(
+            gltf, binary_data, ablation_points, list(cent_offset),
+        )
+        child_node_indices.extend(ablation_nodes)
 
     # Root node: mm → m + 10x AR display scale
     root_idx = len(gltf.nodes)
