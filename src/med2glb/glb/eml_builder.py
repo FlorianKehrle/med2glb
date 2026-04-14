@@ -102,24 +102,25 @@ def add_eml_overlay_node(
         with_minmax=True,
     )
 
-    # Transparent material — alphaMode BLEND triggers the Loader.cs
-    # transparent path automatically (no explicit Loader.cs change required).
+    # Transparent material — alphaMode BLEND + PBR (no KHR_materials_unlit).
+    # glTFast loads this as glTF/PbrMetallicRoughness which reads vertex COLOR_0
+    # including the alpha channel per the glTF spec:
+    #   finalColor = baseColorFactor * vertexColor
+    # baseColorFactor=[1,1,1,1] lets vertex colors drive both RGB and alpha fully.
+    # KHR_materials_unlit is intentionally omitted: the Unlit shader variant on
+    # HL2 does not reliably propagate vertex alpha, while PbrMetallicRoughness is
+    # already in GraphicsSettings Always Included Shaders (all variants compiled).
     mat_idx = len(gltf.materials)
     gltf.materials.append(pygltflib.Material(
         name=_EML_MATERIAL_NAME,
         pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
-            baseColorFactor=[1.0, 1.0, 1.0, 0.9],
+            baseColorFactor=[1.0, 1.0, 1.0, 1.0],
             metallicFactor=0.0,
             roughnessFactor=1.0,
         ),
         alphaMode=pygltflib.BLEND,
         doubleSided=True,
-        extensions={"KHR_materials_unlit": {}},
     ))
-    if not hasattr(gltf, "extensionsUsed") or gltf.extensionsUsed is None:
-        gltf.extensionsUsed = []
-    if "KHR_materials_unlit" not in gltf.extensionsUsed:
-        gltf.extensionsUsed.append("KHR_materials_unlit")
 
     mesh_idx = len(gltf.meshes)
     gltf.meshes.append(pygltflib.Mesh(
