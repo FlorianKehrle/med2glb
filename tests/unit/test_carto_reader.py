@@ -396,3 +396,78 @@ ColorsNames = LAT
         mesh_file.write_text(mesh_text, encoding="utf-8")
         mesh = parse_mesh_file(mesh_file)
         assert "coherent" not in mesh.vertex_color_values
+
+
+_EML_MESH_TEXT = """\
+#TriangulatedMeshVersion2.0
+[GeneralAttributes]
+MeshID = 1
+NumVertex = 4
+NumTriangle = 2
+MeshColor = 0.5 0.5 0.5 1.0
+
+[VerticesSection]
+0 = 0 0 0 0 0 1 0
+1 = 10 0 0 0 0 1 0
+2 = 5 10 0 0 0 1 0
+3 = 5 5 0 0 0 1 0
+
+[TrianglesSection]
+0 = 0 1 2 0 0 1 0
+1 = 0 2 3 0 0 1 0
+
+[VerticesAttributesSection]
+; EML  ExtEML  SCAR
+   0 =    0     0     0
+   1 =    1     0     0
+   2 =    0     1     0
+   3 =    0     0     1
+"""
+
+
+class TestEmlAttributesParsing:
+    """[VerticesAttributesSection] parsed into eml/exteml/scar vertex_color_values."""
+
+    def _make_mesh(self, tmp_path: Path) -> Path:
+        mesh_file = tmp_path / "1-Map.mesh"
+        mesh_file.write_text(_EML_MESH_TEXT, encoding="utf-8")
+        return mesh_file
+
+    def test_eml_keys_present(self, tmp_path):
+        """When VerticesAttributesSection exists, vertex_color_values has eml/exteml/scar."""
+        mesh = parse_mesh_file(self._make_mesh(tmp_path))
+        assert "eml" in mesh.vertex_color_values
+        assert "exteml" in mesh.vertex_color_values
+        assert "scar" in mesh.vertex_color_values
+
+    def test_eml_values_correct(self, tmp_path):
+        """EML binary values parsed correctly (vertex 1 = EML, 2 = ExtEML, 3 = SCAR)."""
+        mesh = parse_mesh_file(self._make_mesh(tmp_path))
+        assert mesh.vertex_color_values["eml"][0] == 0.0
+        assert mesh.vertex_color_values["eml"][1] == 1.0
+        assert mesh.vertex_color_values["exteml"][2] == 1.0
+        assert mesh.vertex_color_values["scar"][3] == 1.0
+
+    def test_eml_absent_when_no_section(self, tmp_path):
+        """Without VerticesAttributesSection, no eml keys in vertex_color_values."""
+        mesh_text = """\
+#TriangulatedMeshVersion2.0
+[GeneralAttributes]
+MeshID = 1
+NumVertex = 3
+NumTriangle = 1
+MeshColor = 0 1 0 1
+
+[VerticesSection]
+0 = 0 0 0 0 0 1 0
+1 = 10 0 0 0 0 1 0
+2 = 5 10 0 0 0 1 0
+
+[TrianglesSection]
+0 = 0 1 2 0 0 1 0
+"""
+        mesh_file = tmp_path / "1-Map.mesh"
+        mesh_file.write_text(mesh_text, encoding="utf-8")
+        mesh = parse_mesh_file(mesh_file)
+        assert "eml" not in mesh.vertex_color_values
+        assert "scar" not in mesh.vertex_color_values

@@ -527,6 +527,46 @@ def _convert_carto_meshes(
                     subdivided_mesh=subdivided,
                 )
 
+            # 4. EML/SCAR overlay mesh data (CARTO 8+ VerticesAttributesSection)
+            #    Reuses the already-subdivided mesh — no extra subdivision pass.
+            eml_mesh_data_overlay = None
+            _eml_src = subdivided if subdivided is not None else mesh
+            _eml_channels = {"eml", "exteml", "scar"}
+            if _eml_channels & set(_eml_src.vertex_color_values):
+                progress.update(task, description="Building EML/SCAR overlay...")
+                from dataclasses import replace as dc_replace
+                from med2glb.io.carto_colormaps import combine_eml_to_scalar
+                _n_v = len(_eml_src.vertices)
+                _eml_a = _eml_src.vertex_color_values.get("eml", np.zeros(_n_v))
+                _ext_a = _eml_src.vertex_color_values.get("exteml", np.zeros(_n_v))
+                _sca_a = _eml_src.vertex_color_values.get("scar", np.zeros(_n_v))
+                _combined = combine_eml_to_scalar(_eml_a, _ext_a, _sca_a)
+                if np.any(_combined >= 0.5):
+                    _eml_injected = dc_replace(
+                        _eml_src,
+                        vertex_color_values={
+                            **_eml_src.vertex_color_values,
+                            "eml_scar": _combined,
+                        },
+                    )
+                    if subdivided is not None:
+                        eml_mesh_data_overlay = carto_mesh_to_mesh_data(
+                            mesh, points, coloring="eml_scar",
+                            subdivide=config.subdivide,
+                            pre_subdivided=_eml_injected,
+                        )
+                    else:
+                        eml_mesh_data_overlay = carto_mesh_to_mesh_data(
+                            _eml_injected, points, coloring="eml_scar",
+                            subdivide=0,
+                        )
+                    n_flagged = int(np.any(_combined >= 0.5))
+                    _flag_count = int(np.sum(_combined >= 0.5))
+                    console.print(
+                        f"  [cyan]EML/SCAR overlay: {_flag_count:,} flagged vertices "
+                        f"embedded in animated GLB[/cyan]"
+                    )
+
             progress.remove_task(task)
 
         # === Pre-compute LAT animated cache (shared xatlas + textures) ===
@@ -746,6 +786,7 @@ def _convert_carto_meshes(
                             legend_info=legend_info,
                             cache=anim_cache,
                             ablation_points=ablation_points,
+                            eml_overlay=eml_mesh_data_overlay,
                         )
                         if not written:
                             _variant_written = False
@@ -918,10 +959,15 @@ def run_carto_pipeline(
             vec_suitable_list = list(vec_suitable)
 
     # When --coloring is specified, restrict to that single coloring;
-    # otherwise produce all colorings registered in COLORMAPS.
-    # New channels (e.g. "coherent") are auto-included when present in a mesh.
+    # otherwise produce all standard colorings registered in COLORMAPS.
+    # "eml_scar" is an overlay colormap — never a standalone coloring.
     from med2glb.io.carto_colormaps import COLORMAPS
-    colorings = [coloring] if coloring != "all" else list(COLORMAPS.keys())
+    _OVERLAY_COLORINGS: frozenset[str] = frozenset({"eml_scar"})
+    colorings = (
+        [coloring]
+        if coloring != "all"
+        else [c for c in COLORMAPS if c not in _OVERLAY_COLORINGS]
+    )
 
     # Auto-detect subdivision level if not explicitly provided
     if subdivide is None:

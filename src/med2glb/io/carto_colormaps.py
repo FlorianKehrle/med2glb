@@ -73,6 +73,76 @@ def coherent_colormap(values: np.ndarray, clamp_range: tuple[float, float] | Non
     return _apply_colormap(values, _LAT_STOPS, clamp_range)
 
 
+def combine_eml_to_scalar(
+    eml: np.ndarray,
+    exteml: np.ndarray,
+    scar: np.ndarray,
+) -> np.ndarray:
+    """Combine EML/ExtEML/SCAR binary flags into a single priority scalar.
+
+    After IDW subdivision propagation, values may be fractional (0…1).
+    Threshold at ≥ 0.5 to recover the original binary intent.
+
+    Priority (highest wins): SCAR = 3 > ExtEML = 2 > EML = 1 > normal = 0.
+
+    Args:
+        eml:    Per-vertex EML flag array (float64, originally 0 or 1).
+        exteml: Per-vertex ExtEML flag array.
+        scar:   Per-vertex SCAR flag array.
+
+    Returns:
+        float64 array with values in {0, 1, 2, 3}.
+    """
+    out = np.zeros(len(eml), dtype=np.float64)
+    out[eml >= 0.5] = 1.0
+    out[exteml >= 0.5] = 2.0
+    out[scar >= 0.5] = 3.0
+    return out
+
+
+def eml_scar_colormap(
+    values: np.ndarray,
+    clamp_range: tuple[float, float] | None = None,
+) -> np.ndarray:
+    """RGBA colormap for EML/SCAR overlay with per-vertex alpha.
+
+    Expects scalar values from ``combine_eml_to_scalar()``:
+
+    * 0 (normal)  → fully transparent (α = 0) — heart animation visible through
+    * 1 (EML)     → orange (α = 0.85)
+    * 2 (ExtEML)  → yellow (α = 0.85)
+    * 3 (SCAR)    → red (α = 0.95)
+
+    The per-vertex alpha means only flagged tissue is visible — a "paint splat"
+    floating on the animated heart with no interference to the LAT animation.
+
+    The ``clamp_range`` parameter is accepted for API compatibility but unused.
+
+    Returns:
+        RGBA float32 array [N, 4] with values in [0, 1].
+    """
+    n = len(values)
+    colors = np.zeros((n, 4), dtype=np.float32)
+
+    # Default: transparent neutral gray (invisible)
+    colors[:, :3] = 0.5
+    colors[:, 3] = 0.0
+
+    # EML only (1 ≤ value < 2)
+    eml_mask = (values >= 0.5) & (values < 1.5)
+    colors[eml_mask] = [1.0, 0.50, 0.0, 0.85]   # orange
+
+    # ExtEML (2 ≤ value < 3)
+    exteml_mask = (values >= 1.5) & (values < 2.5)
+    colors[exteml_mask] = [1.0, 1.00, 0.0, 0.85]  # yellow
+
+    # SCAR (value ≥ 3)
+    scar_mask = values >= 2.5
+    colors[scar_mask] = [0.9, 0.10, 0.1, 0.95]    # red
+
+    return colors
+
+
 # Color stop definitions: list of (normalized_position, R, G, B)
 # LAT: red (early) → yellow → green → cyan → blue → purple (late)
 _LAT_STOPS = [
@@ -101,12 +171,17 @@ _UNIPOLAR_STOPS = [
     (1.0, 0.0, 0.0, 1.0),    # blue
 ]
 
-# Map of colormap name to function
+# Map of colormap name to function.
+# "lat", "bipolar", "unipolar", "coherent" are standard colorings that flow
+# through the main pipeline loop and produce standalone GLBs.
+# "eml_scar" is an OVERLAY colormap — used only by the EML rendering path
+# (embedded in the animated GLB as a transparent child node, never standalone).
 COLORMAPS = {
     "lat": lat_colormap,
     "bipolar": bipolar_colormap,
     "unipolar": unipolar_colormap,
     "coherent": coherent_colormap,
+    "eml_scar": eml_scar_colormap,
 }
 
 

@@ -612,6 +612,7 @@ def build_carto_animated_glb(
     legend_info: dict | None = None,
     cache: AnimatedBakeCache | None = None,
     ablation_points: list | None = None,
+    eml_overlay: "MeshData | None" = None,
 ) -> bool:
     """Build animated GLB with CARTO excitation wavefront using morph targets.
 
@@ -805,6 +806,11 @@ def build_carto_animated_glb(
             gltf, binary_data, ablation_points, list(cent_offset),
         )
         child_node_indices.extend(ablation_nodes)
+
+    if eml_overlay is not None:
+        from med2glb.glb.eml_builder import add_eml_overlay_node
+        eml_nodes = add_eml_overlay_node(gltf, binary_data, eml_overlay)
+        child_node_indices.extend(eml_nodes)
 
     # Root node: mm → m + 10x AR display scale
     root_idx = len(gltf.nodes)

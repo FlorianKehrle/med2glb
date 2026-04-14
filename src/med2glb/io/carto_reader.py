@@ -162,6 +162,14 @@ def parse_mesh_file(path: Path) -> CartoMesh:
         text, color_names, num_vertex,
     )
 
+    # Parse per-vertex binary attributes (EML/ExtEML/SCAR, CARTO 8+).
+    # Store as float64 arrays in vertex_color_values so they are
+    # automatically propagated through subdivision IDW and inactive-vertex
+    # stripping, exactly like regular color channels.
+    eml_attrs = _parse_vertices_attributes_section(text, num_vertex)
+    if eml_attrs:
+        vertex_color_values.update(eml_attrs)
+
     structure_name = path.stem
 
     return CartoMesh(
@@ -301,6 +309,63 @@ _COLOR_NAME_MAP: dict[str, str] = {
     "unipolar": "unipolar",
     "coherent": "coherent",
 }
+
+
+def _parse_vertices_attributes_section(
+    text: str,
+    num_vertex: int,
+) -> dict[str, np.ndarray]:
+    """Parse [VerticesAttributesSection] into per-vertex binary flag arrays.
+
+    CARTO 8+ format: ``ID = EML ExtEML SCAR`` (each 0 or 1 per vertex).
+
+    Stored as float64 arrays so the existing IDW subdivision propagation
+    and inactive-vertex stripping handle them automatically.  Values become
+    fractional after subdivision; threshold at ≥ 0.5 is applied in
+    ``combine_eml_to_scalar()`` at colormap time.
+
+    Returns:
+        Dict with keys ``"eml"``, ``"exteml"``, ``"scar"`` as float64 arrays
+        of length ``num_vertex``, or empty dict if section is absent / malformed.
+    """
+    section = _extract_section(text, "VerticesAttributesSection")
+    if not section:
+        return {}
+
+    data_lines: list[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+        parts = stripped.split("=", 1)
+        if len(parts) == 2:
+            data_lines.append(parts[1])
+
+    if not data_lines:
+        return {}
+
+    from io import StringIO
+    block = "\n".join(data_lines)
+    try:
+        data = np.genfromtxt(StringIO(block), dtype=np.float64)
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+    except Exception:
+        logger.debug("Failed to parse VerticesAttributesSection")
+        return {}
+
+    if data.shape[1] < 3:
+        logger.debug(
+            "VerticesAttributesSection: expected 3 columns, got %d — skipping",
+            data.shape[1],
+        )
+        return {}
+
+    return {
+        "eml": data[:, 0].copy(),
+        "exteml": data[:, 1].copy(),
+        "scar": data[:, 2].copy(),
+    }
 
 
 def _parse_vertices_colors_section(

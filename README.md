@@ -110,14 +110,16 @@ For each mesh, the pipeline produces:
 | File | Description |
 |---|---|
 | `{Map}_lat.glb` | Static LAT heatmap |
-| `{Map}_lat_animated.glb` | Animated excitation ring overlay |
-| `{Map}_lat_animated_vectors.glb` | Animated ring + streamline arrows |
+| `{Map}_lat_animated.glb` | Animated excitation ring overlay (+ EML/SCAR overlay when present) |
+| `{Map}_lat_animated_vectors.glb` | Animated ring + streamline arrows (+ EML/SCAR overlay when present) |
 | `{Map}_bipolar.glb` | Static bipolar voltage map |
 | `{Map}_unipolar.glb` | Static unipolar voltage map |
 | `{Map}_coherent.glb` | Static Coherent LAT map (CARTO 8, when present) |
 | `med2glb_log.txt` | Conversion metadata |
 
 Only colorings with valid data are produced. A legend cylinder and study info panel are embedded in each GLB for AR readability.
+
+**EML/SCAR overlay** (CARTO 8+): when `[VerticesAttributesSection]` is present in the `.mesh` file, an EML/ExtEML/SCAR tissue overlay is automatically embedded as a transparent child node inside the animated GLBs. Unflagged vertices are invisible (α = 0); EML = orange, ExtEML = yellow, SCAR = red. The overlay is offset 0.1% outward to prevent Z-fighting on HoloLens.
 
 #### CARTO Example
 

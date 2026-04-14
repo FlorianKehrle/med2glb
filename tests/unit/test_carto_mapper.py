@@ -5,7 +5,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from med2glb.io.carto_colormaps import bipolar_colormap, coherent_colormap, lat_colormap, unipolar_colormap
+from med2glb.io.carto_colormaps import (
+    bipolar_colormap,
+    coherent_colormap,
+    combine_eml_to_scalar,
+    eml_scar_colormap,
+    lat_colormap,
+    unipolar_colormap,
+)
 from med2glb.io.carto_mapper import (
     _get_fill_face_group_ids,
     build_inactive_mask,
@@ -273,6 +280,74 @@ class TestColormaps:
         """coherent_colormap uses the same color stops as lat_colormap."""
         values = np.array([-200.0, 0.0, 200.0], dtype=np.float64)
         assert np.allclose(coherent_colormap(values), lat_colormap(values))
+
+
+class TestEmlScarColormap:
+    def test_normal_vertices_transparent(self):
+        """State 0 (unflagged) → α = 0 (invisible)."""
+        values = np.array([0.0], dtype=np.float64)
+        colors = eml_scar_colormap(values)
+        assert colors[0, 3] == 0.0
+
+    def test_eml_orange(self):
+        """State 1 (EML) → orange with α = 0.85."""
+        values = np.array([1.0], dtype=np.float64)
+        colors = eml_scar_colormap(values)
+        assert colors[0, 3] > 0.8
+        assert colors[0, 0] > 0.9   # high red
+        assert colors[0, 1] > 0.3   # some green (orange)
+        assert colors[0, 2] < 0.1   # no blue
+
+    def test_exteml_yellow(self):
+        """State 2 (ExtEML) → yellow with α = 0.85."""
+        values = np.array([2.0], dtype=np.float64)
+        colors = eml_scar_colormap(values)
+        assert colors[0, 3] > 0.8
+        assert colors[0, 0] > 0.9  # red ≈ 1
+        assert colors[0, 1] > 0.9  # green ≈ 1 → yellow
+
+    def test_scar_red(self):
+        """State 3 (SCAR) → red with α = 0.95."""
+        values = np.array([3.0], dtype=np.float64)
+        colors = eml_scar_colormap(values)
+        assert colors[0, 3] > 0.9
+        assert colors[0, 0] > 0.8   # high red
+        assert colors[0, 1] < 0.2   # low green
+
+    def test_shape_dtype(self):
+        """Returns float32 RGBA array with correct shape."""
+        values = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float64)
+        colors = eml_scar_colormap(values)
+        assert colors.shape == (4, 4)
+        assert colors.dtype == np.float32
+
+
+class TestCombineEmlToScalar:
+    def test_all_zeros(self):
+        """All-zero flags → scalar 0 (normal)."""
+        z = np.zeros(4, dtype=np.float64)
+        assert np.all(combine_eml_to_scalar(z, z, z) == 0.0)
+
+    def test_priority_scar_wins(self):
+        """SCAR takes priority over EML and ExtEML."""
+        v = np.array([1.0])
+        result = combine_eml_to_scalar(v, v, v)
+        assert result[0] == 3.0
+
+    def test_priority_exteml_over_eml(self):
+        """ExtEML takes priority over EML."""
+        one = np.array([1.0])
+        zero = np.array([0.0])
+        result = combine_eml_to_scalar(one, one, zero)
+        assert result[0] == 2.0
+
+    def test_fractional_threshold(self):
+        """IDW-propagated fractional values are thresholded at ≥ 0.5."""
+        eml = np.array([0.7, 0.3])
+        z = np.zeros(2)
+        result = combine_eml_to_scalar(eml, z, z)
+        assert result[0] == 1.0  # ≥ 0.5 → flagged
+        assert result[1] == 0.0  # < 0.5 → normal
 
 
 @pytest.fixture
