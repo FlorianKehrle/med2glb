@@ -10,6 +10,7 @@ Built for clinical AR workflows — point it at a DICOM directory or CARTO expor
 - [Quick Start](#quick-start)
 - [Supported Data Types](#supported-data-types)
   - [CARTO 3 EP Mapping](#carto-3-ep-mapping)
+    - [Required Input Files](#required-input-files)
   - [DICOM Volumes & Cine](#dicom-volumes--cine)
   - [Gallery Mode](#gallery-mode)
 - [Conversion Methods](#conversion-methods)
@@ -120,6 +121,33 @@ For each mesh, the pipeline produces:
 Only colorings with valid data are produced. A legend cylinder and study info panel are embedded in each GLB for AR readability.
 
 **EML/SCAR overlay** (CARTO 8+): when `[VerticesAttributesSection]` is present in the `.mesh` file, an EML/ExtEML/SCAR tissue overlay is automatically embedded as a transparent child node inside the animated GLBs. Unflagged vertices are invisible (α = 0); EML = orange, ExtEML = yellow, SCAR = red. The overlay is offset 0.1% outward to prevent Z-fighting on HoloLens.
+
+#### Required Input Files
+
+A CARTO export directory typically contains thousands of files, most of which are not needed for 3D conversion. The table below lists what med2glb reads, what may be useful for future features, and what can safely be deleted to reduce disk usage and directory scan time.
+
+| File pattern | Size (typical) | Used now? | Future use? | Safe to delete? |
+|---|---|---|---|---|
+| `*.mesh` | ~5–10 MB each | ✅ **Required** — surface geometry, vertex colors (LAT/bipolar/unipolar/coherent), EML/SCAR attributes | — | ❌ No |
+| `*_car.txt` | ~5–12 MB each | ✅ **Required** — electro-anatomical mapping points (LAT, bipolar, unipolar voltages) | — | ❌ No |
+| `VisiTagExport/` | ~10–30 MB | ✅ **Required** for ablation markers (omit = no ablation spheres in GLB) | — | ❌ No |
+| `FAT_*.xml` | ~5–10 MB | ❌ not read | Study/session metadata, map settings, patient info | ⚠️ Keep if you want future metadata support |
+| `*_Points_Export.xml` (summary, 1 per map) | ~1–2 MB | ❌ not read | Redundant summary of `_car.txt` data | ✅ Yes |
+| `*_P*_Point_Export.xml` (per-point, thousands) | ~50–100 MB total | ❌ not read | Full EGM waveform metadata, contact force per point | ⚠️ Keep if you want per-point EGM data later |
+| `*_ECG_Export_*.txt` (per-beat, thousands) | **~1–3 GB total** | ❌ not read | Raw ECG waveforms — not relevant for 3D mapping | ✅ Yes |
+| `Export_FAT_*.zip` | **~500 MB–1 GB** | ❌ not read | Full export archive (redundant once extracted) | ✅ Yes |
+
+**Minimum required set** for full conversion (all current features):
+```
+<MapName>.mesh
+<MapName>_car.txt
+VisiTagExport/
+```
+
+**Safe to delete immediately** (no current or planned use in 3D AR context):
+- `*_ECG_Export_*.txt` — ECG waveforms (largest files, ~1–3 GB)
+- `Export_FAT_*.zip` — redundant archive (~0.5–1 GB)
+- `*_Points_Export.xml` summary XMLs (1 per map, small)
 
 #### CARTO Example
 
