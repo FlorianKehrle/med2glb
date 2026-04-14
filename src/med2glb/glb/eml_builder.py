@@ -1,19 +1,27 @@
 """EML/SCAR overlay node for CARTO animated GLBs.
 
 Embeds a transparent overlay mesh as a named child node inside the animated
-GLB.  Only EML, ExtEML, and SCAR flagged vertices are visible (per-vertex
-alpha); unflagged vertices are fully transparent so the LAT animation shows
-through.
+GLB.  Only triangles that contain at least one EML, ExtEML, or SCAR vertex
+are included; unflagged-only triangles are stripped entirely so the LAT
+animation underneath shows through without requiring per-vertex alpha.
 
 The overlay node uses ``scale = [1.001, 1.001, 1.001]`` — 0.1% larger than
 the heart mesh — to push the surface slightly outward and prevent Z-fighting
 on HoloLens.
 
-Unity / VeldtAR side: ``ModelData.cs`` detects the ``"eml_"`` node name prefix
-and excludes the overlay from the explodable subpart list (same mechanism used
-for ``"ablation_"`` nodes).  The material's ``alphaMode="BLEND"`` is handled
-automatically by the existing ``Loader.cs`` transparent path:
-``_ALPHABLEND_ON → SetStandardAlphaMode(3) → _ALPHAPREMULTIPLY_ON``.
+**HL2 transparency strategy** — per-vertex alpha (COLOR_0) is *not* used
+because the Unity Standard shader (applied by ``ConvertGltfMaterialsToStandard``
+in Loader.cs) ignores vertex colors entirely and glTFast shader variants
+(``_ALPHABLEND_ON``) can be stripped from HL2 builds.  Instead three
+separate mesh primitives are built — one per EML type — each with a
+*uniform* ``baseColorFactor`` and ``alphaMode=BLEND``.
+``ConvertGltfMaterialsToStandard`` copies ``baseColorFactor`` → ``_Color``
+and promotes ``_ALPHABLEND_ON`` → ``_ALPHAPREMULTIPLY_ON`` (preserved in
+HL2 builds), producing correct semi-transparent colored regions.
+
+Unity / VeldtAR side: ``ModelData.cs`` detects the ``"eml_"`` node name
+prefix and excludes the overlay from the explodable subpart list (same
+mechanism used for ``"ablation_"`` nodes).
 """
 
 from __future__ import annotations
@@ -24,14 +32,38 @@ import numpy as np
 import pygltflib
 
 from med2glb.core.types import MeshData
-from med2glb.glb.builder import _center_vertices, _pad_to_4, write_accessor
+from med2glb.glb.builder import _center_vertices, write_accessor
 
 logger = logging.getLogger("med2glb")
 
-_EML_MATERIAL_NAME = "carto_eml"
-
 # Scale relative to the heart mesh: 0.1% outward prevents Z-fighting on HL2.
 _EML_SCALE: float = 1.001
+
+# Per-type material definitions: (material name, RGBA baseColorFactor)
+_EML_TYPE_DEFS: dict[int, tuple[str, list[float]]] = {
+    1: ("eml_overlay_eml",    [1.0, 0.5, 0.0, 0.85]),  # EML    — orange
+    2: ("eml_overlay_exteml", [1.0, 1.0, 0.0, 0.85]),  # ExtEML — yellow
+    3: ("eml_overlay_scar",   [1.0, 0.0, 0.0, 0.95]),  # SCAR   — red
+}
+
+
+def _vertex_types(vertex_colors: np.ndarray) -> np.ndarray:
+    """Return per-vertex EML type label (0=normal, 1=EML, 2=ExtEML, 3=SCAR).
+
+    The type is recovered from the baked RGBA produced by ``eml_scar_colormap``:
+    * alpha ≈ 0     → normal (0)
+    * alpha ≈ 0.95  → SCAR   (3)
+    * alpha ≈ 0.85, green ≈ 1.0 → ExtEML (2)
+    * alpha ≈ 0.85, green ≈ 0.5 → EML    (1)
+    """
+    alpha = vertex_colors[:, 3]
+    green = vertex_colors[:, 1]
+    vtype = np.zeros(len(vertex_colors), dtype=np.int32)
+    active = alpha > 0.01
+    vtype[active & (alpha > 0.90)] = 3                     # SCAR
+    vtype[active & (alpha <= 0.90) & (green > 0.80)] = 2   # ExtEML
+    vtype[active & (alpha <= 0.90) & (green <= 0.80)] = 1  # EML
+    return vtype
 
 
 def add_eml_overlay_node(
@@ -40,101 +72,117 @@ def add_eml_overlay_node(
     eml_mesh_data: MeshData,
     centroid_offset: list[float] | None = None,
 ) -> list[int]:
-    """Add an EML/SCAR overlay mesh as a child node in the animated GLB.
+    """Add EML/SCAR overlay as a child node in the animated GLB.
 
-    The overlay uses the same geometry as the heart mesh with per-vertex alpha:
+    Creates up to three mesh primitives (EML / ExtEML / SCAR) each covering
+    only the triangles that belong to that tissue type.  Each primitive has its
+    own uniform-color material (no vertex colors) so ``ConvertGltfMaterialsToStandard``
+    in Loader.cs produces correct semi-transparent Standard materials on HL2.
 
-    * Normal (unflagged) vertices: α = 0 (transparent, LAT animation visible)
-    * EML vertices: orange, α = 0.85
-    * ExtEML vertices: yellow, α = 0.85
-    * SCAR vertices: red, α = 0.95
-
-    The node is named ``"eml_overlay"`` and placed at the mesh centroid with
-    scale 1.001 to prevent Z-fighting.
+    Triangle assignment: a triangle is assigned to the highest-priority type
+    present among its three vertices (SCAR=3 > ExtEML=2 > EML=1 > normal=0).
+    Triangles where all three vertices are normal (type=0) are excluded.
 
     Args:
         gltf:             The glTF document being built.
         binary_data:      Binary buffer being assembled.
-        eml_mesh_data:    MeshData with ``vertex_colors`` containing per-vertex
-                          RGBA (with per-vertex alpha from ``eml_scar_colormap``).
-        centroid_offset:  The same centroid subtracted from the animated mesh
-                          vertices in ``carto_builder.py``.  When provided the
-                          EML vertices are shifted by the same offset so the
-                          overlay lands exactly on the heart mesh.  When
-                          ``None``, ``_center_vertices`` is used as fallback.
+        eml_mesh_data:    MeshData whose ``vertex_colors`` was produced by
+                          ``eml_scar_colormap`` (RGBA with per-vertex type).
+        centroid_offset:  Centroid offset used for the animated mesh in
+                          ``carto_builder.py``.  When provided the EML
+                          vertices are shifted by the same amount so the
+                          overlay lands exactly on the heart mesh.
 
     Returns:
-        List containing the single EML overlay node index, or [] if skipped.
+        List with the single EML overlay node index, or ``[]`` if no
+        EML/SCAR triangles are found.
     """
     if eml_mesh_data.vertex_colors is None:
         return []
 
-    # Use the same centroid as the animated mesh so both nodes sit at origin.
-    # Passing centroid_offset avoids re-computing the centroid from potentially
-    # slightly different floating-point vertices (subdivision can shift the
-    # mean by a few ULPs) and guarantees perfect alignment.
+    # Center vertices using the same offset as the animated mesh.
     if centroid_offset is not None:
-        vertices_centered = (
+        verts = (
             eml_mesh_data.vertices.astype(np.float32)
             - np.array(centroid_offset, dtype=np.float32)
         )
     else:
-        vertices_centered, _ = _center_vertices(
-            eml_mesh_data.vertices.astype(np.float32)
+        verts, _ = _center_vertices(eml_mesh_data.vertices.astype(np.float32))
+
+    normals = (
+        eml_mesh_data.normals.astype(np.float32)
+        if eml_mesh_data.normals is not None
+        else None
+    )
+    faces = eml_mesh_data.faces  # (F, 3) int array
+
+    # Per-vertex type label (0–3)
+    vtype = _vertex_types(eml_mesh_data.vertex_colors)
+
+    # Per-face dominant type: max of the 3 vertex types
+    face_type = vtype[faces].max(axis=1)  # (F,) int
+
+    primitives: list[pygltflib.Primitive] = []
+
+    for etype, (mat_name, base_color) in _EML_TYPE_DEFS.items():
+        mask = face_type == etype
+        if not np.any(mask):
+            continue
+
+        type_faces = faces[mask]  # (K, 3)
+
+        # Remap to a compact vertex buffer for this primitive
+        unique_idx, remapped = np.unique(type_faces.ravel(), return_inverse=True)
+        sub_verts = verts[unique_idx]
+        sub_faces = remapped.reshape(-1, 3).astype(np.uint32)
+
+        pos_acc = write_accessor(
+            gltf, binary_data, sub_verts,
+            pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC3,
+            with_minmax=True,
+        )
+        idx_acc = write_accessor(
+            gltf, binary_data, sub_faces.ravel(),
+            pygltflib.ELEMENT_ARRAY_BUFFER, pygltflib.UNSIGNED_INT, pygltflib.SCALAR,
+            with_minmax=True,
         )
 
-    pos_acc = write_accessor(
-        gltf, binary_data, vertices_centered,
-        pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC3,
-        with_minmax=True,
-    )
-    norm_acc = write_accessor(
-        gltf, binary_data, eml_mesh_data.normals.astype(np.float32),
-        pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC3,
-    )
-    color_acc = write_accessor(
-        gltf, binary_data, eml_mesh_data.vertex_colors.astype(np.float32),
-        pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC4,
-    )
-    idx_acc = write_accessor(
-        gltf, binary_data, eml_mesh_data.faces.astype(np.uint32).ravel(),
-        pygltflib.ELEMENT_ARRAY_BUFFER, pygltflib.UNSIGNED_INT, pygltflib.SCALAR,
-        with_minmax=True,
-    )
+        attrs = pygltflib.Attributes(POSITION=pos_acc)
+        if normals is not None:
+            norm_acc = write_accessor(
+                gltf, binary_data, normals[unique_idx],
+                pygltflib.ARRAY_BUFFER, pygltflib.FLOAT, pygltflib.VEC3,
+            )
+            attrs.NORMAL = norm_acc
 
-    # Transparent material — alphaMode BLEND + PBR (no KHR_materials_unlit).
-    # glTFast loads this as glTF/PbrMetallicRoughness which reads vertex COLOR_0
-    # including the alpha channel per the glTF spec:
-    #   finalColor = baseColorFactor * vertexColor
-    # baseColorFactor=[1,1,1,1] lets vertex colors drive both RGB and alpha fully.
-    # KHR_materials_unlit is intentionally omitted: the Unlit shader variant on
-    # HL2 does not reliably propagate vertex alpha, while PbrMetallicRoughness is
-    # already in GraphicsSettings Always Included Shaders (all variants compiled).
-    mat_idx = len(gltf.materials)
-    gltf.materials.append(pygltflib.Material(
-        name=_EML_MATERIAL_NAME,
-        pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
-            baseColorFactor=[1.0, 1.0, 1.0, 1.0],
-            metallicFactor=0.0,
-            roughnessFactor=1.0,
-        ),
-        alphaMode=pygltflib.BLEND,
-        doubleSided=True,
-    ))
-
-    mesh_idx = len(gltf.meshes)
-    gltf.meshes.append(pygltflib.Mesh(
-        name="eml_overlay",
-        primitives=[pygltflib.Primitive(
-            attributes=pygltflib.Attributes(
-                POSITION=pos_acc,
-                NORMAL=norm_acc,
-                COLOR_0=color_acc,
+        mat_idx = len(gltf.materials)
+        gltf.materials.append(pygltflib.Material(
+            name=mat_name,
+            pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(
+                baseColorFactor=base_color,
+                metallicFactor=0.0,
+                roughnessFactor=1.0,
             ),
+            alphaMode=pygltflib.BLEND,
+            doubleSided=True,
+        ))
+
+        primitives.append(pygltflib.Primitive(
+            attributes=attrs,
             indices=idx_acc,
             material=mat_idx,
-        )],
-    ))
+        ))
+
+        logger.debug(
+            "EML overlay type %d (%s): %d triangles, %d vertices",
+            etype, mat_name, int(mask.sum()), len(unique_idx),
+        )
+
+    if not primitives:
+        return []
+
+    mesh_idx = len(gltf.meshes)
+    gltf.meshes.append(pygltflib.Mesh(name="eml_overlay", primitives=primitives))
 
     node_idx = len(gltf.nodes)
     gltf.nodes.append(pygltflib.Node(
@@ -144,9 +192,4 @@ def add_eml_overlay_node(
         scale=[_EML_SCALE, _EML_SCALE, _EML_SCALE],
     ))
 
-    n_flagged = int(np.sum(eml_mesh_data.vertex_colors[:, 3] > 0.01))
-    logger.debug(
-        "EML overlay: %d / %d vertices flagged (EML/ExtEML/SCAR)",
-        n_flagged, len(eml_mesh_data.vertices),
-    )
     return [node_idx]
