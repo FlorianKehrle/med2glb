@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from med2glb.io.carto_colormaps import bipolar_colormap, lat_colormap, unipolar_colormap
+from med2glb.io.carto_colormaps import bipolar_colormap, coherent_colormap, lat_colormap, unipolar_colormap
 from med2glb.io.carto_mapper import (
     _get_fill_face_group_ids,
     build_inactive_mask,
@@ -251,6 +251,28 @@ class TestColormaps:
         colors = lat_colormap(values, clamp_range=(-200, 200))
         # Values outside range should be clamped (first red, last purple)
         assert colors[0, 0] > 0.8  # red
+
+    def test_coherent_colormap_shape_and_range(self):
+        """coherent_colormap returns valid RGBA [N,4] float32 in [0,1]."""
+        values = np.array([-200.0, -100.0, 0.0, 100.0, 200.0], dtype=np.float64)
+        colors = coherent_colormap(values)
+        assert colors.shape == (5, 4)
+        assert colors.dtype == np.float32
+        assert np.all(colors >= 0.0)
+        assert np.all(colors <= 1.0)
+        assert np.all(colors[:, 3] == 1.0)  # all opaque
+
+    def test_coherent_colormap_nan_gray(self):
+        """NaN values get opaque neutral gray (same convention as lat_colormap)."""
+        values = np.array([0.0, np.nan, 100.0], dtype=np.float64)
+        colors = coherent_colormap(values)
+        assert colors[1, 3] == 1.0
+        assert abs(colors[1, 0] - 0.5) < 0.01
+
+    def test_coherent_same_scale_as_lat(self):
+        """coherent_colormap uses the same color stops as lat_colormap."""
+        values = np.array([-200.0, 0.0, 200.0], dtype=np.float64)
+        assert np.allclose(coherent_colormap(values), lat_colormap(values))
 
 
 @pytest.fixture

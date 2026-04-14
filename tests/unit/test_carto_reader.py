@@ -311,3 +311,88 @@ ColorsNames = LAT
         names = {r.name for r in result}
         assert "direct_export" in names
         assert "Export" in names
+
+
+class TestCoherentLatParsing:
+    """Coherent LAT (CARTO 8) is parsed from ColorsNames + VerticesColorsSection."""
+
+    def _make_mesh_with_coherent(self, tmp_path: Path) -> Path:
+        mesh_text = """\
+#TriangulatedMeshVersion2.0
+[GeneralAttributes]
+MeshID = 1
+NumVertex = 3
+NumTriangle = 1
+MeshColor = 0 1 0 1
+NumVertexColors = 2
+ColorsIDs = 0  13
+ColorsNames = LAT  Coherent
+
+[VerticesSection]
+0 = 0 0 0 0 0 1 0
+1 = 10 0 0 0 0 1 0
+2 = 5 10 0 0 0 1 0
+
+[TrianglesSection]
+0 = 0 1 2 0 0 1 0
+
+[VerticesColorsSection]
+; LAT  Coherent
+0 = -100.0   -80.0
+1 =   50.0    30.0
+2 =  200.0   180.0
+"""
+        mesh_file = tmp_path / "1-Map.mesh"
+        mesh_file.write_text(mesh_text, encoding="utf-8")
+        return mesh_file
+
+    def test_coherent_key_present_in_vertex_color_values(self, tmp_path):
+        """When ColorsNames includes Coherent, vertex_color_values has 'coherent' key."""
+        mesh = parse_mesh_file(self._make_mesh_with_coherent(tmp_path))
+        assert "coherent" in mesh.vertex_color_values
+
+    def test_coherent_values_correct(self, tmp_path):
+        """Coherent LAT values match the VerticesColorsSection data."""
+        mesh = parse_mesh_file(self._make_mesh_with_coherent(tmp_path))
+        cv = mesh.vertex_color_values["coherent"]
+        assert cv.shape == (3,)
+        assert abs(cv[0] - (-80.0)) < 0.01
+        assert abs(cv[1] - 30.0) < 0.01
+        assert abs(cv[2] - 180.0) < 0.01
+
+    def test_lat_still_parsed_alongside_coherent(self, tmp_path):
+        """Existing LAT channel is still parsed when Coherent is also present."""
+        mesh = parse_mesh_file(self._make_mesh_with_coherent(tmp_path))
+        assert "lat" in mesh.vertex_color_values
+        assert abs(mesh.vertex_color_values["lat"][0] - (-100.0)) < 0.01
+
+    def test_coherent_absent_when_not_in_colorsnames(self, tmp_path):
+        """When ColorsNames has no Coherent, vertex_color_values has no 'coherent' key."""
+        mesh_text = """\
+#TriangulatedMeshVersion2.0
+[GeneralAttributes]
+MeshID = 1
+NumVertex = 3
+NumTriangle = 1
+MeshColor = 0 1 0 1
+NumVertexColors = 1
+ColorsIDs = 2
+ColorsNames = LAT
+
+[VerticesSection]
+0 = 0 0 0 0 0 1 0
+1 = 10 0 0 0 0 1 0
+2 = 5 10 0 0 0 1 0
+
+[TrianglesSection]
+0 = 0 1 2 0 0 1 0
+
+[VerticesColorsSection]
+0 = 100.0
+1 = 200.0
+2 = 300.0
+"""
+        mesh_file = tmp_path / "1-Map.mesh"
+        mesh_file.write_text(mesh_text, encoding="utf-8")
+        mesh = parse_mesh_file(mesh_file)
+        assert "coherent" not in mesh.vertex_color_values

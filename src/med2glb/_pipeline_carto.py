@@ -363,14 +363,19 @@ def _convert_carto_meshes(
         ablation_points = study.ablation_points.get(mesh.structure_name) or None
         mesh_has_vec = has_vectors and (vec_meshes is None or mesh_idx in vec_meshes)
 
-        # Determine which colorings have valid data for this mesh
+        # Determine which colorings have valid data for this mesh.
+        # A coloring is available when it has either:
+        #   (a) valid car-file point measurements (e.g. lat/bipolar/unipolar), or
+        #   (b) valid pre-interpolated values in the mesh's VerticesColorsSection
+        #       (e.g. "coherent" from CARTO 8, which has no car-file counterpart).
         available_colorings: list[str] = []
         for c in config.colorings:
-            if not points:
-                # No points at all — skip all colorings
-                break
-            _, valid_values = extract_point_field(points, c)
-            if len(valid_values) > 0:
+            has_points = bool(points) and len(extract_point_field(points, c)[1]) > 0
+            has_mesh_colors = (
+                c in mesh.vertex_color_values
+                and int(np.sum(~np.isnan(mesh.vertex_color_values[c]))) > 0
+            )
+            if has_points or has_mesh_colors:
                 available_colorings.append(c)
 
         if not available_colorings:
@@ -913,8 +918,10 @@ def run_carto_pipeline(
             vec_suitable_list = list(vec_suitable)
 
     # When --coloring is specified, restrict to that single coloring;
-    # otherwise produce all available colorings.
-    colorings = [coloring] if coloring != "all" else ["lat", "bipolar", "unipolar"]
+    # otherwise produce all colorings registered in COLORMAPS.
+    # New channels (e.g. "coherent") are auto-included when present in a mesh.
+    from med2glb.io.carto_colormaps import COLORMAPS
+    colorings = [coloring] if coloring != "all" else list(COLORMAPS.keys())
 
     # Auto-detect subdivision level if not explicitly provided
     if subdivide is None:

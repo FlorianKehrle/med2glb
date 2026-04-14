@@ -88,9 +88,9 @@ med2glb ./echo_folder/ -o heart.glb --method totalseg
 
 ### CARTO 3 EP Mapping
 
-Auto-detects CARTO 3 export directories (containing `.mesh` files) and converts them to GLB with clinical voltage/LAT heatmaps. Supports CARTO versions: old (~2015, v4), v7.1 (v5), and v7.2+ (v6).
+Auto-detects CARTO 3 export directories (containing `.mesh` files) and converts them to GLB with clinical voltage/LAT heatmaps. Supports CARTO versions: old (~2015, v4), v7.1 (v5), v7.2+ (v6), and v8.x.
 
-**All available coloring variants (LAT, bipolar, unipolar) are generated automatically** in a single run. The expensive subdivision and UV unwrap are done once per mesh; only the lightweight vertex-color mapping is repeated per coloring, adding ~5% overhead. Use `--coloring <scheme>` to restrict to a single coloring when needed.
+**All available coloring variants are generated automatically** in a single run — including `coherent` (CARTO 8) when present in the mesh. The expensive subdivision and UV unwrap are done once per mesh; only the lightweight vertex-color mapping is repeated per coloring, adding ~5% overhead. Use `--coloring <scheme>` to restrict to a single coloring when needed.
 
 #### Coloring Schemes
 
@@ -99,8 +99,9 @@ Auto-detects CARTO 3 export directories (containing `.mesh` files) and converts 
 | `lat` | Local activation time | Red (early) → yellow → green → cyan → blue → purple (late) |
 | `bipolar` | Substrate/scar mapping | Red (scar, <0.5 mV) → yellow → green → cyan → purple (normal, >1.5 mV) |
 | `unipolar` | Voltage mapping | Red (low) → yellow → green → blue (high) |
+| `coherent` | Coherent LAT (CARTO 8) — beat-averaged activation, more robust in AF/flutter | Same scale as LAT |
 
-Animation and conduction vectors are LAT-only; bipolar and unipolar produce static GLBs only.
+Animation and conduction vectors are LAT-only; other colorings produce static GLBs only.
 
 #### Output Files
 
@@ -113,6 +114,7 @@ For each mesh, the pipeline produces:
 | `{Map}_lat_animated_vectors.glb` | Animated ring + streamline arrows |
 | `{Map}_bipolar.glb` | Static bipolar voltage map |
 | `{Map}_unipolar.glb` | Static unipolar voltage map |
+| `{Map}_coherent.glb` | Static Coherent LAT map (CARTO 8, when present) |
 | `med2glb_log.txt` | Conversion metadata |
 
 Only colorings with valid data are produced. A legend cylinder and study info panel are embedded in each GLB for AR readability.

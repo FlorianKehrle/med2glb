@@ -299,6 +299,7 @@ _COLOR_NAME_MAP: dict[str, str] = {
     "lat": "lat",
     "bipolar": "bipolar",
     "unipolar": "unipolar",
+    "coherent": "coherent",
 }
 
 

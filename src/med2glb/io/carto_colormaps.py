@@ -55,6 +55,24 @@ def unipolar_colormap(values: np.ndarray, clamp_range: tuple[float, float] | Non
     return _apply_colormap(values, _UNIPOLAR_STOPS, clamp_range)
 
 
+def coherent_colormap(values: np.ndarray, clamp_range: tuple[float, float] | None = None) -> np.ndarray:
+    """Map Coherent LAT values (ms) to RGBA colors.
+
+    Coherent LAT is a CARTO 8 coherence-averaged activation time — a LAT-type
+    propagation map more robust in irregular rhythms (AF, flutter).  Uses the
+    same red → purple color scale as standard LAT.
+
+    Args:
+        values: Array of Coherent LAT values in ms. NaN values get neutral gray.
+        clamp_range: Optional (min, max) to clamp values before normalization.
+                     If None, uses data min/max.
+
+    Returns:
+        RGBA float32 array [N, 4] with values in [0, 1].
+    """
+    return _apply_colormap(values, _LAT_STOPS, clamp_range)
+
+
 # Color stop definitions: list of (normalized_position, R, G, B)
 # LAT: red (early) → yellow → green → cyan → blue → purple (late)
 _LAT_STOPS = [
@@ -88,6 +106,7 @@ COLORMAPS = {
     "lat": lat_colormap,
     "bipolar": bipolar_colormap,
     "unipolar": unipolar_colormap,
+    "coherent": coherent_colormap,
 }
 
 

@@ -208,7 +208,7 @@ class CartoConfig:
     name: str = ""  # descriptive name (e.g. "LA_sub2")
     output_dir: Path | None = None
     selected_mesh_indices: list[int] | None = None  # None = all
-    colorings: list[str] = field(default_factory=lambda: ["lat", "bipolar", "unipolar"])
+    colorings: list[str] = field(default_factory=lambda: ["lat", "bipolar", "unipolar", "coherent"])
     subdivide: int = 2
     animate: bool = True       # default: both static + animated
     static: bool = True        # default: both
