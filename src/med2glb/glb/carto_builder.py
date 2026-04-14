@@ -809,7 +809,8 @@ def build_carto_animated_glb(
 
     if eml_overlay is not None:
         from med2glb.glb.eml_builder import add_eml_overlay_node
-        eml_nodes = add_eml_overlay_node(gltf, binary_data, eml_overlay)
+        eml_nodes = add_eml_overlay_node(gltf, binary_data, eml_overlay,
+                                         centroid_offset=list(cent_offset))
         child_node_indices.extend(eml_nodes)
 
     # Root node: mm → m + 10x AR display scale

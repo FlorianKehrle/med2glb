@@ -38,6 +38,7 @@ def add_eml_overlay_node(
     gltf: pygltflib.GLTF2,
     binary_data: bytearray,
     eml_mesh_data: MeshData,
+    centroid_offset: list[float] | None = None,
 ) -> list[int]:
     """Add an EML/SCAR overlay mesh as a child node in the animated GLB.
 
@@ -52,10 +53,15 @@ def add_eml_overlay_node(
     scale 1.001 to prevent Z-fighting.
 
     Args:
-        gltf:          The glTF document being built.
-        binary_data:   Binary buffer being assembled.
-        eml_mesh_data: MeshData with ``vertex_colors`` containing per-vertex
-                       RGBA (with per-vertex alpha from ``eml_scar_colormap``).
+        gltf:             The glTF document being built.
+        binary_data:      Binary buffer being assembled.
+        eml_mesh_data:    MeshData with ``vertex_colors`` containing per-vertex
+                          RGBA (with per-vertex alpha from ``eml_scar_colormap``).
+        centroid_offset:  The same centroid subtracted from the animated mesh
+                          vertices in ``carto_builder.py``.  When provided the
+                          EML vertices are shifted by the same offset so the
+                          overlay lands exactly on the heart mesh.  When
+                          ``None``, ``_center_vertices`` is used as fallback.
 
     Returns:
         List containing the single EML overlay node index, or [] if skipped.
@@ -63,12 +69,19 @@ def add_eml_overlay_node(
     if eml_mesh_data.vertex_colors is None:
         return []
 
-    # Center at the same centroid as the main heart mesh.
-    # The EML overlay has the same vertices, so _center_vertices yields the
-    # same centroid — the node translation equals the main mesh node's.
-    vertices_centered, centroid = _center_vertices(
-        eml_mesh_data.vertices.astype(np.float32)
-    )
+    # Use the same centroid as the animated mesh so both nodes sit at origin.
+    # Passing centroid_offset avoids re-computing the centroid from potentially
+    # slightly different floating-point vertices (subdivision can shift the
+    # mean by a few ULPs) and guarantees perfect alignment.
+    if centroid_offset is not None:
+        vertices_centered = (
+            eml_mesh_data.vertices.astype(np.float32)
+            - np.array(centroid_offset, dtype=np.float32)
+        )
+    else:
+        vertices_centered, _ = _center_vertices(
+            eml_mesh_data.vertices.astype(np.float32)
+        )
 
     pos_acc = write_accessor(
         gltf, binary_data, vertices_centered,
@@ -126,7 +139,7 @@ def add_eml_overlay_node(
     gltf.nodes.append(pygltflib.Node(
         name="eml_overlay",
         mesh=mesh_idx,
-        translation=centroid,
+        translation=[0.0, 0.0, 0.0],
         scale=[_EML_SCALE, _EML_SCALE, _EML_SCALE],
     ))
 
