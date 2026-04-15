@@ -109,9 +109,11 @@ def eml_scar_colormap(
     Expects scalar values from ``combine_eml_to_scalar()``:
 
     * 0 (normal)  → fully transparent (α = 0) — heart animation visible through
-    * 1 (EML)     → orange (α = 0.85)
-    * 2 (ExtEML)  → yellow (α = 0.85)
-    * 3 (SCAR)    → red (α = 0.95)
+    * 1 (EML)     → white (α = 0.85)
+    * 2 (ExtEML)  → magenta/purple (α = 0.85)
+    * 3 (SCAR)    → gray (α = 0.90)
+
+    Colors match CARTO 8 display conventions observed in clinical LAT Vector maps.
 
     The per-vertex alpha means only flagged tissue is visible — a "paint splat"
     floating on the animated heart with no interference to the LAT animation.
@@ -130,15 +132,15 @@ def eml_scar_colormap(
 
     # EML only (1 ≤ value < 2)
     eml_mask = (values >= 0.5) & (values < 1.5)
-    colors[eml_mask] = [1.0, 0.50, 0.0, 0.85]   # orange
+    colors[eml_mask] = [1.0, 1.00, 1.0, 0.85]   # white
 
     # ExtEML (2 ≤ value < 3)
     exteml_mask = (values >= 1.5) & (values < 2.5)
-    colors[exteml_mask] = [1.0, 1.00, 0.0, 0.85]  # yellow
+    colors[exteml_mask] = [0.63, 0.16, 0.68, 0.85]  # magenta/purple
 
     # SCAR (value ≥ 3)
     scar_mask = values >= 2.5
-    colors[scar_mask] = [0.9, 0.10, 0.1, 0.95]    # red
+    colors[scar_mask] = [0.45, 0.45, 0.45, 0.90]    # gray
 
     return colors
 

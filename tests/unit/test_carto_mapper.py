@@ -289,30 +289,31 @@ class TestEmlScarColormap:
         colors = eml_scar_colormap(values)
         assert colors[0, 3] == 0.0
 
-    def test_eml_orange(self):
-        """State 1 (EML) → orange with α = 0.85."""
+    def test_eml_white(self):
+        """State 1 (EML) → white with α = 0.85."""
         values = np.array([1.0], dtype=np.float64)
         colors = eml_scar_colormap(values)
         assert colors[0, 3] > 0.8
         assert colors[0, 0] > 0.9   # high red
-        assert colors[0, 1] > 0.3   # some green (orange)
-        assert colors[0, 2] < 0.1   # no blue
+        assert colors[0, 1] > 0.9   # high green (white)
+        assert colors[0, 2] > 0.9   # high blue
 
-    def test_exteml_yellow(self):
-        """State 2 (ExtEML) → yellow with α = 0.85."""
+    def test_exteml_magenta(self):
+        """State 2 (ExtEML) → magenta/purple with α = 0.85."""
         values = np.array([2.0], dtype=np.float64)
         colors = eml_scar_colormap(values)
         assert colors[0, 3] > 0.8
-        assert colors[0, 0] > 0.9  # red ≈ 1
-        assert colors[0, 1] > 0.9  # green ≈ 1 → yellow
+        assert colors[0, 0] > 0.5   # red component
+        assert colors[0, 1] < 0.30  # low green (magenta)
+        assert colors[0, 2] > 0.5   # blue component
 
-    def test_scar_red(self):
-        """State 3 (SCAR) → red with α = 0.95."""
+    def test_scar_gray(self):
+        """State 3 (SCAR) → gray with α = 0.90."""
         values = np.array([3.0], dtype=np.float64)
         colors = eml_scar_colormap(values)
-        assert colors[0, 3] > 0.9
-        assert colors[0, 0] > 0.8   # high red
-        assert colors[0, 1] < 0.2   # low green
+        assert colors[0, 3] > 0.88
+        assert abs(colors[0, 0] - colors[0, 1]) < 0.05  # R ≈ G ≈ B (gray)
+        assert abs(colors[0, 1] - colors[0, 2]) < 0.05
 
     def test_shape_dtype(self):
         """Returns float32 RGBA array with correct shape."""

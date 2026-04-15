@@ -40,10 +40,11 @@ logger = logging.getLogger("med2glb")
 _EML_SCALE: float = 1.001
 
 # Per-type material definitions: (material name, RGBA baseColorFactor)
+# Colors match CARTO 8 display conventions (white=EML, magenta=ExtEML, gray=SCAR).
 _EML_TYPE_DEFS: dict[int, tuple[str, list[float]]] = {
-    1: ("eml_overlay_eml",    [1.0, 0.5, 0.0, 0.85]),  # EML    — orange
-    2: ("eml_overlay_exteml", [1.0, 1.0, 0.0, 0.85]),  # ExtEML — yellow
-    3: ("eml_overlay_scar",   [1.0, 0.0, 0.0, 0.95]),  # SCAR   — red
+    1: ("eml_overlay_eml",    [1.0,  1.0,  1.0,  0.85]),  # EML    — white
+    2: ("eml_overlay_exteml", [0.63, 0.16, 0.68, 0.85]),  # ExtEML — magenta/purple
+    3: ("eml_overlay_scar",   [0.45, 0.45, 0.45, 0.90]),  # SCAR   — gray
 }
 
 
@@ -52,17 +53,17 @@ def _vertex_types(vertex_colors: np.ndarray) -> np.ndarray:
 
     The type is recovered from the baked RGBA produced by ``eml_scar_colormap``:
     * alpha ≈ 0     → normal (0)
-    * alpha ≈ 0.95  → SCAR   (3)
-    * alpha ≈ 0.85, green ≈ 1.0 → ExtEML (2)
-    * alpha ≈ 0.85, green ≈ 0.5 → EML    (1)
+    * alpha ≈ 0.90  → SCAR   (3, gray)
+    * alpha ≈ 0.85, green < 0.30 → ExtEML (2, magenta/purple)
+    * alpha ≈ 0.85, green ≥ 0.30 → EML    (1, white)
     """
     alpha = vertex_colors[:, 3]
     green = vertex_colors[:, 1]
     vtype = np.zeros(len(vertex_colors), dtype=np.int32)
     active = alpha > 0.01
-    vtype[active & (alpha > 0.90)] = 3                     # SCAR
-    vtype[active & (alpha <= 0.90) & (green > 0.80)] = 2   # ExtEML
-    vtype[active & (alpha <= 0.90) & (green <= 0.80)] = 1  # EML
+    vtype[active & (alpha > 0.88)] = 3                      # SCAR (gray, α=0.90)
+    vtype[active & (alpha <= 0.88) & (green < 0.30)] = 2   # ExtEML (magenta, low green)
+    vtype[active & (alpha <= 0.88) & (green >= 0.30)] = 1  # EML (white, high green)
     return vtype
 
 
