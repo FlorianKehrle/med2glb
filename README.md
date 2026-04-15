@@ -120,7 +120,7 @@ For each mesh, the pipeline produces:
 
 Only colorings with valid data are produced. A legend cylinder and study info panel are embedded in each GLB for AR readability.
 
-**EML/SCAR overlay** (CARTO 8+): when `[VerticesAttributesSection]` is present in the `.mesh` file, an EML/ExtEML/SCAR tissue overlay is automatically embedded as a transparent child node inside the animated GLBs. Unflagged vertices are invisible (α = 0); EML = orange, ExtEML = yellow, SCAR = red. The overlay is offset 0.1% outward to prevent Z-fighting on HoloLens.
+**EML/SCAR overlay** (CARTO 8+): when `[VerticesAttributesSection]` is present in the `.mesh` file, an EML/ExtEML/SCAR tissue overlay is automatically embedded as a transparent child node inside the animated GLBs. Unflagged vertices are invisible (α = 0). Colors match the CARTO 8 HD Coloring display: **EML** (Early Meets Late — where earliest and latest activation are adjacent, marking reentrant circuit isthmuses) = white; **ExtEML** (extended EML border zone) = magenta/purple; **SCAR** (no electrical signal, fibrotic tissue) = gray. The overlay is offset 0.1% outward to prevent Z-fighting on HoloLens.
 
 #### Required Input Files
 
