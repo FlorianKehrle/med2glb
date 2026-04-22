@@ -32,8 +32,11 @@ _CARTO_VERSION_LABELS: dict[str, str] = {
 _MIN_VALID_POINTS = 50
 
 
-def _carto_version_label(version: str) -> str:
+def _carto_version_label(version: str, system_version: str | None = None) -> str:
     """Map file-format version to a human-readable CARTO system label."""
+    if system_version:
+        major_minor = ".".join(system_version.split(".")[:2])
+        return f"CARTO v{major_minor} (file format v{version})"
     label = _CARTO_VERSION_LABELS.get(version)
     if label:
         return f"{label} (file format v{version})"
@@ -175,7 +178,7 @@ def _print_carto_summary(
     n_total_verts = len(mesh.vertices)
 
     console.print(f"\n[green]Done: {mesh.structure_name}[/green]")
-    console.print(f"  System:     {_carto_version_label(study.version)}")
+    console.print(f"  System:     {_carto_version_label(study.version, study.system_version)}")
     if study.study_name:
         console.print(f"  Study:      {study.study_name}")
     console.print(f"  Colorings:  {', '.join(colorings)}")
@@ -258,7 +261,7 @@ def _write_carto_log(
     append_carto_entry(
         output_dir,
         structure_name=mesh.structure_name,
-        carto_version=_carto_version_label(study.version),
+        carto_version=_carto_version_label(study.version, study.system_version),
         study_name=study.study_name or "",
         coloring=color_range,
         color_range=color_range,
@@ -312,7 +315,7 @@ def _load_carto_study(input_path: Path) -> "CartoStudy":
         ablation_suffix = f", {n_ablations} ablation point(s)" if n_ablations else ""
         progress.update(
             task,
-            description=f"Loaded {_carto_version_label(study.version)}: "
+            description=f"Loaded {_carto_version_label(study.version, study.system_version)}: "
             f"{len(study.meshes)} mesh(es), "
             f"{sum(len(p) for p in study.points.values())} points"
             f"{ablation_suffix}",
@@ -704,7 +707,7 @@ def _convert_carto_meshes(
             from datetime import date
             legend_metadata: dict = {
                 "study_name": study.study_name or "",
-                "carto_version": _carto_version_label(study.version),
+                "carto_version": _carto_version_label(study.version, study.system_version),
                 "structure": mesh.structure_name,
                 "coloring": coloring,
                 "clamp_range": list(clamp_range),

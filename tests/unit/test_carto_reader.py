@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from med2glb.io.carto_reader import (
+    _read_system_version,
     detect_carto_directory,
     find_carto_subdirectories,
     load_carto_study,
@@ -201,8 +202,54 @@ class TestLoadCartoStudy:
         assert len(study.meshes) >= 2  # LA and RA at minimum
         assert study.version == "6.0"
 
+    def test_synthetic_study_no_version_txt(self, carto_mesh_dir):
+        """Without Version.txt, system_version should be None."""
+        study = load_carto_study(carto_mesh_dir)
+        assert study.system_version is None
 
-class TestFindCartoSubdirectories:
+    def test_synthetic_study_with_version_txt(self, carto_mesh_dir):
+        """With Version.txt, system_version should be parsed."""
+        version_txt = carto_mesh_dir / "Version.txt"
+        version_txt.write_text(
+            "Built on:03/05/2024 11:06:04\n"
+            "Project:Carto3\n"
+            "Version:8.1.0.325 Postbuild ALL - x64 Release\n",
+            encoding="utf-8",
+        )
+        study = load_carto_study(carto_mesh_dir)
+        assert study.system_version == "8.1.0.325"
+
+
+class TestReadSystemVersion:
+    def test_missing_file(self, tmp_path):
+        assert _read_system_version(tmp_path) is None
+
+    def test_empty_file(self, tmp_path):
+        (tmp_path / "Version.txt").write_text("", encoding="utf-8")
+        assert _read_system_version(tmp_path) is None
+
+    def test_typical_carto8(self, tmp_path):
+        (tmp_path / "Version.txt").write_text(
+            "Built on:03/05/2024 11:06:04\n"
+            "Project:Carto3\n"
+            "Version:8.1.0.325 Postbuild ALL - x64 Release\n",
+            encoding="utf-8",
+        )
+        assert _read_system_version(tmp_path) == "8.1.0.325"
+
+    def test_version_only_line(self, tmp_path):
+        (tmp_path / "Version.txt").write_text("Version:7.2.10.423\n", encoding="utf-8")
+        assert _read_system_version(tmp_path) == "7.2.10.423"
+
+    def test_no_version_line(self, tmp_path):
+        (tmp_path / "Version.txt").write_text("Project:Carto3\nBuilt on:yesterday\n", encoding="utf-8")
+        assert _read_system_version(tmp_path) is None
+
+    def test_utf8_bom(self, tmp_path):
+        (tmp_path / "Version.txt").write_bytes(
+            b"\xef\xbb\xbfVersion:8.1.0.325 Postbuild\n"
+        )
+        assert _read_system_version(tmp_path) == "8.1.0.325"
     @staticmethod
     def _write_carto_files(dest: Path) -> None:
         """Write minimal CARTO .mesh + _car.txt into *dest*."""
@@ -471,3 +518,25 @@ MeshColor = 0 1 0 1
         mesh = parse_mesh_file(mesh_file)
         assert "eml" not in mesh.vertex_color_values
         assert "scar" not in mesh.vertex_color_values
+
+
+class TestCartoVersionLabel:
+    """Tests for _carto_version_label in _pipeline_carto."""
+
+    def test_known_format_no_system_version(self):
+        from med2glb._pipeline_carto import _carto_version_label
+        result = _carto_version_label("6.0")
+        assert "CARTO 3 v7.2+" in result
+        assert "v6.0" in result
+
+    def test_unknown_format_no_system_version(self):
+        from med2glb._pipeline_carto import _carto_version_label
+        result = _carto_version_label("7.0")
+        assert "v7.0" in result
+
+    def test_system_version_overrides_label(self):
+        from med2glb._pipeline_carto import _carto_version_label
+        result = _carto_version_label("6.0", system_version="8.1.0.325")
+        assert "v8.1" in result
+        assert "v6.0" in result
+        assert "CARTO 3 v7.2+" not in result

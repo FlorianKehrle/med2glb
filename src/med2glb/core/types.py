@@ -194,8 +194,9 @@ class CartoStudy:
 
     meshes: list[CartoMesh]
     points: dict[str, list[CartoPoint]]  # keyed by mesh/map name
-    version: str  # e.g. "4.0", "5.0", "6.0"
+    version: str  # file format version, e.g. "4.0", "5.0", "6.0"
     study_name: str = ""
+    system_version: str | None = None  # CARTO system version from Version.txt, e.g. "8.1.0.325"
     ablation_points: dict[str, list[AblationPoint]] = field(default_factory=dict)
     """Ablation points keyed by map/mesh name. Empty dict if no RF data."""
 

@@ -63,6 +63,36 @@ def _find_export_dir(path: Path) -> Path:
     return path
 
 
+def _read_system_version(export_dir: Path) -> str | None:
+    """Read the CARTO system version from Version.txt if present.
+
+    The file typically contains lines like::
+
+        Built on:03/05/2024 11:06:04
+        Project:Carto3
+        Version:8.1.0.325 Postbuild ALL - x64 Release
+
+    Extracts the leading version number from the ``Version:`` line
+    (e.g. ``"8.1.0.325"``).  Returns *None* if the file is missing
+    or does not contain a parseable version.
+    """
+    version_file = export_dir / "Version.txt"
+    if not version_file.is_file():
+        return None
+    try:
+        text = version_file.read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("Version:"):
+            # "Version:8.1.0.325 Postbuild ALL - x64 Release" → "8.1.0.325"
+            value = line.split(":", 1)[1].strip()
+            token = value.split()[0] if value else ""
+            if token and token[0].isdigit():
+                return token
+    return None
+
+
 def load_carto_study(
     path: Path,
     progress: Callable[[str, int, int], None] | None = None,
@@ -104,12 +134,16 @@ def load_carto_study(
     if progress:
         progress(f"Loaded {n_files} mesh(es)", n_files, n_files)
 
+    # Read CARTO system version from Version.txt if present
+    system_version = _read_system_version(export_dir)
+
     study_name = export_dir.name
     return CartoStudy(
         meshes=meshes,
         points=points,
         version=version,
         study_name=study_name,
+        system_version=system_version,
     )
 
 

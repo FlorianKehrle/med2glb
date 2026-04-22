@@ -439,7 +439,11 @@ def run_carto_wizard(
         "5.0": "CARTO 3 v7.1",
         "6.0": "CARTO 3 v7.2+",
     }
-    vlabel = version_labels.get(study.version, f"CARTO (v{study.version})")
+    if study.system_version:
+        major_minor = ".".join(study.system_version.split(".")[:2])
+        vlabel = f"CARTO v{major_minor} (file format v{study.version})"
+    else:
+        vlabel = version_labels.get(study.version, f"CARTO (v{study.version})")
     console.print(f"  System:  {vlabel}")
     if study.study_name:
         console.print(f"  Study:   {study.study_name}")
@@ -686,7 +690,11 @@ def run_batch_carto_wizard(
     for i, (path, study) in enumerate(studies, 1):
         total_pts = sum(len(p) for p in study.points.values())
         mesh_names = ", ".join(m.structure_name for m in study.meshes)
-        vlabel = version_labels.get(study.version, f"v{study.version}")
+        if study.system_version:
+            major_minor = ".".join(study.system_version.split(".")[:2])
+            vlabel = f"v{major_minor}"
+        else:
+            vlabel = version_labels.get(study.version, f"v{study.version}")
 
         # Summarise LAT availability per mesh
         lat_parts = []
