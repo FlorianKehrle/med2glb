@@ -824,8 +824,8 @@ def run_dicom_wizard(
     preset_series: str | None = None,
     preset_quality: str | None = None,
     preset_name: str | None = None,
-) -> DicomConfig:
-    """Interactive DICOM wizard. Skips prompts when presets are provided."""
+) -> list[DicomConfig]:
+    """Interactive DICOM wizard. Returns one config per selected series."""
     interactive = is_interactive()
 
     # --- Print detected data ---
@@ -868,135 +868,201 @@ def run_dicom_wizard(
             if preset_series in s.series_uid:
                 selected_info = s
                 break
+        selected_series = [(selected_info, series_uid)]
     elif interactive and len(series_list) > 1:
         n = len(series_list)
         while True:
             choice = Prompt.ask(
-                f"Select series (1-{n})",
-                default="1",
+                f"Select series (1-{n}, or 'all')",
+                default="all",
                 console=console,
             )
+            if choice.strip().lower() == "all":
+                selected_series = [(s, s.series_uid) for s in series_list]
+                break
             try:
                 idx = int(choice.strip()) - 1
                 if 0 <= idx < n:
+                    selected_series = [(series_list[idx], series_list[idx].series_uid)]
                     break
-                console.print(f"[red]Please enter a number between 1 and {n}.[/red]")
+                console.print(f"[red]Please enter a number between 1 and {n}, or 'all'.[/red]")
             except ValueError:
-                console.print(f"[red]Please enter a number between 1 and {n}.[/red]")
-        selected_info = series_list[idx]
-        series_uid = selected_info.series_uid
+                console.print(f"[red]Please enter a number between 1 and {n}, or 'all'.[/red]")
     else:
         selected_info = series_list[0]
         series_uid = selected_info.series_uid
+        selected_series = [(selected_info, series_uid)]
         if len(series_list) > 1:
             logger.info(f"Auto-selected series: {selected_info.description or selected_info.series_uid}")
 
-    # --- Method ---
-    # Filter to available methods; recommend based on data
-    recommended = selected_info.recommended_method
-    if preset_method is not None:
-        method = preset_method
-    elif interactive:
-        # Check which AI methods are available
-        ai_available = _check_ai_available()
-        choices = ["classical", "marching-cubes", "chamber-detect"]
-        if ai_available:
-            choices.append("totalseg")
-        choices.append("compare")
-        rec_label = f" (recommended: {recommended})" if recommended in choices else ""
-        method = Prompt.ask(
-            f"Method{rec_label}",
-            choices=choices,
-            default=recommended if recommended in choices else "classical",
-            console=console,
-        )
-    else:
-        method = recommended
-        logger.info(f"Using recommended method: {method}")
+    # Build a config for each selected series
+    configs: list["DicomConfig"] = []
+    process_all = len(selected_series) > 1
+    for selected_info, series_uid in selected_series:
 
-    # --- Quality ---
-    quality_presets = {
-        "draft": (5, 40000),
-        "standard": (15, 80000),
-        "high": (25, 150000),
-    }
-    if preset_quality is not None:
-        smoothing, target_faces = quality_presets.get(preset_quality, (15, 80000))
-    elif interactive:
-        quality = Prompt.ask(
-            "Quality",
-            choices=["draft", "standard", "high"],
-            default="standard",
-            console=console,
-        )
-        smoothing, target_faces = quality_presets[quality]
-    else:
-        smoothing, target_faces = 15, 80000
+        # --- Output mode ---
+        # For 2D data, offer gallery mode (textured planes) vs 3D mesh conversion
+        is_2d_data = selected_info.recommended_output == "textured plane"
+        use_gallery = False
+        if is_2d_data and process_all:
+            # Batch "all": auto-select gallery for 2D data
+            use_gallery = True
+        elif interactive and is_2d_data:
+            output_mode = Prompt.ask(
+                "Output mode (2D data detected)",
+                choices=["gallery", "3d-mesh"],
+                default="gallery",
+                console=console,
+            )
+            use_gallery = output_mode == "gallery"
+        elif not interactive and is_2d_data and preset_method is None:
+            use_gallery = True
 
-    # --- Animate ---
-    has_temporal = selected_info.data_type in ("2D cine", "3D+T volume")
-    if preset_animate is not None:
-        animate = preset_animate
-    elif interactive and has_temporal:
-        anim_choice = Prompt.ask(
-            "Animate (temporal data detected)",
-            choices=["yes", "no"],
-            default="yes",
-            console=console,
-        )
-        animate = anim_choice == "yes"
-    else:
-        animate = False
+        if use_gallery:
+            # Gallery mode: skip method/quality, only ask about animation
+            has_temporal = selected_info.data_type in ("2D cine", "3D+T volume")
+            if preset_animate is not None:
+                animate = preset_animate
+            elif interactive and has_temporal and not process_all:
+                anim_choice = Prompt.ask(
+                    "Animate (temporal data detected)",
+                    choices=["yes", "no"],
+                    default="yes",
+                    console=console,
+                )
+                animate = anim_choice == "yes"
+            else:
+                animate = has_temporal
 
-    # --- Name ---
-    if preset_name is not None:
-        name = preset_name
-    else:
-        # Auto-generate: <modality>_<method>_s<smooth>_<faces>k[_<detail>][_anim]
-        # No input dir name — output already lives inside the source folder.
-        mod = selected_info.modality.lower() if selected_info.modality else "dcm"
-        faces_k = f"{target_faces // 1000}k"
-        if method == "compare":
-            name = f"{mod}_compare_s{smoothing}_{faces_k}"
+            # Name for gallery output
+            if preset_name is not None and not process_all:
+                name = preset_name
+            else:
+                mod = selected_info.modality.lower() if selected_info.modality else "dcm"
+                name = f"{mod}_gallery"
+                desc = (selected_info.description or "").strip()
+                if desc and desc.lower() not in ("(no desc)",):
+                    safe_desc = re.sub(r"[^a-zA-Z0-9]+", "_", desc).strip("_").lower()[:20]
+                    if safe_desc:
+                        name += f"_{safe_desc}"
+                if animate:
+                    name += "_anim"
+
+            console.print(f"\n[dim]Configuration:[/dim]")
+            console.print(f"  Name:     {name}")
+            console.print(f"  Series:   {selected_info.description or series_uid}")
+            console.print(f"  Mode:     gallery (2D textured planes)")
+            console.print(f"  Animate:  {'yes' if animate else 'no'}")
+
+            configs.append(DicomConfig(
+                input_path=input_path,
+                name=name,
+                animate=animate,
+                series_uid=series_uid,
+                gallery=True,
+            ))
+            continue
+
+        # --- Method ---
+        recommended = selected_info.recommended_method
+        if preset_method is not None:
+            method = preset_method
+        elif interactive and not process_all:
+            ai_available = _check_ai_available()
+            choices = ["classical", "marching-cubes", "chamber-detect"]
+            if ai_available:
+                choices.append("totalseg")
+            choices.append("compare")
+            rec_label = f" (recommended: {recommended})" if recommended in choices else ""
+            method = Prompt.ask(
+                f"Method{rec_label}",
+                choices=choices,
+                default=recommended if recommended in choices else "classical",
+                console=console,
+            )
         else:
-            method_short = method.replace("marching-cubes", "mc")
-            name = f"{mod}_{method_short}_s{smoothing}_{faces_k}"
+            method = recommended
+            logger.info(f"Using recommended method: {method}")
 
-        # Append a series-specific disambiguator so multiple series from the
-        # same folder never overwrite each other.
-        # Priority 1: sanitized series description (if meaningful).
-        # Priority 2: frame count (for cine / 4D data).
-        desc = (selected_info.description or "").strip()
-        n_frames = getattr(selected_info, "number_of_frames", 0) or 0
-        is_temporal = selected_info.data_type in ("2D cine", "3D+T volume")
+        # --- Quality ---
+        quality_presets = {
+            "draft": (5, 40000),
+            "standard": (15, 80000),
+            "high": (25, 150000),
+        }
+        if preset_quality is not None:
+            smoothing, target_faces = quality_presets.get(preset_quality, (15, 80000))
+        elif interactive and not process_all:
+            quality = Prompt.ask(
+                "Quality",
+                choices=["draft", "standard", "high"],
+                default="standard",
+                console=console,
+            )
+            smoothing, target_faces = quality_presets[quality]
+        else:
+            smoothing, target_faces = 15, 80000
 
-        if desc and desc.lower() not in ("(no desc)",):
-            safe_desc = re.sub(r"[^a-zA-Z0-9]+", "_", desc).strip("_").lower()[:20]
-            if safe_desc:
-                name += f"_{safe_desc}"
-        elif n_frames > 1 and is_temporal:
-            name += f"_{n_frames}f"
+        # --- Animate ---
+        has_temporal = selected_info.data_type in ("2D cine", "3D+T volume")
+        if preset_animate is not None:
+            animate = preset_animate
+        elif interactive and has_temporal and not process_all:
+            anim_choice = Prompt.ask(
+                "Animate (temporal data detected)",
+                choices=["yes", "no"],
+                default="yes",
+                console=console,
+            )
+            animate = anim_choice == "yes"
+        else:
+            animate = has_temporal if process_all else False
 
-        if animate:
-            name += "_anim"
+        # --- Name ---
+        if preset_name is not None and not process_all:
+            name = preset_name
+        else:
+            mod = selected_info.modality.lower() if selected_info.modality else "dcm"
+            faces_k = f"{target_faces // 1000}k"
+            if method == "compare":
+                name = f"{mod}_compare_s{smoothing}_{faces_k}"
+            else:
+                method_short = method.replace("marching-cubes", "mc")
+                name = f"{mod}_{method_short}_s{smoothing}_{faces_k}"
 
-    # --- Summary ---
-    console.print(f"\n[dim]Configuration:[/dim]")
-    console.print(f"  Name:     {name}")
-    console.print(f"  Series:   {selected_info.description or series_uid}")
-    console.print(f"  Method:   {method}")
-    console.print(f"  Quality:  smoothing={smoothing}, faces={target_faces:,}")
-    console.print(f"  Animate:  {'yes' if animate else 'no'}")
+            desc = (selected_info.description or "").strip()
+            n_frames = getattr(selected_info, "number_of_frames", 0) or 0
+            is_temporal = selected_info.data_type in ("2D cine", "3D+T volume")
 
-    return DicomConfig(
-        input_path=input_path,
-        name=name,
-        method=method,
-        animate=animate,
-        smoothing=smoothing,
-        target_faces=target_faces,
-        series_uid=series_uid,
-    )
+            if desc and desc.lower() not in ("(no desc)",):
+                safe_desc = re.sub(r"[^a-zA-Z0-9]+", "_", desc).strip("_").lower()[:20]
+                if safe_desc:
+                    name += f"_{safe_desc}"
+            elif n_frames > 1 and is_temporal:
+                name += f"_{n_frames}f"
+
+            if animate:
+                name += "_anim"
+
+        # --- Summary ---
+        console.print(f"\n[dim]Configuration:[/dim]")
+        console.print(f"  Name:     {name}")
+        console.print(f"  Series:   {selected_info.description or series_uid}")
+        console.print(f"  Method:   {method}")
+        console.print(f"  Quality:  smoothing={smoothing}, faces={target_faces:,}")
+        console.print(f"  Animate:  {'yes' if animate else 'no'}")
+
+        configs.append(DicomConfig(
+            input_path=input_path,
+            name=name,
+            method=method,
+            animate=animate,
+            smoothing=smoothing,
+            target_faces=target_faces,
+            series_uid=series_uid,
+        ))
+
+    return configs
 
 
 def _check_ai_available() -> bool:
@@ -1070,6 +1136,20 @@ def build_dicom_equiv_command(
 ) -> str:
     """Build the equivalent CLI command for a DICOM wizard conversion."""
     parts = ["med2glb", _quote_path(config.input_path)]
+
+    # Gallery mode doesn't need method/smoothing/faces
+    if config.gallery:
+        parts.append("--gallery")
+        if config.series_uid:
+            parts.extend(["--series", config.series_uid])
+        if config.animate:
+            parts.append("--animate")
+        elif not config.animate:
+            parts.append("--no-animate")
+        out = output_path or config.output
+        if out is not None:
+            parts.extend(["-o", _quote_path(out)])
+        return " ".join(parts)
 
     # Method
     parts.extend(["--method", config.method])

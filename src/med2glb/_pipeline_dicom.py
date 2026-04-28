@@ -229,6 +229,22 @@ def run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
     from med2glb.cli_wizard import build_dicom_equiv_command
     equiv_cmd = build_dicom_equiv_command(config, output)
 
+    if config.gallery:
+        from med2glb._pipeline_gallery import run_gallery_mode
+        # Gallery outputs a directory, not a single .glb
+        gallery_dir = output.parent / config.name if output.suffix else output
+        run_gallery_mode(
+            input_path=config.input_path,
+            output=gallery_dir,
+            series=config.series_uid,
+            columns=6,
+            no_animate=not config.animate,
+            verbose=config.verbose,
+        )
+        console.print(f"\n[dim]💡 Equivalent command:[/dim]")
+        console.print(f"[dim]   {equiv_cmd}[/dim]")
+        return
+
     if config.method == "compare":
         run_compare_mode(config, output.parent, output.stem)
         console.print(f"\n[dim]💡 Equivalent command:[/dim]")

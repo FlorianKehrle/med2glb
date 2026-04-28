@@ -242,13 +242,16 @@ class TestRunCartoWizard:
 class TestRunDicomWizard:
     def test_fully_preset(self, series_list):
         console = Console(file=None, force_terminal=False)
-        config = run_dicom_wizard(
+        configs = run_dicom_wizard(
             series_list, Path("/fake/input"), console,
             preset_method="marching-cubes",
             preset_animate=True,
             preset_series="1.2.3.4",
             preset_quality="high",
         )
+        assert isinstance(configs, list)
+        assert len(configs) == 1
+        config = configs[0]
         assert isinstance(config, DicomConfig)
         assert config.method == "marching-cubes"
         assert config.animate is True
@@ -258,10 +261,11 @@ class TestRunDicomWizard:
     def test_non_interactive_defaults(self, series_list):
         console = Console(file=None, force_terminal=False)
         with patch("med2glb.cli_wizard.is_interactive", return_value=False):
-            config = run_dicom_wizard(
+            configs = run_dicom_wizard(
                 series_list, Path("/fake/input"), console,
             )
-        # Should auto-select first series and use its recommended method
+        # First series is 3D volume → 3D mesh pipeline
+        config = configs[0]
         assert config.method == "classical"
         assert config.animate is False
         assert config.smoothing == 15
@@ -274,11 +278,12 @@ class TestRunDicomWizard:
             ("standard", 15, 80000),
             ("high", 25, 150000),
         ]:
-            config = run_dicom_wizard(
+            configs = run_dicom_wizard(
                 series_list, Path("/fake/input"), console,
                 preset_quality=quality,
                 preset_method="classical",
             )
+            config = configs[0]
             assert config.smoothing == expected_smooth
             assert config.target_faces == expected_faces
 

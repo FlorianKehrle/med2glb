@@ -402,14 +402,15 @@ def main(
                                     from med2glb.io.dicom_reader import analyze_series
                                     series_list = analyze_series(e.path)
                                     if series_list:
-                                        dicom_cfg = run_dicom_wizard(series_list, e.path, console)
-                                        console.print(
-                                            f"\n[bold]=== DICOM: "
-                                            f"{dicom_cfg.name} ===[/bold]"
-                                        )
-                                        glb_dir = e.path / "glb"
-                                        out_path = glb_dir / f"{dicom_cfg.name}.glb"
-                                        run_dicom_from_config(dicom_cfg, out_path)
+                                        dicom_cfgs = run_dicom_wizard(series_list, e.path, console)
+                                        for dicom_cfg in dicom_cfgs:
+                                            console.print(
+                                                f"\n[bold]=== DICOM: "
+                                                f"{dicom_cfg.name} ===[/bold]"
+                                            )
+                                            glb_dir = e.path / "glb"
+                                            out_path = glb_dir / f"{dicom_cfg.name}.glb"
+                                            run_dicom_from_config(dicom_cfg, out_path)
                                 except Exception as exc:
                                     console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
 
@@ -450,10 +451,11 @@ def main(
                                         from med2glb.io.dicom_reader import analyze_series
                                         series_list = analyze_series(e.path)
                                         if series_list:
-                                            dicom_cfg = run_dicom_wizard(series_list, e.path, console)
-                                            glb_dir = e.path / "glb"
-                                            out_path = glb_dir / f"{dicom_cfg.name}.glb"
-                                            run_dicom_from_config(dicom_cfg, out_path)
+                                            dicom_cfgs = run_dicom_wizard(series_list, e.path, console)
+                                            for dicom_cfg in dicom_cfgs:
+                                                glb_dir = e.path / "glb"
+                                                out_path = glb_dir / f"{dicom_cfg.name}.glb"
+                                                run_dicom_from_config(dicom_cfg, out_path)
                                     except Exception as exc:
                                         console.print(f"[yellow]  Skipping DICOM {e.label}: {exc}[/yellow]")
                             return
@@ -473,7 +475,7 @@ def main(
                 run_carto_from_config(config)
                 return
             elif detected.kind == "dicom" and detected.series_list is not None:
-                dicom_config = run_dicom_wizard(
+                dicom_configs = run_dicom_wizard(
                     detected.series_list, input_path, console,
                 )
                 if output is not None:
@@ -481,8 +483,11 @@ def main(
                     glb_dir = base / "glb"
                 else:
                     glb_dir = (input_path if input_path.is_dir() else input_path.parent) / "glb"
-                out_path = glb_dir / f"{dicom_config.name}.glb"
-                run_dicom_from_config(dicom_config, out_path)
+                for i, dicom_config in enumerate(dicom_configs, 1):
+                    if len(dicom_configs) > 1:
+                        console.print(f"\n[bold]=== Series {i}/{len(dicom_configs)}: {dicom_config.name} ===[/bold]")
+                    out_path = glb_dir / f"{dicom_config.name}.glb"
+                    run_dicom_from_config(dicom_config, out_path)
                 return
         except ValueError:
             pass  # Fall through to normal pipeline
