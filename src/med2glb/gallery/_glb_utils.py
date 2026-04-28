@@ -10,7 +10,7 @@ import pygltflib
 
 from med2glb.core.types import GallerySlice
 from med2glb.glb.builder import _pad_to_4, write_accessor
-from med2glb.glb.texture import pixel_data_to_png
+from med2glb.glb.texture import pixel_data_to_jpeg
 
 
 @dataclass
@@ -111,25 +111,25 @@ def add_quad_geometry(
     return QuadGeometry(pos_acc=pos_acc, norm_acc=norm_acc, tc_acc=tc_acc, idx_acc=idx_acc)
 
 
-def make_png_material(
+def make_jpeg_material(
     gltf: pygltflib.GLTF2,
     binary_data: bytearray,
     pixel_data: np.ndarray,
     name: str,
 ) -> int:
-    """Encode pixel data as PNG texture and add material. Returns material index."""
-    png_bytes = pixel_data_to_png(pixel_data)
+    """Encode pixel data as JPEG texture and add material. Returns material index."""
+    img_bytes = pixel_data_to_jpeg(pixel_data)
     img_offset = len(binary_data)
-    binary_data.extend(png_bytes)
+    binary_data.extend(img_bytes)
     _pad_to_4(binary_data)
 
     bv_idx = len(gltf.bufferViews)
     gltf.bufferViews.append(
-        pygltflib.BufferView(buffer=0, byteOffset=img_offset, byteLength=len(png_bytes))
+        pygltflib.BufferView(buffer=0, byteOffset=img_offset, byteLength=len(img_bytes))
     )
 
     img_idx = len(gltf.images)
-    gltf.images.append(pygltflib.Image(bufferView=bv_idx, mimeType="image/png"))
+    gltf.images.append(pygltflib.Image(bufferView=bv_idx, mimeType="image/jpeg"))
 
     tex_idx = len(gltf.textures)
     gltf.textures.append(pygltflib.Texture(sampler=0, source=img_idx))

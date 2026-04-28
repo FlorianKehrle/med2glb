@@ -17,7 +17,7 @@ from med2glb.gallery._glb_utils import (
     create_base_gltf,
     finalize_gltf,
     group_by_position,
-    make_png_material,
+    make_jpeg_material,
     quad_vertices_for_slice,
 )
 
@@ -81,7 +81,7 @@ def _build_static_spatial(
 
     for idx, sl in enumerate(display_slices):
         matrix = _compute_spatial_matrix(sl)
-        mat_idx = make_png_material(gltf, binary_data, sl.pixel_data, f"spatial_{idx}")
+        mat_idx = make_jpeg_material(gltf, binary_data, sl.pixel_data, f"spatial_{idx}")
         add_textured_quad_node(
             gltf, binary_data, geom, mat_idx, f"spatial_{idx}",
             matrix=matrix,
@@ -107,7 +107,7 @@ def _build_animated_spatial(
 
         cell_nodes: list[int] = []
         for fi, sl in enumerate(group):
-            mat_idx = make_png_material(
+            mat_idx = make_jpeg_material(
                 gltf, binary_data, sl.pixel_data, f"spatial_{idx}_f{fi}",
             )
             scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]

@@ -15,7 +15,7 @@ from med2glb.gallery._glb_utils import (
     create_base_gltf,
     finalize_gltf,
     group_by_position,
-    make_png_material,
+    make_jpeg_material,
     quad_vertices_for_slice,
 )
 
@@ -70,7 +70,7 @@ def _build_static_individual(sl: GallerySlice, output_path: Path) -> None:
     """Build a single-quad static GLB for one slice."""
     gltf, binary_data = create_base_gltf()
 
-    mat_idx = make_png_material(gltf, binary_data, sl.pixel_data, "slice")
+    mat_idx = make_jpeg_material(gltf, binary_data, sl.pixel_data, "slice")
     vertices = quad_vertices_for_slice(sl)
     geom = add_quad_geometry(gltf, binary_data, vertices)
     add_textured_quad_node(gltf, binary_data, geom, mat_idx, "slice")
@@ -94,7 +94,7 @@ def _build_animated_individual(
 
     node_indices: list[int] = []
     for i, sl in enumerate(frames):
-        mat_idx = make_png_material(gltf, binary_data, sl.pixel_data, f"frame_{i}")
+        mat_idx = make_jpeg_material(gltf, binary_data, sl.pixel_data, f"frame_{i}")
         scale = [1.0, 1.0, 1.0] if i == 0 else [0.0, 0.0, 0.0]
         node_idx = add_textured_quad_node(
             gltf, binary_data, geom, mat_idx, f"frame_{i}", scale=scale,

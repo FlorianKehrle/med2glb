@@ -82,12 +82,12 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
         dtype=np.float32,
     )
 
-    # --- Encode image as PNG ---
-    png_bytes = _pixel_data_to_png(pixel_data)
+    # --- Encode image as JPEG ---
+    img_bytes = _pixel_data_to_jpeg(pixel_data)
 
     # Write image data first
     img_offset = len(binary_data)
-    binary_data.extend(png_bytes)
+    binary_data.extend(img_bytes)
     _pad_to_4(binary_data)
 
     img_bv_idx = len(gltf.bufferViews)
@@ -95,12 +95,12 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
         pygltflib.BufferView(
             buffer=0,
             byteOffset=img_offset,
-            byteLength=len(png_bytes),
+            byteLength=len(img_bytes),
         )
     )
 
     gltf.images.append(
-        pygltflib.Image(bufferView=img_bv_idx, mimeType="image/png")
+        pygltflib.Image(bufferView=img_bv_idx, mimeType="image/jpeg")
     )
 
     gltf.samplers.append(
@@ -336,23 +336,23 @@ def build_animated_textured_plane_glb(
         wrapT=pygltflib.CLAMP_TO_EDGE,
     ))
 
-    # --- Encode each frame as a PNG image -> texture -> material ---
+    # --- Encode each frame as a JPEG image -> texture -> material ---
     for i in range(n_frames):
         fv = sequence.frames[i]
         if fv.rgb_data is not None:
-            png_bytes = _pixel_data_to_png(fv.rgb_data[0])
+            img_bytes = _pixel_data_to_jpeg(fv.rgb_data[0])
         else:
-            png_bytes = _pixel_data_to_png(fv.voxels[0])
+            img_bytes = _pixel_data_to_jpeg(fv.voxels[0])
 
         img_offset = len(binary_data)
-        binary_data.extend(png_bytes)
+        binary_data.extend(img_bytes)
         _pad_to_4(binary_data)
 
         img_bv = len(gltf.bufferViews)
         gltf.bufferViews.append(pygltflib.BufferView(
-            buffer=0, byteOffset=img_offset, byteLength=len(png_bytes),
+            buffer=0, byteOffset=img_offset, byteLength=len(img_bytes),
         ))
-        gltf.images.append(pygltflib.Image(bufferView=img_bv, mimeType="image/png"))
+        gltf.images.append(pygltflib.Image(bufferView=img_bv, mimeType="image/jpeg"))
         gltf.textures.append(pygltflib.Texture(sampler=0, source=i))
         gltf.materials.append(
             pygltflib.Material(
@@ -492,12 +492,15 @@ def build_animated_textured_plane_glb(
     gltf.save(str(output_path))
 
 
-def _pixel_data_to_png(pixel_data: np.ndarray) -> bytes:
-    """Convert pixel array to PNG bytes.
+def _pixel_data_to_jpeg(pixel_data: np.ndarray, quality: int = 90) -> bytes:
+    """Convert pixel array to JPEG bytes.
 
     Accepts:
       - (Y, X) grayscale: normalizes to 0-255 and encodes as L
       - (Y, X, 3) RGB uint8: encodes directly as RGB
+
+    JPEG at quality 90 gives ~5-10x smaller files than PNG with
+    negligible visual difference for AR visualization.
     """
     from PIL import Image
 
@@ -516,9 +519,13 @@ def _pixel_data_to_png(pixel_data: np.ndarray) -> bytes:
         img = Image.fromarray(data, mode="L")
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
 
 
 # Public alias for use by gallery modules
-pixel_data_to_png = _pixel_data_to_png
+pixel_data_to_jpeg = _pixel_data_to_jpeg
+
+# Backwards-compatible aliases
+_pixel_data_to_png = _pixel_data_to_jpeg
+pixel_data_to_png = _pixel_data_to_jpeg

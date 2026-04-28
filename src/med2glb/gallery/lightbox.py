@@ -18,7 +18,7 @@ from med2glb.gallery._glb_utils import (
     create_base_gltf,
     finalize_gltf,
     group_by_position,
-    make_png_material,
+    make_jpeg_material,
 )
 
 
@@ -95,7 +95,7 @@ def _build_static_lightbox(
         row = idx // columns
         tx = col * step_x
         ty = -(row * step_y)
-        mat_idx = make_png_material(gltf, binary_data, sl.pixel_data, f"cell_{idx}")
+        mat_idx = make_jpeg_material(gltf, binary_data, sl.pixel_data, f"cell_{idx}")
         add_textured_quad_node(
             gltf, binary_data, geom, mat_idx, f"cell_{idx}",
             translation=[tx, ty, 0.0],
@@ -129,7 +129,7 @@ def _build_animated_lightbox(
 
         cell_nodes: list[int] = []
         for fi, sl in enumerate(group):
-            mat_idx = make_png_material(
+            mat_idx = make_jpeg_material(
                 gltf, binary_data, sl.pixel_data, f"cell_{idx}_f{fi}",
             )
             scale = [1.0, 1.0, 1.0] if fi == 0 else [0.0, 0.0, 0.0]
