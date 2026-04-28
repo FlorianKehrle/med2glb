@@ -11,6 +11,9 @@ import pygltflib
 from med2glb.core.volume import DicomVolume, TemporalSequence
 from med2glb.glb.builder import _pad_to_4
 
+# Module-level texture quality (JPEG 1-100). Set via CLI --texture-quality.
+texture_quality: int = 95
+
 
 def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
     """Build a GLB containing a textured quad from a single DICOM slice."""
@@ -492,17 +495,19 @@ def build_animated_textured_plane_glb(
     gltf.save(str(output_path))
 
 
-def _pixel_data_to_jpeg(pixel_data: np.ndarray, quality: int = 90) -> bytes:
+def _pixel_data_to_jpeg(pixel_data: np.ndarray, quality: int | None = None) -> bytes:
     """Convert pixel array to JPEG bytes.
 
     Accepts:
       - (Y, X) grayscale: normalizes to 0-255 and encodes as L
       - (Y, X, 3) RGB uint8: encodes directly as RGB
 
-    JPEG at quality 90 gives ~5-10x smaller files than PNG with
-    negligible visual difference for AR visualization.
+    Uses module-level `texture_quality` if no explicit quality is given.
     """
     from PIL import Image
+
+    if quality is None:
+        quality = texture_quality
 
     if pixel_data.ndim == 3 and pixel_data.shape[-1] == 3:
         # RGB data — use as-is

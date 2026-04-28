@@ -934,6 +934,21 @@ def run_dicom_wizard(
             else:
                 animate = has_temporal
 
+            # Texture quality
+            from med2glb.glb import texture as _tex_module
+            if interactive and not process_all:
+                tq = Prompt.ask(
+                    "Texture quality (1-100, higher = larger file)",
+                    default="95",
+                    console=console,
+                )
+                try:
+                    tq_val = int(tq)
+                    if 1 <= tq_val <= 100:
+                        _tex_module.texture_quality = tq_val
+                except ValueError:
+                    pass  # keep default
+
             # Name for gallery output
             if preset_name is not None and not process_all:
                 name = preset_name
@@ -953,6 +968,7 @@ def run_dicom_wizard(
             console.print(f"  Series:   {selected_info.description or series_uid}")
             console.print(f"  Mode:     gallery (2D textured planes)")
             console.print(f"  Animate:  {'yes' if animate else 'no'}")
+            console.print(f"  Quality:  {_tex_module.texture_quality}")
 
             configs.append(DicomConfig(
                 input_path=input_path,
@@ -960,6 +976,7 @@ def run_dicom_wizard(
                 animate=animate,
                 series_uid=series_uid,
                 gallery=True,
+                texture_quality=_tex_module.texture_quality,
             ))
             continue
 

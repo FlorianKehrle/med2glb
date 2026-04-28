@@ -234,4 +234,5 @@ class DicomConfig:
     alpha: float = 1.0
     series_uid: str | None = None
     gallery: bool = False
+    texture_quality: int = 95
     verbose: bool = False

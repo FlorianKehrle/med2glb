@@ -165,6 +165,13 @@ def main(
         hidden=True,
         help="Force static output even if temporal data is detected.",
     ),
+    texture_quality: int = typer.Option(
+        95,
+        "--texture-quality",
+        help="JPEG quality for 2D DICOM textures (1-100). Lower = smaller file, less detail.",
+        min=1,
+        max=100,
+    ),
     do_list_series: bool = typer.Option(
         False,
         "--list-series",
@@ -209,6 +216,10 @@ def main(
     if input_path is None:
         err_console.print("[red]Error: Missing argument 'INPUT_PATH'.[/red]")
         raise typer.Exit(code=2)
+
+    # Set texture quality for 2D DICOM encoding
+    from med2glb.glb import texture as _tex_module
+    _tex_module.texture_quality = texture_quality
 
     # --compress mode: compress an existing GLB file
     if do_compress:

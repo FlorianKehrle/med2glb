@@ -231,6 +231,8 @@ def run_dicom_from_config(config: "DicomConfig", output: Path) -> None:
 
     if config.gallery:
         from med2glb._pipeline_gallery import run_gallery_mode
+        from med2glb.glb import texture as _tex_module
+        _tex_module.texture_quality = config.texture_quality
         # Gallery outputs a directory, not a single .glb
         gallery_dir = output.parent / config.name if output.suffix else output
         run_gallery_mode(
