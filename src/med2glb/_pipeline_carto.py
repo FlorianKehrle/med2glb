@@ -429,7 +429,7 @@ def _convert_carto_meshes(
             )
             out_path = carto_output_dir / f"{mesh.structure_name}.glb"
             build_glb([plain_mesh], out_path, source_units="mm",
-                      ablation_points=ablation_points)
+                      ablation_points=ablation_points, model_type="carto")
             file_kb = out_path.stat().st_size // 1024
             console.print(f"  → {out_path.name}  ({file_kb:,} KB, default color)")
             continue
@@ -817,6 +817,7 @@ def _convert_carto_meshes(
                                 [mesh_data], out_path,
                                 source_units="mm", legend_info=legend_info,
                                 ablation_points=ablation_points,
+                                model_type="carto",
                             )
                         progress.update(task, completed=_total_steps)
 

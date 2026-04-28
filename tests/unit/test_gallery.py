@@ -132,7 +132,7 @@ class TestBuildIndividualGlbs:
         paths = build_individual_glbs(slices, out_dir, animate=False)
         gltf = pygltflib.GLTF2.load(str(paths[0]))
         assert len(gltf.meshes) == 1
-        assert len(gltf.nodes) == 1
+        assert len(gltf.nodes) == 2  # 1 mesh + 1 meta
 
     def test_animated_creates_files(self, dicom_temporal_gallery_directory, tmp_path):
         """Animated individual GLBs should be created for temporal data."""
@@ -156,7 +156,7 @@ class TestBuildLightboxGlb:
         build_lightbox_glb(slices, out, columns=6, animate=False)
         assert out.exists()
         gltf = pygltflib.GLTF2.load(str(out))
-        assert len(gltf.nodes) == len(slices)
+        assert len(gltf.nodes) == len(slices) + 1  # +1 for meta node
         assert len(gltf.textures) == len(slices)
 
     def test_grid_positions(self, dicom_directory, tmp_path):
@@ -165,8 +165,9 @@ class TestBuildLightboxGlb:
         out = tmp_path / "lightbox_grid.glb"
         build_lightbox_glb(slices, out, columns=3, animate=False)
         gltf = pygltflib.GLTF2.load(str(out))
-        # First node at (0, 0, 0), second at (step_x, 0, 0), etc.
-        translations = [n.translation for n in gltf.nodes]
+        # Filter out veldt meta nodes (no translation)
+        content_nodes = [n for n in gltf.nodes if not n.name or not n.name.startswith("__veldt_")]
+        translations = [n.translation for n in content_nodes]
         # All should have translation set
         for t in translations:
             assert t is not None
@@ -197,8 +198,9 @@ class TestBuildSpatialGlb:
         build_spatial_glb(slices, out, animate=False)
         assert out.exists()
         gltf = pygltflib.GLTF2.load(str(out))
-        # Nodes should have matrix transforms
-        for node in gltf.nodes:
+        # Content nodes should have matrix transforms (exclude veldt meta nodes)
+        content_nodes = [n for n in gltf.nodes if not n.name or not n.name.startswith("__veldt_")]
+        for node in content_nodes:
             assert node.matrix is not None
 
     def test_skips_without_positions(self, tmp_path):

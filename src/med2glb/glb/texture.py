@@ -253,6 +253,10 @@ def build_textured_plane_glb(volume: DicomVolume, output_path: Path) -> None:
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
     gltf.set_binary_blob(bytes(binary_data))
 
+    # Embed veldt metadata marker node
+    from med2glb.glb.meta import add_veldt_meta_node
+    add_veldt_meta_node(gltf, "type", "dicom2d")
+
     # Save
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -478,6 +482,10 @@ def build_animated_textured_plane_glb(
     # --- Finalize ---
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
     gltf.set_binary_blob(bytes(binary_data))
+
+    # Embed veldt metadata marker node
+    from med2glb.glb.meta import add_veldt_meta_node
+    add_veldt_meta_node(gltf, "type", "dicom2d")
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

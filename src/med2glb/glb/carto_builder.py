@@ -430,6 +430,10 @@ def build_carto_static_glb(
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
     gltf.set_binary_blob(bytes(binary_data))
 
+    # Embed veldt metadata marker node
+    from med2glb.glb.meta import add_veldt_meta_node
+    add_veldt_meta_node(gltf, "type", "carto")
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gltf.save(str(output_path))
@@ -589,6 +593,10 @@ def build_carto_recolored_static_glb(
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
     gltf.set_binary_blob(bytes(binary_data))
 
+    # Embed veldt metadata marker node
+    from med2glb.glb.meta import add_veldt_meta_node
+    add_veldt_meta_node(gltf, "type", "carto")
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gltf.save(str(output_path))
@@ -646,7 +654,7 @@ def build_carto_animated_glb(
         )
         if tmp_cache is None:
             from med2glb.glb.builder import build_glb
-            build_glb([mesh_data], output_path, source_units="mm")
+            build_glb([mesh_data], output_path, source_units="mm", model_type="carto")
             return True
 
         mesh_data = tmp_cache.mesh_data
@@ -825,6 +833,10 @@ def build_carto_animated_glb(
     # Finalize
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
     gltf.set_binary_blob(bytes(binary_data))
+
+    # Embed veldt metadata marker node
+    from med2glb.glb.meta import add_veldt_meta_node
+    add_veldt_meta_node(gltf, "type", "carto")
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -28,6 +28,7 @@ def build_glb(
     source_units: str = "m",
     legend_info: dict | None = None,
     ablation_points: list | None = None,
+    model_type: str | None = None,
 ) -> None:
     """Build a GLB file from one or more meshes with PBR materials.
 
@@ -113,6 +114,11 @@ def build_glb(
         pygltflib.Buffer(byteLength=len(all_binary_data))
     )
     gltf.set_binary_blob(bytes(all_binary_data))
+
+    # Embed veldt metadata marker node
+    if model_type:
+        from med2glb.glb.meta import add_veldt_meta_node
+        add_veldt_meta_node(gltf, "type", model_type)
 
     # Save
     output_path = Path(output_path)

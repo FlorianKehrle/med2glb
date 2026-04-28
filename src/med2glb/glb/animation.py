@@ -12,7 +12,7 @@ from med2glb.core.types import AnimatedResult, MeshData
 from med2glb.glb.builder import _center_vertices, _pad_to_4
 
 
-def build_animated_glb(result: AnimatedResult, output_path: Path) -> None:
+def build_animated_glb(result: AnimatedResult, output_path: Path, model_type: str = "carto") -> None:
     """Build an animated GLB with morph target animation."""
     gltf = pygltflib.GLTF2(
         scene=0,
@@ -50,6 +50,10 @@ def build_animated_glb(result: AnimatedResult, output_path: Path) -> None:
     # Set buffer
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(all_binary_data)))
     gltf.set_binary_blob(bytes(all_binary_data))
+
+    # Embed veldt metadata marker node
+    from med2glb.glb.meta import add_veldt_meta_node
+    add_veldt_meta_node(gltf, "type", model_type)
 
     # Save
     output_path = Path(output_path)

@@ -93,14 +93,14 @@ class TestCartoAnimatedGlb:
         assert output.exists()
         gltf = pygltflib.GLTF2.load(str(output))
 
-        # Single mesh (not 30 copies) + 1 root node
+        # Single mesh (not 30 copies) + 1 root node + 1 veldt meta node
         assert len(gltf.meshes) == 1
-        assert len(gltf.nodes) == 2  # 1 mesh node + 1 root
+        assert len(gltf.nodes) == 3  # 1 mesh node + 1 root + 1 __veldt_type_carto
 
         # Root node: mm→m + 10x AR scale
-        root = gltf.nodes[-1]
+        root = gltf.nodes[1]  # root is second node (after mesh, before meta)
         assert root.scale == [0.01, 0.01, 0.01]
-        assert gltf.scenes[0].nodes == [len(gltf.nodes) - 1]
+        assert gltf.scenes[0].nodes == [1, 2]  # root + meta node
 
         # Single mesh has COLOR_0 base attribute, TEXCOORD_0 (dummy zeros) + TEXCOORD_1 (lat_norm), and 5 morph targets
         prim = gltf.meshes[0].primitives[0]
@@ -160,7 +160,7 @@ class TestCartoAnimatedGlb:
         assert output.exists()
         gltf = pygltflib.GLTF2.load(str(output))
         assert len(gltf.meshes) == 1
-        assert len(gltf.nodes) == 2  # 1 frame + 1 root node
+        assert len(gltf.nodes) == 3  # 1 frame + 1 root node + 1 meta
 
     def test_all_nan_lat_falls_back_to_static(self, synthetic_carto_mesh, tmp_path):
         """When all LAT values are NaN, should produce a static GLB."""

@@ -189,7 +189,7 @@ def _run_animated_pipeline(data, converter, params, alpha, progress):
     return animated
 
 
-def _export(result, output: Path, format: str, animate: bool) -> None:
+def _export(result, output: Path, format: str, animate: bool, model_type: str = "dicom3d") -> None:
     """Export conversion result to file."""
     from med2glb.core.types import AnimatedResult
     from med2glb.io.exporters import export_glb
@@ -199,9 +199,9 @@ def _export(result, output: Path, format: str, animate: bool) -> None:
 
     if isinstance(result, AnimatedResult) and animate:
         from med2glb.glb.animation import build_animated_glb
-        build_animated_glb(result, output)
+        build_animated_glb(result, output, model_type=model_type)
     else:
-        export_glb(result.meshes, output)
+        export_glb(result.meshes, output, model_type=model_type)
 
 
 def _parse_multi_threshold(spec: str) -> list[ThresholdLayer]:

@@ -291,10 +291,15 @@ def finalize_gltf(
     gltf: pygltflib.GLTF2,
     binary_data: bytearray,
     output_path: Path,
+    model_type: str = "dicom2d",
 ) -> None:
     """Set buffer size, binary blob, and save to disk."""
     gltf.buffers.append(pygltflib.Buffer(byteLength=len(binary_data)))
     gltf.set_binary_blob(bytes(binary_data))
+
+    from med2glb.glb.meta import add_veldt_meta_node
+    add_veldt_meta_node(gltf, "type", model_type)
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gltf.save(str(output_path))
